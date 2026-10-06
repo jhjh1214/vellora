@@ -49,6 +49,17 @@ pub enum Error {
         offset: u64,
     },
 
+    /// A stream filter could not decode its input.
+    #[error("{filter} decode error: {detail}{}", at(*.offset))]
+    Decode {
+        /// Filter name, e.g. `FlateDecode`.
+        filter: &'static str,
+        /// What went wrong.
+        detail: &'static str,
+        /// Byte offset of the stream data in the file, if known.
+        offset: Option<u64>,
+    },
+
     /// The underlying file or handle failed.
     #[error("I/O error{}: {source}", at(*.offset))]
     Io {
@@ -67,7 +78,9 @@ impl Error {
         match self {
             Self::OutOfRange { start, .. } => Some(*start),
             Self::Syntax { offset, .. } => Some(*offset),
-            Self::LimitExceeded { offset, .. } | Self::Io { offset, .. } => *offset,
+            Self::LimitExceeded { offset, .. }
+            | Self::Decode { offset, .. }
+            | Self::Io { offset, .. } => *offset,
         }
     }
 }
@@ -119,6 +132,9 @@ pub enum SyntaxKind {
     /// The `/Prev` chain leads back to a section that was already read.
     #[error("cross-reference /Prev chain loops")]
     XrefPrevLoop,
+    /// An object stream whose header or offsets do not hold together.
+    #[error("malformed object stream")]
+    MalformedObjectStream,
 }
 
 fn at(offset: Option<u64>) -> String {
