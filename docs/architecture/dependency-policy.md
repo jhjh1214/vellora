@@ -24,6 +24,7 @@ MIT, MIT-0, Apache-2.0 (incl. LLVM exception), BSD-2-Clause, BSD-3-Clause, ISC, 
 
 ## Optional external tools (invoked as separate processes, never bundled unless their license allows)
 
+- curl (MIT-style license), provided by the OS, used only by `cargo xtask` to download the test corpus. It is a dev-time tool and is never bundled. Chosen over an HTTP crate because `ureq` with rustls pulls in `webpki-roots` (CDLA-Permissive-2.0, not in the `deny.toml` allow list), and native-tls needs OpenSSL headers on Linux.
 - LibreOffice (`soffice --headless`, MPL-2.0) for Office → PDF
 - veraPDF (MPL-2.0/GPL-3.0, Java) for PDF/A and PDF/UA validation
 - Ghostscript (AGPL), for specific conversions only if installed by the user
@@ -36,6 +37,7 @@ MIT, MIT-0, Apache-2.0 (incl. LLVM exception), BSD-2-Clause, BSD-3-Clause, ISC, 
 | Qt 6.8 LTS | LGPLv3 (dynamic) | M0 |
 | cxx | MIT/Apache-2.0 | M0 |
 | serde, postcard, thiserror, anyhow, tracing | MIT/Apache-2.0 | M0 |
+| toml (manifest parsing in `xtask`) | MIT/Apache-2.0 | M0 (dev) |
 | clap (CLI) | MIT/Apache-2.0 | M0 |
 | flate2 / zlib-rs, weezl (LZW) | MIT/Apache-2.0 / Zlib | M0 |
 | RustCrypto (aes, sha2, md-5, rc4…) | MIT/Apache-2.0 | M0 (decryption) |
