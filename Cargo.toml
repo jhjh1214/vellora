@@ -8,6 +8,7 @@ members = [
     "crates/engine",
     "crates/engine-client",
     "crates/cli",
+    "xtask",
 ]
 
 [workspace.package]
@@ -29,6 +30,11 @@ vellora-inspect = { path = "crates/inspect" }
 vellora-render = { path = "crates/render" }
 vellora-ipc = { path = "crates/ipc" }
 vellora-engine-client = { path = "crates/engine-client" }
+
+# External. xtask (dev tooling only): small, well-maintained crates, all permissive.
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+toml = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

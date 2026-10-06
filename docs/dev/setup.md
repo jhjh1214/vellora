@@ -7,6 +7,7 @@
 | Rust | pinned in `rust-toolchain.toml` | Install via [rustup](https://rustup.rs). The pinned toolchain installs automatically. |
 | Git | recent | Configure `user.name`/`user.email`; commit with `-s` (DCO) |
 | cargo-deny | latest | `cargo install cargo-deny --locked` |
+| curl | any recent | Used by `cargo xtask corpus fetch`. Preinstalled on Windows 10+, macOS and most Linux distributions |
 | qpdf | ≥ 11 | Test oracle (`qpdf --check`). Windows: `winget install QPDF.QPDF`; Debian/Ubuntu: `apt install qpdf`; macOS: `brew install qpdf` |
 
 **Windows:** install the *Visual Studio Build Tools* with the "Desktop development with C++" workload (the MSVC toolchain). Rust's `x86_64-pc-windows-msvc` target is the supported one.
