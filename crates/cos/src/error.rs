@@ -1,0 +1,108 @@
+//! Typed errors for `cos`.
+//!
+//! Every error that comes from input carries the byte offset it was found at when one is known,
+//! so a failure can be traced back to a place in the file.
+
+use std::io;
+
+use crate::limits::LimitKind;
+
+/// Convenience alias used across `cos`.
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Everything that can go wrong in `cos`.
+///
+/// The enum is non-exhaustive: later parser, filter and writer tasks add variants.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// A read asked for bytes outside the byte source.
+    #[error("read of bytes {start}..{end} is outside the source (length {len})")]
+    OutOfRange {
+        /// First requested byte.
+        start: u64,
+        /// One past the last requested byte.
+        end: u64,
+        /// Length of the byte source.
+        len: u64,
+    },
+
+    /// A resource limit from [`Limits`](crate::limits::Limits) was exceeded.
+    #[error("{} limit exceeded: {value} > {max}{}", .limit.describe(), at(*.offset))]
+    LimitExceeded {
+        /// Which limit.
+        limit: LimitKind,
+        /// The configured maximum.
+        max: u64,
+        /// The value that exceeded it. For a ratio limit this is the observed ratio.
+        value: u64,
+        /// Byte offset in the file where the limit was hit, if known.
+        offset: Option<u64>,
+    },
+
+    /// The underlying file or handle failed.
+    #[error("I/O error{}: {source}", at(*.offset))]
+    Io {
+        /// The operating system error.
+        #[source]
+        source: io::Error,
+        /// Byte offset of the failed read, if known.
+        offset: Option<u64>,
+    },
+}
+
+impl Error {
+    /// The byte offset in the file this error refers to, when known.
+    #[must_use]
+    pub fn offset(&self) -> Option<u64> {
+        match self {
+            Self::OutOfRange { start, .. } => Some(*start),
+            Self::LimitExceeded { offset, .. } | Self::Io { offset, .. } => *offset,
+        }
+    }
+}
+
+fn at(offset: Option<u64>) -> String {
+    offset.map_or_else(String::new, |o| format!(" at byte offset {o}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_is_reported_per_variant() {
+        let e = Error::OutOfRange {
+            start: 10,
+            end: 20,
+            len: 5,
+        };
+        assert_eq!(e.offset(), Some(10));
+        let e = Error::LimitExceeded {
+            limit: LimitKind::NestingDepth,
+            max: 64,
+            value: 65,
+            offset: Some(7),
+        };
+        assert_eq!(e.offset(), Some(7));
+        let e = Error::Io {
+            source: io::Error::other("x"),
+            offset: None,
+        };
+        assert_eq!(e.offset(), None);
+    }
+
+    #[test]
+    fn messages_include_the_offset() {
+        let e = Error::LimitExceeded {
+            limit: LimitKind::NestingDepth,
+            max: 64,
+            value: 65,
+            offset: Some(7),
+        };
+        let text = e.to_string();
+        assert!(text.contains("nesting depth"), "{text}");
+        assert!(text.contains("65 > 64"), "{text}");
+        assert!(text.contains("byte offset 7"), "{text}");
+    }
+}
