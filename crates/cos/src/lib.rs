@@ -21,6 +21,13 @@
 //!   without bound (CLAUDE.md invariant 5).
 //! - `unsafe` is forbidden.
 //!
-//! **Status:** skeleton. Implemented by M0 tasks 3–12 (`docs/milestones/M0.md`).
-//! M0 task 2 decides whether the parser builds on `hayro-syntax` or is written
-//! from scratch (ADR-0013).
+//! **Status:** in progress (`docs/milestones/M0.md`). The parser is written from scratch
+//! (ADR-0013). Done so far: [`error`], [`limits`] and [`source`] (M0 task 3).
+
+pub mod error;
+pub mod limits;
+pub mod source;
+
+pub use error::{Error, Result};
+pub use limits::{DecodeBudget, LimitKind, Limits};
+pub use source::{ByteSource, FileSource, MemorySource};
