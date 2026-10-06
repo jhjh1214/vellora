@@ -30,6 +30,7 @@ use crate::lexer::{Lexer, Token, TokenKind};
 use crate::limits::{DecodeBudget, LimitKind, Limits};
 use crate::object::{Dict, ObjectKind, Recovery};
 use crate::parser::Parser;
+use crate::recovery::{RepairReason, object_header_at, rebuild};
 
 /// How far from the end of the file `startxref` is searched. The spec says the last 1024
 /// bytes; trailing junk after `%%EOF` is common, so this is wider.
@@ -85,13 +86,16 @@ pub enum XrefWarning {
     StreamObjectRecovered(Recovery),
 }
 
-/// Whether a section is a classic table or a cross-reference stream.
+/// Where a section came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SectionKind {
     /// `xref ... trailer << ... >>` (§7.5.4).
     Table,
     /// An indirect stream object with `/Type /XRef` (§7.5.8).
     Stream,
+    /// Built by the recovery scan ([`crate::recovery::rebuild`]) instead of read from the file.
+    Rebuilt,
 }
 
 /// One cross-reference section with its trailer.
@@ -141,8 +145,11 @@ pub struct Startxref {
 pub struct Xref<'a> {
     /// Offset of `%PDF-` (0 for a normal file). Entry offsets are relative to it.
     pub base: usize,
-    /// Revisions, **newest first** (the order in which objects are looked up).
+    /// Revisions, **newest first** (the order in which objects are looked up). A rebuilt file has
+    /// exactly one.
     pub revisions: Vec<Revision<'a>>,
+    /// Why the file counts as repaired; empty for a file read as it is.
+    pub repaired: Vec<RepairReason>,
 }
 
 /// Finds the last `startxref` in the final [`STARTXREF_SEARCH_BYTES`] of `data` and reads the
@@ -467,7 +474,93 @@ impl<'a> Xref<'a> {
             revision.bytes = start..end;
             start = end;
         }
-        Ok(Self { base, revisions })
+        Ok(Self {
+            base,
+            revisions,
+            repaired: Vec::new(),
+        })
+    }
+
+    /// Opens a file: reads its cross-reference data, and **rebuilds it by scanning** if that is
+    /// missing, unreadable, or does not lead to the document root. See [`crate::recovery`].
+    ///
+    /// A file read as it is has an empty [`repaired`](Self::repaired); a rebuilt one says why.
+    ///
+    /// # Errors
+    /// Limit errors from the normal read, and anything [`rebuild`] reports when the file cannot
+    /// be rebuilt either.
+    pub fn open(data: &'a [u8], limits: &Limits) -> Result<Self> {
+        Self::open_with_budget(data, limits, &mut DecodeBudget::new(limits))
+    }
+
+    /// Like [`open`](Self::open), charging decoded bytes to a shared `budget`.
+    ///
+    /// # Errors
+    /// As [`open`](Self::open).
+    pub fn open_with_budget(
+        data: &'a [u8],
+        limits: &Limits,
+        budget: &mut DecodeBudget,
+    ) -> Result<Self> {
+        match Self::parse_with_budget(data, limits, budget) {
+            Ok(xref) if xref.root_is_valid(data) => Ok(xref),
+            Ok(_) => rebuild(data, limits, budget, &[RepairReason::RootEntryInvalid]),
+            Err(Error::Syntax { kind, .. }) => {
+                rebuild(data, limits, budget, &[RepairReason::XrefUnreadable(kind)])
+            }
+            Err(Error::Decode { .. }) => {
+                rebuild(data, limits, budget, &[RepairReason::XrefUndecodable])
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    /// The entry for object `number`, looking newest revision first with the precedence of
+    /// [`merged`](Self::merged), without building the whole map.
+    #[must_use]
+    pub fn lookup(&self, number: u32) -> Option<XrefEntry> {
+        let find = |entries: &[(u32, XrefEntry)]| {
+            entries
+                .iter()
+                .find(|(n, _)| *n == number)
+                .map(|&(_, entry)| entry)
+        };
+        for revision in &self.revisions {
+            let section = &revision.section;
+            match (find(&section.entries), find(&section.stream_entries)) {
+                (Some(XrefEntry::Free { .. }), Some(stream))
+                    if !matches!(stream, XrefEntry::Free { .. }) =>
+                {
+                    return Some(stream);
+                }
+                (Some(table), _) => return Some(table),
+                (None, Some(stream)) => return Some(stream),
+                (None, None) => {}
+            }
+        }
+        None
+    }
+
+    /// Whether the trailer names a `/Root` whose object is really where the cross-reference
+    /// says (one level through an object stream), so the table is worth trusting.
+    #[must_use]
+    pub fn root_is_valid(&self, data: &[u8]) -> bool {
+        let Some(ObjectKind::Ref(root)) =
+            self.trailer().and_then(|t| t.get(b"Root")).map(|o| &o.kind)
+        else {
+            return false;
+        };
+        let in_use_at = |number: u32| match self.lookup(number) {
+            Some(XrefEntry::InUse { offset, .. }) => {
+                object_header_at(data, self.base, offset, number)
+            }
+            _ => false,
+        };
+        match self.lookup(root.num) {
+            Some(XrefEntry::InUse { .. }) => in_use_at(root.num),
+            Some(XrefEntry::Compressed { stream, .. }) => in_use_at(stream),
+            _ => false,
+        }
     }
 
     /// The trailer of the newest revision.
