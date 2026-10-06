@@ -82,6 +82,24 @@ pub enum SyntaxKind {
     /// A hexadecimal string `< ... >` reached the end of the data before its closing `>`.
     #[error("unterminated hexadecimal string")]
     UnterminatedHexString,
+    /// The data ended in the middle of an array, dictionary or indirect object.
+    #[error("unexpected end of data")]
+    UnexpectedEof,
+    /// A token that cannot appear here (a stray `]`, `>>`, `)` or an unknown keyword).
+    #[error("unexpected token")]
+    UnexpectedToken,
+    /// A dictionary key that is not a name.
+    #[error("dictionary key is not a name")]
+    DictKeyNotName,
+    /// A dictionary key without a value before `>>`.
+    #[error("dictionary key has no value")]
+    DictMissingValue,
+    /// An indirect object that does not start with `<number> <generation> obj`.
+    #[error("malformed indirect object header")]
+    MalformedObjectHeader,
+    /// A stream whose `endstream` keyword could not be found.
+    #[error("missing endstream")]
+    MissingEndstream,
 }
 
 fn at(offset: Option<u64>) -> String {
