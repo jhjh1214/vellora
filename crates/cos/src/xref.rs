@@ -27,7 +27,7 @@ use std::ops::Range;
 use crate::error::{Error, Result, SyntaxKind};
 use crate::filter::decode_flate_only;
 use crate::lexer::{Lexer, Token, TokenKind};
-use crate::limits::{LimitKind, Limits};
+use crate::limits::{DecodeBudget, LimitKind, Limits};
 use crate::object::{Dict, ObjectKind, Recovery};
 use crate::parser::Parser;
 
@@ -369,6 +369,22 @@ impl<'a> Xref<'a> {
     /// already read, [`Error::LimitExceeded`] for too many revisions or entries, and any error
     /// from [`parse_xref_section`].
     pub fn parse(data: &'a [u8], limits: &Limits) -> Result<Self> {
+        Self::parse_with_budget(data, limits, &mut DecodeBudget::new(limits))
+    }
+
+    /// Like [`parse`](Self::parse), charging everything the cross-reference streams decode to
+    /// `budget`, so a document layer can share one [`DecodeBudget`] between cross-reference
+    /// streams and object streams. Without it, a long `/Prev` chain of streams could decode up to
+    /// the per-stream limit once per section.
+    ///
+    /// # Errors
+    /// As [`parse`](Self::parse), plus [`Error::LimitExceeded`] with
+    /// [`LimitKind::TotalDecodeBytes`] when the budget runs out.
+    pub fn parse_with_budget(
+        data: &'a [u8],
+        limits: &Limits,
+        budget: &mut DecodeBudget,
+    ) -> Result<Self> {
         let header = data
             .get(..HEADER_SEARCH_BYTES.min(data.len()))
             .unwrap_or_default();
@@ -407,7 +423,7 @@ impl<'a> Xref<'a> {
                 revisions.len() as u64 + 1,
                 Some(pos as u64),
             )?;
-            let mut section = parse_section(data, pos, limits, total_entries)?;
+            let mut section = parse_section(data, pos, limits, total_entries, Some(&mut *budget))?;
             total_entries += section.entries.len() as u64;
             // Hybrid-reference file: the table names a cross-reference stream (§7.5.8.4).
             if section.kind == SectionKind::Table
@@ -418,7 +434,13 @@ impl<'a> Xref<'a> {
                 let stm_pos = u64::try_from(*stm)
                     .map_err(|_| invalid(origin))
                     .and_then(|stm| locate(stm, origin))?;
-                let hybrid = parse_xref_stream_section(data, stm_pos, limits, total_entries)?;
+                let hybrid = parse_xref_stream_section(
+                    data,
+                    stm_pos,
+                    limits,
+                    total_entries,
+                    Some(&mut *budget),
+                )?;
                 total_entries += hybrid.entries.len() as u64;
                 section.stream_entries = hybrid.entries;
                 section.warnings.extend(hybrid.warnings);
@@ -499,6 +521,8 @@ impl<'a> Xref<'a> {
 /// Reads the cross-reference section at `pos`: a classic table if the first token is `xref`,
 /// otherwise a cross-reference stream.
 ///
+/// `budget` is charged for whatever a cross-reference stream decodes.
+///
 /// # Errors
 /// As [`parse_xref_section`] and [`parse_xref_stream_section`].
 pub fn parse_section<'a>(
@@ -506,6 +530,7 @@ pub fn parse_section<'a>(
     pos: usize,
     limits: &Limits,
     entries_so_far: u64,
+    budget: Option<&mut DecodeBudget>,
 ) -> Result<XrefSection<'a>> {
     let mut lexer = Lexer::at(data, pos, limits);
     if let Ok(Some(t)) = lexer.next_token()
@@ -513,12 +538,14 @@ pub fn parse_section<'a>(
     {
         return parse_xref_section(data, pos, limits, entries_so_far);
     }
-    parse_xref_stream_section(data, pos, limits, entries_so_far)
+    parse_xref_stream_section(data, pos, limits, entries_so_far, budget)
 }
 
 /// Parses a cross-reference stream (§7.5.8) at `pos`: the indirect object, its `/W`, `/Index` and
 /// `/Size`, and its entries. Only no filter and `FlateDecode` (with predictors) are supported
 /// until the full filter chain exists (M0 task 10).
+///
+/// `budget` is charged for the decoded data (the per-document limit on total decoded bytes).
 ///
 /// # Errors
 /// [`SyntaxKind::ExpectedXrefKeyword`] if there is no cross-reference stream at `pos`,
@@ -530,6 +557,7 @@ pub fn parse_xref_stream_section<'a>(
     pos: usize,
     limits: &Limits,
     entries_so_far: u64,
+    budget: Option<&mut DecodeBudget>,
 ) -> Result<XrefSection<'a>> {
     let not_a_section = || syntax(SyntaxKind::ExpectedXrefKeyword, pos);
     let malformed = || syntax(SyntaxKind::MalformedXrefSection, pos);
@@ -572,7 +600,7 @@ pub fn parse_xref_stream_section<'a>(
     )?;
 
     let raw = data.get(stream.data.clone()).unwrap_or_default();
-    let decoded = decode_flate_only(&dict, raw, limits, None, Some(stream.data.start as u64))?;
+    let decoded = decode_flate_only(&dict, raw, limits, budget, Some(stream.data.start as u64))?;
 
     let mut warnings: Vec<XrefWarning> = recoveries
         .into_iter()
@@ -1686,6 +1714,60 @@ startxref
             Xref::parse(&data, &Limits::default()).unwrap_err(),
             Error::Decode { .. }
         ));
+    }
+
+    #[test]
+    fn xref_streams_share_the_document_decode_budget() {
+        // Three chained cross-reference streams, each decoding about 100 KB. Each is far below
+        // the per-stream limit, so only the document budget can stop the chain.
+        let rows: Vec<Vec<u8>> = (0..20_000u32).map(|_| row(1, 7, 0)).collect();
+        let mut data = b"%PDF-1.7
+"
+        .to_vec();
+        let mut previous: Option<usize> = None;
+        for num in 3..6 {
+            let at = data.len();
+            let extra = previous.map(|p| format!("/Prev {p}")).unwrap_or_default();
+            let mut spec = StreamSpec::new(num, 20_000, rows.clone());
+            spec.flate = true;
+            spec.extra = &extra;
+            data.extend(spec.object());
+            previous = Some(at);
+        }
+        data.extend(
+            format!(
+                "startxref
+{}
+%%EOF
+",
+                previous.unwrap()
+            )
+            .bytes(),
+        );
+
+        // Without a tight budget the whole chain reads.
+        assert_eq!(parse(&data).revisions.len(), 3);
+        // A budget that covers two streams but not three stops the third.
+        let limits = Limits {
+            max_total_decode_bytes: 250_000,
+            ..Limits::default()
+        };
+        let err = Xref::parse(&data, &limits).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::LimitExceeded {
+                    limit: LimitKind::TotalDecodeBytes,
+                    max: 250_000,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        // A caller-supplied budget is charged and shared.
+        let mut budget = DecodeBudget::new(&Limits::default());
+        Xref::parse_with_budget(&data, &Limits::default(), &mut budget).unwrap();
+        assert!(budget.used() >= 300_000, "used {}", budget.used());
     }
 
     #[test]
