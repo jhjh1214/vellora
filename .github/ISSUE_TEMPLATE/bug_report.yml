@@ -1,0 +1,52 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security issues must not be reported here.** See SECURITY.md.
+
+        ⚠️ **Privacy:** don't attach PDFs that contain personal or confidential information. Issues are public.
+        If the bug only reproduces with a sensitive file, say so, and a maintainer will suggest how to share a minimal, redacted reproducer.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Click …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Vellora version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, Linux, macOS, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where?
+      options: [Desktop app, CLI, Both, Not sure]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / crash information
+      description: Relevant log output. Crash dumps are stored locally; attach only if you are comfortable doing so.
+      render: text

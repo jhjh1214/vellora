@@ -1,0 +1,33 @@
+[package]
+name = "vellora-render"
+description = "Safe wrapper around PDFium used read-only by the Vellora engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "vellora_render"
+
+[dependencies]
+
+# FFI crate: `unsafe` is denied by default and allowed only in the documented FFI
+# module, with a `// SAFETY:` comment on every block (CLAUDE.md invariant 6).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+dbg_macro = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

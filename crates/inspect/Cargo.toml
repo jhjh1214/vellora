@@ -1,0 +1,18 @@
+[package]
+name = "vellora-inspect"
+description = "Document inspection and security analysis for Vellora"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "vellora_inspect"
+
+[dependencies]
+
+[lints]
+workspace = true

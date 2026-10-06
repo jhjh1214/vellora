@@ -1,0 +1,43 @@
+name: Compatibility report
+description: A PDF renders, opens, saves or behaves incorrectly
+labels: ["compatibility", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Compatibility reports help us build our test corpus.
+
+        ⚠️ **Privacy:** issues are public. Only attach PDFs you are allowed to share publicly and that contain **no personal or confidential data**.
+        If the file looks malicious or crashes the app, report it privately instead (see SECURITY.md).
+  - type: textarea
+    id: symptom
+    attributes:
+      label: What's wrong?
+      description: Rendering difference, fails to open, broken after save, slow, …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: How does it look/behave in other viewers?
+      description: e.g. Acrobat, Chrome, Firefox (pdf.js), macOS Preview. Screenshots welcome.
+  - type: input
+    id: producer
+    attributes:
+      label: PDF producer (if known)
+      description: The output of `vellora inspect file.pdf`, or the Producer/Creator shown in document properties.
+  - type: dropdown
+    id: shareable
+    attributes:
+      label: Can the PDF be added to the public test corpus?
+      options:
+        - "Yes — it is attached and I have the right to share it publicly"
+        - "No — I can't share it"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Vellora version or commit
+    validations:
+      required: true

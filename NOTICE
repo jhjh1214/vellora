@@ -1,0 +1,25 @@
+Vellora
+Copyright (c) 2026 The Vellora Contributors
+
+This product is licensed under the Mozilla Public License, version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------
+Attribution policy
+------------------------------------------------------------------------------
+
+1. Code ported or adapted from other projects keeps its original copyright
+   notice in the source file header, and is listed below with project, license
+   and the files it lives in.
+
+2. Only code under licenses allowed by docs/architecture/dependency-policy.md
+   may be ported (e.g. MIT, BSD, Apache-2.0, MPL-2.0). GPL/AGPL/LGPL code
+   must never be copied into this repository.
+
+3. Binary dependencies (PDFium, Qt, OpenSSL, ...) are listed in the generated
+   THIRD_PARTY_LICENSES file shipped with each release.
+
+------------------------------------------------------------------------------
+Ported / adapted code
+------------------------------------------------------------------------------
+
+(none yet)

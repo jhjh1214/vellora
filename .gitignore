@@ -1,0 +1,37 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# C++ / CMake / Qt
+/build/
+/build-*/
+/out/
+CMakeUserPresets.json
+*.user
+compile_commands.json
+.qt/
+
+# Fuzzing
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+
+# Corpus and large test data (fetched by manifest, never committed)
+/tests/corpus-data/
+/bench/data/
+
+# Third-party binaries (fetched by script, verified by checksum)
+/third_party/pdfium/*/
+
+# Editors / OS
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local crash dumps / logs
+*.dmp
+*.log
