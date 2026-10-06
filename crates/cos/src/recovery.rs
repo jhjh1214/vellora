@@ -22,9 +22,10 @@
 //!   [`RepairReason::ObjectStreamNotExpanded`] and its objects are missing from the result.
 //!
 //! Limits: entries are bounded by `max_xref_entries`, decoding by the decode limits and the
-//! caller's [`DecodeBudget`]. The search for a missing `endstream` is the only part that can
-//! rescan bytes, so the scan keeps a budget (twice the file size plus 1 MiB) for objects that
-//! never find their `endstream`; past it such objects are skipped without searching.
+//! caller's [`DecodeBudget`]. Attempts that fail can re-read bytes (an unterminated string runs to
+//! the end of the file, and the scan resumes just after the header), so the scan keeps a work
+//! budget of four times the file size plus 1 MiB; failed attempts and failed `endstream` searches
+//! are charged to it and, once it is spent, no more objects are parsed.
 //!
 //! Offsets in the result are **not trusted by the object store either**: it must check that an
 //! object header really is at an offset before using it (see [`object_header_at`]).
@@ -319,6 +320,86 @@ impl<'a> Scan<'a> {
     }
 }
 
+/// The scan itself: finds objects and trailers and records them in `scan`.
+///
+/// Bytes read by attempts that **fail** are not consumed (the scan resumes just after the header
+/// that started the attempt), so a hostile file like `1 0 obj (` repeated would make every
+/// attempt read to the end of the file. The scan therefore keeps a work budget: each failed
+/// attempt is charged the bytes it read, and a failed stream search is charged its window. When
+/// the budget is gone, further attempts are skipped, so the total is a small multiple of the file
+/// size however the file is built. Successful attempts are never charged: the scan resumes after
+/// them.
+fn scan_objects<'a>(
+    data: &'a [u8],
+    base: usize,
+    limits: &Limits,
+    scan: &mut Scan<'a>,
+) -> Result<()> {
+    let mut work_left = data.len().saturating_mul(4).saturating_add(1 << 20);
+    let mut pos = base;
+    while let Some((candidate, resume)) = next_candidate(data, pos) {
+        pos = resume;
+        if work_left == 0 {
+            // Only plain scanning is left; nothing more is parsed.
+            continue;
+        }
+        match candidate {
+            Candidate::Trailer(after) => {
+                let mut parser = Parser::at(data, after, limits);
+                match parser.parse_object() {
+                    Ok(Object {
+                        kind: ObjectKind::Dict(dict),
+                        span,
+                    }) => {
+                        scan.trailers.push(dict);
+                        pos = span.end.max(pos);
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        work_left =
+                            work_left.saturating_sub(parser.position().saturating_sub(after));
+                    }
+                }
+            }
+            Candidate::ObjectHeader(start) => {
+                // A stream whose `endstream` is missing is searched for within what is left of
+                // the budget.
+                let window = limits
+                    .max_decoded_stream_bytes
+                    .min(u64::try_from(work_left).unwrap_or(u64::MAX));
+                let local = Limits {
+                    max_decoded_stream_bytes: window,
+                    ..limits.clone()
+                };
+                let mut parser = Parser::at(data, start, &local);
+                match parser.parse_indirect_object() {
+                    Ok(indirect) => {
+                        pos = indirect.span.end.max(pos);
+                        scan.note_object(limits, base, indirect.id, start, indirect.object)?;
+                    }
+                    Err(Error::Syntax { kind, .. }) => {
+                        let read = parser.position().saturating_sub(start);
+                        let searched = if kind == SyntaxKind::MissingEndstream {
+                            usize::try_from(window)
+                                .unwrap_or(usize::MAX)
+                                .min(data.len() - start)
+                        } else {
+                            0
+                        };
+                        work_left = work_left.saturating_sub(read.saturating_add(searched));
+                    }
+                    Err(Error::LimitExceeded { .. }) => {
+                        work_left =
+                            work_left.saturating_sub(parser.position().saturating_sub(start));
+                    }
+                    Err(other) => return Err(other),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Rebuilds the cross-reference information of `data` by scanning it.
 ///
 /// `reasons` says why the caller is rebuilding; the scan appends its own findings and returns all
@@ -343,50 +424,7 @@ pub fn rebuild<'a>(
 
     let mut repaired = reasons.to_vec();
     let mut scan = Scan::default();
-    // Bytes the scan may spend searching for `endstream` in objects that never have one.
-    let mut search_budget = data.len().saturating_mul(2).saturating_add(1 << 20);
-
-    let mut pos = base;
-    while let Some((candidate, resume)) = next_candidate(data, pos) {
-        pos = resume;
-        match candidate {
-            Candidate::Trailer(after) => {
-                let parsed = Parser::at(data, after, limits).parse_object();
-                if let Ok(Object {
-                    kind: ObjectKind::Dict(dict),
-                    span,
-                }) = parsed
-                {
-                    scan.trailers.push(dict);
-                    pos = span.end.max(pos);
-                }
-            }
-            Candidate::ObjectHeader(start) => {
-                let window = limits
-                    .max_decoded_stream_bytes
-                    .min(u64::try_from(search_budget).unwrap_or(u64::MAX));
-                let local = Limits {
-                    max_decoded_stream_bytes: window,
-                    ..limits.clone()
-                };
-                match Parser::at(data, start, &local).parse_indirect_object() {
-                    Ok(indirect) => {
-                        pos = indirect.span.end.max(pos);
-                        scan.note_object(limits, base, indirect.id, start, indirect.object)?;
-                    }
-                    Err(Error::Syntax {
-                        kind: SyntaxKind::MissingEndstream,
-                        ..
-                    }) => {
-                        search_budget =
-                            search_budget.saturating_sub(data.len().saturating_sub(start));
-                    }
-                    Err(Error::LimitExceeded { .. } | Error::Syntax { .. }) => {}
-                    Err(other) => return Err(other),
-                }
-            }
-        }
-    }
+    scan_objects(data, base, limits, &mut scan)?;
 
     if scan.objects.is_empty() && scan.containers.is_empty() {
         return Err(Error::Syntax {
@@ -902,6 +940,110 @@ mod tests {
             started.elapsed()
         );
         assert!(xref.lookup(1).is_some());
+    }
+
+    /// Time budget for the hostile-input tests below. Linear work finishes in well under a
+    /// second even in a debug build; the quadratic version takes minutes.
+    const HOSTILE_TIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+    #[test]
+    fn repeated_unterminated_strings_do_not_make_the_scan_quadratic() {
+        // Every `1 0 obj (` starts a string that runs to the end of the file. The scan resumes
+        // after each header, so without a work budget each attempt re-reads the rest of the file.
+        let mut data = b"%PDF-1.4
+"
+        .to_vec();
+        for _ in 0..200_000 {
+            data.extend(b"1 0 obj (");
+        }
+        data.extend(
+            b"
+2 0 obj
+<< /Type /Catalog >>
+endobj
+trailer
+<< /Root 2 0 R >>
+",
+        );
+        let started = std::time::Instant::now();
+        let result = Xref::open(&data, &Limits::default());
+        assert!(started.elapsed() < HOSTILE_TIME, "{:?}", started.elapsed());
+        // Whatever it makes of the file, it does not panic and gives a typed answer.
+        if let Err(e) = result {
+            assert!(matches!(e, Error::Syntax { .. }), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_unterminated_hex_strings_and_trailers_are_bounded_too() {
+        let started = std::time::Instant::now();
+        let mut hex = b"%PDF-1.4
+"
+        .to_vec();
+        for _ in 0..200_000 {
+            hex.extend(b"1 0 obj <");
+        }
+        let _ = Xref::open(&hex, &Limits::default());
+        let mut trailers = b"%PDF-1.4
+1 0 obj << /Type /Catalog >> endobj
+"
+        .to_vec();
+        for _ in 0..200_000 {
+            trailers.extend(b"trailer << /A (");
+        }
+        let _ = Xref::open(&trailers, &Limits::default());
+        assert!(started.elapsed() < HOSTILE_TIME, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn repeated_unterminated_arrays_and_dictionaries_are_bounded() {
+        // Each attempt reads until the next `obj` keyword, but a long run of tokens that never
+        // contains one is still read once per header that precedes it.
+        let started = std::time::Instant::now();
+        let mut data = b"%PDF-1.4
+"
+        .to_vec();
+        for _ in 0..2_000 {
+            data.extend(b"1 0 obj [ ");
+            data.extend(b"1 ".repeat(500));
+        }
+        let _ = Xref::open(&data, &Limits::default());
+        assert!(started.elapsed() < HOSTILE_TIME, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn one_early_unterminated_string_does_not_hide_the_good_objects_after_it() {
+        // A single failure costs one read to the end of the file, well inside the budget, and the
+        // objects "inside" the string are still found because the scan resumes after its header.
+        let mut data = b"%PDF-1.4
+1 0 obj
+(never closed
+"
+        .to_vec();
+        for n in 2..60 {
+            data.extend(
+                format!(
+                    "{n} 0 obj
+<< /N {n} >>
+endobj
+"
+                )
+                .bytes(),
+            );
+        }
+        data.extend(
+            b"60 0 obj
+<< /Type /Catalog >>
+endobj
+trailer
+<< /Root 60 0 R >>
+",
+        );
+        let xref = open(&data);
+        let found = numbers(&xref);
+        assert_eq!(found.len(), 1 + 58 + 1, "{found:?}");
+        assert!(!found.contains(&1));
+        assert!(xref.root_is_valid(&data));
     }
 
     #[test]
