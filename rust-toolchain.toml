@@ -1,6 +1,7 @@
-# M0 task 0 pins this to an exact stable version (e.g. "1.98.0") once the
-# toolchain is installed and verified; until then CI uses current stable.
+# Exact stable version, bumped deliberately (M0 task 0). CI and local builds
+# both resolve to this file, so `dtolnay/rust-toolchain@stable` in workflows
+# only bootstraps rustup.
 [toolchain]
-channel = "stable"
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
