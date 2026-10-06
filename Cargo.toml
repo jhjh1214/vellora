@@ -33,6 +33,7 @@ vellora-engine-client = { path = "crates/engine-client" }
 
 # External. Small, well-maintained crates, all permissive.
 thiserror = "2"
+proptest = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.9"

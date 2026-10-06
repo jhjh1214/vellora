@@ -40,6 +40,15 @@ pub enum Error {
         offset: Option<u64>,
     },
 
+    /// The input is not valid PDF syntax at this point.
+    #[error("{kind} at byte offset {offset}")]
+    Syntax {
+        /// What is wrong.
+        kind: SyntaxKind,
+        /// Byte offset where the offending construct starts.
+        offset: u64,
+    },
+
     /// The underlying file or handle failed.
     #[error("I/O error{}: {source}", at(*.offset))]
     Io {
@@ -57,9 +66,22 @@ impl Error {
     pub fn offset(&self) -> Option<u64> {
         match self {
             Self::OutOfRange { start, .. } => Some(*start),
+            Self::Syntax { offset, .. } => Some(*offset),
             Self::LimitExceeded { offset, .. } | Self::Io { offset, .. } => *offset,
         }
     }
+}
+
+/// What kind of syntax error was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SyntaxKind {
+    /// A literal string `( ... )` reached the end of the data before its closing parenthesis.
+    #[error("unterminated literal string")]
+    UnterminatedString,
+    /// A hexadecimal string `< ... >` reached the end of the data before its closing `>`.
+    #[error("unterminated hexadecimal string")]
+    UnterminatedHexString,
 }
 
 fn at(offset: Option<u64>) -> String {
