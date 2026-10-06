@@ -29,6 +29,8 @@
 //! - cross-reference tables and the trailer chain in [`xref`] (task 6)
 //! - cross-reference streams, hybrid files and [`objstm`] object streams, with the minimal Flate
 //!   path in [`filter`] (task 7)
+//! - the [`recovery`] scan that rebuilds a damaged file's cross-reference, and [`Xref::open`]
+//!   which falls back to it (task 8)
 
 pub mod error;
 pub mod filter;
@@ -37,6 +39,7 @@ pub mod limits;
 pub mod object;
 pub mod objstm;
 pub mod parser;
+pub mod recovery;
 pub mod source;
 pub mod xref;
 
@@ -45,5 +48,6 @@ pub use limits::{DecodeBudget, LimitKind, Limits};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use objstm::ObjectStream;
 pub use parser::{LengthResolver, Parser};
+pub use recovery::{RepairReason, object_header_at, rebuild};
 pub use source::{ByteSource, FileSource, MemorySource};
 pub use xref::{Revision, SectionKind, Startxref, Xref, XrefEntry, XrefSection, XrefWarning};

@@ -238,3 +238,123 @@ fn compressed_objects_resolve_through_object_streams() {
         failures.join("\n")
     );
 }
+
+/// How opening one corpus file went.
+enum Outcome {
+    Clean,
+    Repaired(Vec<String>),
+    Failed(String),
+    BadEntry(String),
+}
+
+/// Opening every corpus file, damaged or not, never panics or hangs: it either opens (with
+/// `repaired` saying why if the cross-reference had to be rebuilt) or fails with a typed error.
+/// Every in-use entry of what opens must point at a real object header.
+#[test]
+#[ignore = "needs the corpus; run with --ignored"]
+#[allow(clippy::too_many_lines)]
+fn every_corpus_file_opens_or_fails_cleanly() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use vellora_cos::{XrefEntry, object_header_at};
+
+    let dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus-data");
+    assert!(
+        dir.is_dir(),
+        "corpus missing: run `cargo xtask corpus fetch`"
+    );
+
+    // Which files the manifest marks as malformed.
+    let manifest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/manifest.toml"),
+    )
+    .unwrap();
+    let (mut current, mut malformed) = (String::new(), std::collections::HashSet::new());
+    for line in manifest.lines() {
+        if let Some(id) = line.strip_prefix("id = \"") {
+            current = id.trim_end_matches('"').to_string();
+        }
+        if line.starts_with("categories") && line.contains("\"malformed\"") {
+            malformed.insert(current.clone());
+        }
+    }
+
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "pdf"))
+        .collect();
+    paths.sort();
+
+    let (mut clean, mut repaired, mut failed) = (0, 0, 0);
+    let (mut mal_total, mut mal_opened, mut mal_failed) = (0, 0, 0);
+    let mut problems = Vec::new();
+    let mut failures = Vec::new();
+    for path in paths {
+        let name = path.file_stem().unwrap().to_string_lossy().to_string();
+        let data = std::fs::read(&path).unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(move || {
+                let limits = Limits::default();
+                let outcome = match Xref::open(&data, &limits) {
+                    Err(e) => Outcome::Failed(e.to_string()),
+                    Ok(xref) => {
+                        let bad = xref.revisions.iter().find_map(|rev| {
+                            rev.section.entries.iter().find_map(|&(n, e)| match e {
+                                XrefEntry::InUse { offset, .. }
+                                    if !object_header_at(&data, xref.base, offset, n) =>
+                                {
+                                    Some(format!("object {n} at {offset}"))
+                                }
+                                _ => None,
+                            })
+                        });
+                        match bad {
+                            Some(b) if !xref.repaired.is_empty() => Outcome::BadEntry(b),
+                            _ if xref.repaired.is_empty() => Outcome::Clean,
+                            _ => Outcome::Repaired(
+                                xref.repaired.iter().map(|r| format!("{r:?}")).collect(),
+                            ),
+                        }
+                    }
+                };
+                let _ = tx.send(outcome);
+            })
+            .unwrap();
+        let is_malformed = malformed.contains(&name);
+        if is_malformed {
+            mal_total += 1;
+        }
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Err(_) => problems.push(format!("{name}: panic or hang (no result in 60 s)")),
+            Ok(Outcome::BadEntry(b)) => {
+                problems.push(format!("{name}: rebuilt entry is not a real object: {b}"));
+            }
+            Ok(Outcome::Clean) => {
+                clean += 1;
+                mal_opened += usize::from(is_malformed);
+            }
+            Ok(Outcome::Repaired(reasons)) => {
+                repaired += 1;
+                mal_opened += usize::from(is_malformed);
+                println!("  repaired {name}: {}", reasons.join(", "));
+            }
+            Ok(Outcome::Failed(e)) => {
+                failed += 1;
+                mal_failed += usize::from(is_malformed);
+                failures.push(format!("{name}: {e}"));
+            }
+        }
+    }
+    println!("clean {clean}, repaired {repaired}, failed with a typed error {failed}");
+    println!(
+        "malformed subset: {mal_total} files, {mal_opened} open, {mal_failed} fail with a typed error"
+    );
+    for line in &failures {
+        println!("  failed: {line}");
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}

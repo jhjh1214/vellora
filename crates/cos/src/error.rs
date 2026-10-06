@@ -135,6 +135,12 @@ pub enum SyntaxKind {
     /// An object stream whose header or offsets do not hold together.
     #[error("malformed object stream")]
     MalformedObjectStream,
+    /// The recovery scan found no objects at all.
+    #[error("no objects found to recover")]
+    NothingToRecover,
+    /// The recovery scan found objects but neither a trailer with `/Root` nor a catalog.
+    #[error("no document root found")]
+    RootNotFound,
 }
 
 fn at(offset: Option<u64>) -> String {
