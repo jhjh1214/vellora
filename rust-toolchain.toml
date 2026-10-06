@@ -1,0 +1,6 @@
+# M0 task 0 pins this to an exact stable version (e.g. "1.98.0") once the
+# toolchain is installed and verified; until then CI uses current stable.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

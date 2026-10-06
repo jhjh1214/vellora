@@ -1,0 +1,21 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# PDF / typography terms that are prose, not code ("..": keep clippy defaults).
+doc-valid-idents = [
+    "..",
+    "AcroForm",
+    "XObject",
+    "XObjects",
+    "ToUnicode",
+    "MediaBox",
+    "CropBox",
+    "DocMDP",
+    "FieldMDP",
+    "PAdES",
+    "FreeType",
+    "HarfBuzz",
+    "OpenJPEG",
+    "PostScript",
+]

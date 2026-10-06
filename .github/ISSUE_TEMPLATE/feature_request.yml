@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest a capability or workflow improvement
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the **problem or workflow** first, then the solution. Large features may need an RFC (docs/rfcs/).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / workflow
+      description: What are you trying to do? How do you do it today (Acrobat, other tools)? What's frustrating?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: textarea
+    id: fidelity
+    attributes:
+      label: Document fidelity considerations
+      description: Would this modify PDFs? Should it preserve signatures, use incremental saves, etc.?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

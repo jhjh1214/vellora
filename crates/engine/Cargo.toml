@@ -1,0 +1,19 @@
+[package]
+name = "vellora-engine"
+description = "Vellora engine host: sandboxed per-document process that parses and renders PDFs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vellora-engine"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true
