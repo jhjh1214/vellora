@@ -33,6 +33,8 @@ vellora-engine-client = { path = "crates/engine-client" }
 
 # External. Small, well-maintained crates, all permissive.
 thiserror = "2"
+# Pure-Rust (miniz_oxide) backend: no C zlib, no unsafe in our tree.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 proptest = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

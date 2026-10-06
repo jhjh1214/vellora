@@ -22,13 +22,20 @@
 //! - `unsafe` is forbidden.
 //!
 //! **Status:** in progress (`docs/milestones/M0.md`). The parser is written from scratch
-//! (ADR-0013). Done so far: [`error`], [`limits`] and [`source`] (M0 task 3) and the
-//! [`lexer`] (M0 task 4), and the [`object`] model with its [`parser`] (M0 task 5).
+//! (ADR-0013). Done so far:
+//!
+//! - [`error`], [`limits`] and [`source`] (M0 task 3)
+//! - the [`lexer`] (task 4) and the [`object`] model with its [`parser`] (task 5)
+//! - cross-reference tables and the trailer chain in [`xref`] (task 6)
+//! - cross-reference streams, hybrid files and [`objstm`] object streams, with the minimal Flate
+//!   path in [`filter`] (task 7)
 
 pub mod error;
+pub mod filter;
 pub mod lexer;
 pub mod limits;
 pub mod object;
+pub mod objstm;
 pub mod parser;
 pub mod source;
 pub mod xref;
@@ -36,6 +43,7 @@ pub mod xref;
 pub use error::{Error, Result, SyntaxKind};
 pub use limits::{DecodeBudget, LimitKind, Limits};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
+pub use objstm::ObjectStream;
 pub use parser::{LengthResolver, Parser};
 pub use source::{ByteSource, FileSource, MemorySource};
-pub use xref::{Revision, Startxref, Xref, XrefEntry, XrefSection, XrefWarning};
+pub use xref::{Revision, SectionKind, Startxref, Xref, XrefEntry, XrefSection, XrefWarning};
