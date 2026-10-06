@@ -31,6 +31,8 @@ pub enum LimitKind {
     ArrayEntries,
     /// Entries in one dictionary.
     DictEntries,
+    /// Number of revisions (cross-reference sections in a `/Prev` chain).
+    Revisions,
 }
 
 impl LimitKind {
@@ -47,6 +49,7 @@ impl LimitKind {
             Self::NameBytes => "name length",
             Self::ArrayEntries => "array entry count",
             Self::DictEntries => "dictionary entry count",
+            Self::Revisions => "revision count",
         }
     }
 }
@@ -80,6 +83,8 @@ pub struct Limits {
     pub max_array_entries: u64,
     /// Maximum entries in one dictionary. Default 262,144.
     pub max_dict_entries: u64,
+    /// Maximum cross-reference sections in one `/Prev` chain. Default 8,192.
+    pub max_revisions: u64,
 }
 
 impl Default for Limits {
@@ -94,6 +99,7 @@ impl Default for Limits {
             max_name_bytes: 4096,
             max_array_entries: 1 << 20,
             max_dict_entries: 1 << 18,
+            max_revisions: 8192,
         }
     }
 }
@@ -114,6 +120,7 @@ impl Limits {
             LimitKind::NameBytes => self.max_name_bytes,
             LimitKind::ArrayEntries => self.max_array_entries,
             LimitKind::DictEntries => self.max_dict_entries,
+            LimitKind::Revisions => self.max_revisions,
         }
     }
 
@@ -207,7 +214,7 @@ impl DecodeBudget {
 mod tests {
     use super::*;
 
-    const ALL: [LimitKind; 9] = [
+    const ALL: [LimitKind; 10] = [
         LimitKind::DecodedStreamBytes,
         LimitKind::TotalDecodeBytes,
         LimitKind::DecompressionRatio,
@@ -217,6 +224,7 @@ mod tests {
         LimitKind::NameBytes,
         LimitKind::ArrayEntries,
         LimitKind::DictEntries,
+        LimitKind::Revisions,
     ];
 
     #[test]
@@ -231,6 +239,7 @@ mod tests {
         assert_eq!(l.max_name_bytes, 4096);
         assert_eq!(l.max_array_entries, 1_048_576);
         assert_eq!(l.max_dict_entries, 262_144);
+        assert_eq!(l.max_revisions, 8192);
     }
 
     #[test]
