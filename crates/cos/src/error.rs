@@ -100,6 +100,25 @@ pub enum SyntaxKind {
     /// A stream whose `endstream` keyword could not be found.
     #[error("missing endstream")]
     MissingEndstream,
+    /// No `startxref` keyword with an offset in the searched tail of the file.
+    #[error("startxref not found")]
+    StartxrefNotFound,
+    /// An offset (from `startxref` or `/Prev`) that points outside the file.
+    #[error("cross-reference offset is outside the file")]
+    InvalidXrefOffset,
+    /// The offset does not lead to the `xref` keyword (for example a cross-reference stream,
+    /// which a later task handles).
+    #[error("expected the xref keyword")]
+    ExpectedXrefKeyword,
+    /// A broken subsection header or entry in a cross-reference table.
+    #[error("malformed cross-reference table")]
+    MalformedXrefSection,
+    /// The trailer is missing or is not a dictionary.
+    #[error("trailer is not a dictionary")]
+    TrailerNotDictionary,
+    /// The `/Prev` chain leads back to a section that was already read.
+    #[error("cross-reference /Prev chain loops")]
+    XrefPrevLoop,
 }
 
 fn at(offset: Option<u64>) -> String {

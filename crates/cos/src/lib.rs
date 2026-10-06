@@ -31,9 +31,11 @@ pub mod limits;
 pub mod object;
 pub mod parser;
 pub mod source;
+pub mod xref;
 
 pub use error::{Error, Result, SyntaxKind};
 pub use limits::{DecodeBudget, LimitKind, Limits};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use parser::{LengthResolver, Parser};
 pub use source::{ByteSource, FileSource, MemorySource};
+pub use xref::{Revision, Startxref, Xref, XrefEntry, XrefSection, XrefWarning};
