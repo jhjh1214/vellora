@@ -19,18 +19,13 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId, SlotId, TileRect};
-use vellora_shm::SlotGeometry;
 
+use crate::cache::{DEFAULT_BUDGET_BYTES, TileCache};
 use crate::client::{Client, ClientConfig, ClientError, Event, TileRequest};
 
 /// Environment variable that overrides where [`open`] looks for `vellora-engine`. For development
 /// and tests; an installed shell finds the engine next to its own executable.
 pub const ENGINE_ENV: &str = "VELLORA_ENGINE";
-
-/// Slots in the region [`open`] creates, and the size of each (1 MiB holds a 512 x 512 tile).
-/// Task 21 sizes the region from the tile cache budget instead.
-const SLOT_COUNT: u32 = 16;
-const SLOT_BYTES: u32 = 1 << 20;
 
 // `cxx` turns enum variants into associated constants without carrying their doc comments over, so
 // `missing_docs` flags variants that are described below. The comments on each type say which
@@ -153,7 +148,7 @@ pub struct EngineClient {
 ///
 /// [`ClientError`], which the bridge turns into an exception.
 pub fn open(path: &str) -> Result<Box<EngineClient>, ClientError> {
-    let geometry = SlotGeometry::new(SLOT_COUNT, SLOT_BYTES)?;
+    let geometry = TileCache::geometry_for_budget(DEFAULT_BUDGET_BYTES)?;
     let config = ClientConfig::new(engine_executable(), geometry);
     open_with(config, Path::new(path))
 }
