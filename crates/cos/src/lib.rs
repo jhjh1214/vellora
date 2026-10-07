@@ -31,6 +31,8 @@
 //!   path in [`filter`] (task 7)
 //! - the [`recovery`] scan that rebuilds a damaged file's cross-reference, and [`Xref::open`]
 //!   which falls back to it (task 8)
+//! - the lazy [`ObjectStore`] with its bounded caches, and the lazy page-tree walk in [`pages`]
+//!   (task 9)
 
 pub mod error;
 pub mod filter;
@@ -38,16 +40,20 @@ pub mod lexer;
 pub mod limits;
 pub mod object;
 pub mod objstm;
+pub mod pages;
 pub mod parser;
 pub mod recovery;
 pub mod source;
+pub mod store;
 pub mod xref;
 
 pub use error::{Error, Result, SyntaxKind};
 pub use limits::{DecodeBudget, LimitKind, Limits};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use objstm::ObjectStream;
+pub use pages::{Inherited, Page, Pages};
 pub use parser::{LengthResolver, Parser};
 pub use recovery::{RepairReason, object_header_at, rebuild};
 pub use source::{ByteSource, FileSource, MemorySource};
+pub use store::ObjectStore;
 pub use xref::{Revision, SectionKind, Startxref, Xref, XrefEntry, XrefSection, XrefWarning};
