@@ -29,7 +29,7 @@
 |---|---|---|
 | CMake | ≥ 3.28 | Corrosion (pinned tag) is fetched by CMake at configure time, so the first configure needs network access |
 | Ninja | any | Used as the generator in CI; any generator works except that Windows needs the MSVC environment |
-| Qt | 6.8 LTS | Modules: qtbase only (Widgets, Test). Qt Online Installer, or project-local with `uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --archives qtbase -O .qt` (`.qt/` is git-ignored) |
+| Qt | 6.8 LTS | qtbase (Widgets, Test) plus the **Qt Shader Tools** module (`qsb` compiles the canvas shaders). Qt Online Installer, or project-local with `uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qtshadertools --archives qtbase -O .qt` (`.qt/` is git-ignored) |
 | C++ compiler | MSVC 2022 or newer / GCC ≥ 12 / Clang ≥ 15 | C++20 |
 | clang-format | 23.1.3 (CI pins it) | `uvx clang-format@23.1.3`, or `pip install clang-format==23.1.3`; style in `.clang-format` |
 
@@ -43,7 +43,8 @@ build/vellora <file.pdf>                      # run the shell (build/vellora.exe
 ```
 
 - **Windows:** run these from a shell where the MSVC environment is loaded (`vcvars64.bat`, or the "x64 Native Tools" prompt), and put the Qt `bin` directory on `PATH` so the tests find the Qt DLLs. All MSVC configurations, Debug included, use the release C runtime and release Qt libraries, because Rust links the release runtime and the two cannot be mixed.
-- **Linux (headless):** the tests set `QT_QPA_PLATFORM=offscreen`; Qt needs `libgl1-mesa-dev`, `libxkbcommon-x11-0`, `libegl1` and `libfontconfig1`.
+- **Tests and the GPU:** most suites run on the `offscreen` platform (set by CTest), where `QRhiWidget` cannot render. `tst_canvas_render` is the one that draws: it needs a platform plugin that can run QRhi, so it runs on the real platform on Windows and macOS (D3D11/Metal, a software or virtual GPU is enough) and under `xvfb-run` with Mesa's software OpenGL on Linux (`xvfb`, `libgl1-mesa-dri`, `libxcb-cursor0` and the other xcb libraries; without `xvfb-run` the test is not registered). `VELLORA_RHI=null|opengl|vulkan|d3d11|d3d12|metal` forces a graphics backend.
+- **Linux (headless):** Qt needs `libgl1-mesa-dev`, `libxkbcommon-x11-0`, `libegl1` and `libfontconfig1`.
 - The cxx bridge header (`bridge.rs.h`, `rust/cxx.h`) is written by `vellora-engine-client`'s `build.rs` to `$VELLORA_CXXBRIDGE_DIR/include` (CMake sets it to `build/cxxbridge`), else to `target/<profile>/cxxbridge/include`.
 - Check formatting with `clang-format --dry-run -Werror $(find app -name '*.cpp' -o -name '*.h')`.
 

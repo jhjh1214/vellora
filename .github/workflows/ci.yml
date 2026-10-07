@@ -123,13 +123,19 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: 6.8.3
+          # `qsb`, which compiles the canvas shaders.
+          modules: qtshadertools
           cache: true
-      # Qt's platform plugins and OpenGL/xkb libraries on the bare Linux runner.
+      # Qt's platform plugins and OpenGL/xkb libraries on the bare Linux runner, plus an X server
+      # with Mesa's software OpenGL for the test that draws (QRhi needs a real platform plugin).
       - name: Install Linux libraries
         if: runner.os == 'Linux'
         run: >
           sudo apt-get update && sudo apt-get install -y ninja-build libgl1-mesa-dev
-          libxkbcommon-dev libxkbcommon-x11-0 libegl1 libfontconfig1 libdbus-1-3
+          libxkbcommon-dev libxkbcommon-x11-0 libegl1 libfontconfig1 libdbus-1-3 xvfb
+          libgl1-mesa-dri libglx-mesa0 libxcb-cursor0 libxcb-icccm4 libxcb-image0
+          libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+          libxcb-xkb1
       - name: Install Ninja
         if: runner.os == 'macOS'
         run: brew install ninja
