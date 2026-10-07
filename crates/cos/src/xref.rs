@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use crate::error::{Error, Result, SyntaxKind};
-use crate::filter::decode_flate_only;
+use crate::filter::decode_stream_bytes;
 use crate::lexer::{Lexer, Token, TokenKind};
 use crate::limits::{DecodeBudget, LimitKind, Limits};
 use crate::object::{Dict, ObjectKind, Recovery};
@@ -693,7 +693,7 @@ pub fn parse_xref_stream_section<'a>(
     )?;
 
     let raw = data.get(stream.data.clone()).unwrap_or_default();
-    let decoded = decode_flate_only(&dict, raw, limits, budget, Some(stream.data.start as u64))?;
+    let decoded = decode_stream_bytes(&dict, raw, limits, budget, Some(stream.data.start as u64))?;
 
     let mut warnings: Vec<XrefWarning> = recoveries
         .into_iter()
@@ -1798,10 +1798,10 @@ startxref
                 ..
             }
         ));
-        // Unsupported filters are a typed decode error (until task 10).
+        // An image filter cannot decode a cross-reference stream: typed decode error.
         let mut data = b"%PDF-1.7\n".to_vec();
         let at = data.len();
-        data.extend(b"3 0 obj\n<< /Type /XRef /Size 1 /W [1 2 1] /Filter /LZWDecode /Length 4 >>\nstream\nabcd\nendstream\nendobj\n");
+        data.extend(b"3 0 obj\n<< /Type /XRef /Size 1 /W [1 2 1] /Filter /DCTDecode /Length 4 >>\nstream\nabcd\nendstream\nendobj\n");
         data.extend(format!("startxref\n{at}\n%%EOF\n").bytes());
         assert!(matches!(
             Xref::parse(&data, &Limits::default()).unwrap_err(),

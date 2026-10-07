@@ -27,12 +27,13 @@
 //! - [`error`], [`limits`] and [`source`] (M0 task 3)
 //! - the [`lexer`] (task 4) and the [`object`] model with its [`parser`] (task 5)
 //! - cross-reference tables and the trailer chain in [`xref`] (task 6)
-//! - cross-reference streams, hybrid files and [`objstm`] object streams, with the minimal Flate
-//!   path in [`filter`] (task 7)
+//! - cross-reference streams, hybrid files and [`objstm`] object streams (task 7)
 //! - the [`recovery`] scan that rebuilds a damaged file's cross-reference, and [`Xref::open`]
 //!   which falls back to it (task 8)
 //! - the lazy [`ObjectStore`] with its bounded caches, and the lazy page-tree walk in [`pages`]
 //!   (task 9)
+//! - every stream filter of §7.4 except the image codecs, and filter chains, in [`filter`]
+//!   (task 10)
 
 pub mod error;
 pub mod filter;
