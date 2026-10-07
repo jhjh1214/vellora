@@ -112,7 +112,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS is pinned: Qt 6.8.3 links the AGL framework, which the macOS 26 SDK (macos-latest
+        # since 2026) no longer has. Move to a newer Qt patch release, then to macos-latest.
+        os: [ubuntu-latest, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Environment variable naming the directory the headers are published to (the CMake build of the
+/// Environment variable naming the directory the headers are published to (the `CMake` build of the
 /// Qt shell sets it, because cargo's own output directory contains a hash).
 const HEADER_DIR_ENV: &str = "VELLORA_CXXBRIDGE_DIR";
 
