@@ -10,6 +10,7 @@
 
 #include "canvas/CanvasController.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QRhiWidget>
 #include <memory>
@@ -39,6 +40,11 @@ public:
     // Tiles shown and textures held, for tests.
     int textureCount() const { return static_cast<int>(m_textures.size()); }
     quint64 framesRendered() const { return m_frames; }
+    // Time spent in `render()` (preparing tiles and recording the frame, not presenting it): the
+    // last frame, the slowest, and the part of the last one spent copying and uploading tiles.
+    double lastRenderMs() const { return m_lastRenderMs; }
+    double slowestRenderMs() const { return m_slowestRenderMs; }
+    double lastUploadMs() const { return m_lastUploadMs; }
 
 protected:
     void initialize(QRhiCommandBuffer* cb) override;
@@ -71,6 +77,9 @@ private:
     QHash<TileId, GpuTile> m_textures;
     QByteArray m_scratch;
     quint64 m_frames = 0;
+    double m_lastRenderMs = 0.0;
+    double m_slowestRenderMs = 0.0;
+    double m_lastUploadMs = 0.0;
 };
 
 } // namespace vellora

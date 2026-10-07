@@ -170,6 +170,10 @@ mod ffi {
         /// Drops the cached tiles of a page (it changed).
         fn invalidate_page(self: &EngineClient, page: u32);
 
+        /// The operating-system id of the running engine process; 0 while none is running (for
+        /// diagnostics and tests that stop the engine from outside).
+        fn engine_id(self: &EngineClient) -> u32;
+
         /// Withdraws a request; it is never reported. `false` if it was not in flight.
         fn cancel(self: &EngineClient, request: u64) -> bool;
 
@@ -303,6 +307,14 @@ impl EngineClient {
     ) -> Result<bool, ClientError> {
         let client = self.client.as_ref().ok_or(ClientError::Closed)?;
         client.read_tile(&tile_key(page, scale, x, y)?, out)
+    }
+
+    /// The id of the running engine process, or 0.
+    pub fn engine_id(&self) -> u32 {
+        self.client
+            .as_ref()
+            .and_then(Client::engine_id)
+            .unwrap_or(0)
     }
 
     /// Drops the cached tiles of `page`.
@@ -470,6 +482,7 @@ mod tests {
             "::rust::Box<::vellora::EngineClient> open(::rust::Str path)",
             "request_tile(",
             "read_tile(",
+            "engine_id()",
             "struct TileTicket",
             "enum class TileState",
             "poll_events()",
@@ -548,6 +561,7 @@ mod tests {
             Err(ClientError::Closed)
         ));
         assert_eq!(handle.slot_bytes(), 0);
+        assert_eq!(handle.engine_id(), 0);
         handle.invalidate_page(0);
         handle.close();
         handle.close();

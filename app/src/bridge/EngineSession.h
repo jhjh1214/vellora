@@ -47,6 +47,9 @@ public:
     void invalidatePage(quint32 page);
     bool cancel(quint64 request);
 
+    // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
+    quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }
+
     // Drains the engine's events now (a timer does it every few milliseconds otherwise).
     void pollNow();
 

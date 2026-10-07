@@ -15,6 +15,9 @@ vellora_add_test(tst_main_window tst_main_window.cpp)
 vellora_add_test(tst_page_layout tst_page_layout.cpp)
 vellora_add_test(tst_canvas_controller tst_canvas_controller.cpp)
 vellora_add_test(tst_canvas_view tst_canvas_view.cpp)
+vellora_add_test(tst_commands tst_commands.cpp)
+vellora_add_test(tst_ui_watchdog tst_ui_watchdog.cpp)
+vellora_add_test(tst_engine_recovery tst_engine_recovery.cpp)
 
 # Drawing needs a platform that can run QRhi: the real one on Windows and macOS (their runners
 # have a software or virtual GPU), and an X server with Mesa's software OpenGL on Linux.

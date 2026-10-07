@@ -7,6 +7,8 @@
 
 #include <QAbstractScrollArea>
 
+class QLabel;
+
 namespace vellora {
 
 class CanvasWidget;
@@ -28,6 +30,13 @@ public:
     // Forgets the old document's view; call before the session opens another file.
     void reset();
 
+    // A non-modal notice over the top of the canvas (mouse clicks pass through it), for example
+    // while the engine restarts. Plain text.
+    void showBanner(const QString& text);
+    void hideBanner();
+    QString bannerText() const;
+    bool bannerVisible() const;
+
     void zoomIn();
     void zoomOut();
     void actualSize();
@@ -39,9 +48,11 @@ protected:
 
 private:
     void syncScrollBars();
+    void placeBanner();
 
     CanvasController m_controller;
     CanvasWidget* m_canvas;
+    QLabel* m_banner = nullptr;
     bool m_syncing = false;
 };
 

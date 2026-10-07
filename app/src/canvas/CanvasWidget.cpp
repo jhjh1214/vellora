@@ -175,6 +175,9 @@ void CanvasWidget::evictTextures() {
 
 void CanvasWidget::render(QRhiCommandBuffer* cb) {
     ++m_frames;
+    QElapsedTimer frameClock;
+    frameClock.start();
+    qint64 uploadNs = 0;
     QRhi* rhi = this->rhi();
     QRhiResourceUpdateBatch* updates = rhi->nextResourceUpdateBatch();
 
@@ -221,6 +224,8 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
                 waiting = true;
                 continue;
             }
+            QElapsedTimer uploadClock;
+            uploadClock.start();
             if (!m_session->readTile(tile.page, tile.scale, tile.x, tile.y, m_scratch)) {
                 continue; // not rendered yet; the page stays white until tileReady
             }
@@ -236,6 +241,7 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
                                            m_scratch.constData(), kTilePixels * kTilePixels * 4)));
             it = m_textures.insert(tile.id(), gpu);
             ++uploads;
+            uploadNs += uploadClock.nsecsElapsed();
         }
         it->lastUsed = m_frames;
         draws.append({it->bindings, static_cast<int>(vertices.size() / (kFloatsPerVertex * 6))});
@@ -263,6 +269,9 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
     }
     cb->endPass();
 
+    m_lastUploadMs = static_cast<double>(uploadNs) / 1e6;
+    m_lastRenderMs = static_cast<double>(frameClock.nsecsElapsed()) / 1e6;
+    m_slowestRenderMs = std::max(m_slowestRenderMs, m_lastRenderMs);
     if (waiting) {
         update(); // more tiles to upload: continue next frame
     }

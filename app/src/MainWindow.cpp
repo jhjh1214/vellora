@@ -8,6 +8,8 @@
 #include <QScreen>
 #include <QStatusBar>
 #include <QStyle>
+#include <functional>
+#include <utility>
 
 namespace vellora {
 
@@ -44,28 +46,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->addPermanentWidget(m_zoomStatus);
     onZoomChanged(m_canvas->controller()->zoom());
 
+    registerCommands();
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
-    auto* openAction = fileMenu->addAction(tr("&Open…"));
-    openAction->setShortcut(QKeySequence::Open);
-    connect(openAction, &QAction::triggered, this, &MainWindow::chooseDocument);
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.open"), this));
     fileMenu->addSeparator();
-    auto* quitAction = fileMenu->addAction(tr("&Quit"));
-    quitAction->setShortcut(QKeySequence::Quit);
-    connect(quitAction, &QAction::triggered, this, &QWidget::close);
-
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.quit"), this));
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
-    auto* zoomIn = viewMenu->addAction(tr("Zoom &In"));
-    zoomIn->setShortcuts({QKeySequence::ZoomIn, QKeySequence(Qt::CTRL | Qt::Key_Equal)});
-    connect(zoomIn, &QAction::triggered, m_canvas, &CanvasView::zoomIn);
-    auto* zoomOut = viewMenu->addAction(tr("Zoom &Out"));
-    zoomOut->setShortcut(QKeySequence::ZoomOut);
-    connect(zoomOut, &QAction::triggered, m_canvas, &CanvasView::zoomOut);
-    auto* actualSize = viewMenu->addAction(tr("&Actual Size"));
-    actualSize->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
-    connect(actualSize, &QAction::triggered, m_canvas, &CanvasView::actualSize);
-    auto* fitWidth = viewMenu->addAction(tr("Fit &Width"));
-    fitWidth->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_2));
-    connect(fitWidth, &QAction::triggered, m_canvas, &CanvasView::fitWidth);
+    for (const char* id : {"view.zoomIn", "view.zoomOut", "view.actualSize", "view.fitWidth"}) {
+        viewMenu->addAction(m_commands.createAction(QString::fromLatin1(id), this));
+    }
+    viewMenu->addSeparator();
+    viewMenu->addAction(m_commands.createAction(QStringLiteral("palette.show"), this));
+
+    m_palette = new CommandPalette(&m_commands, this);
 
     connect(&m_session, &EngineSession::opened, this, &MainWindow::onOpened);
     connect(&m_session, &EngineSession::requestFailed, this, &MainWindow::onRequestFailed);
@@ -78,6 +71,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onPageChanged);
     connect(m_canvas->controller(), &CanvasController::zoomChanged, this,
             &MainWindow::onZoomChanged);
+}
+
+void MainWindow::registerCommands() {
+    // Every action of the window is one of these; menus, shortcuts and the palette derive from
+    // them.
+    const auto add = [this](const char* id, const QString& title, QList<QKeySequence> shortcuts,
+                            std::function<void()> handler) {
+        const bool added = m_commands.add(
+            {QString::fromLatin1(id), title, std::move(shortcuts), std::move(handler)});
+        Q_ASSERT(added);
+        Q_UNUSED(added);
+    };
+    add("file.open", tr("Open…"), {QKeySequence::Open}, [this] { chooseDocument(); });
+    add("file.quit", tr("Quit"), QKeySequence::keyBindings(QKeySequence::Quit),
+        [this] { close(); });
+    add("view.zoomIn", tr("Zoom In"),
+        {QKeySequence(QKeySequence::ZoomIn), QKeySequence(Qt::CTRL | Qt::Key_Equal)},
+        [this] { m_canvas->zoomIn(); });
+    add("view.zoomOut", tr("Zoom Out"), {QKeySequence::ZoomOut}, [this] { m_canvas->zoomOut(); });
+    add("view.actualSize", tr("Actual Size"), {QKeySequence(Qt::CTRL | Qt::Key_1)},
+        [this] { m_canvas->actualSize(); });
+    add("view.fitWidth", tr("Fit Width"), {QKeySequence(Qt::CTRL | Qt::Key_2)},
+        [this] { m_canvas->fitWidth(); });
+    add("palette.show", tr("Command Palette…"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)},
+        [this] { m_palette->open(); });
 }
 
 MainWindow::~MainWindow() {
@@ -124,6 +142,9 @@ bool MainWindow::openDocument(const QString& path) {
 }
 
 void MainWindow::onOpened(quint32 pageCount, bool repaired) {
+    // Also the answer of a restarted engine: it has the document again, so tiles are on their way.
+    m_canvas->hideBanner();
+    statusBar()->clearMessage();
     QString text = tr("%n page(s)", nullptr, static_cast<int>(pageCount));
     if (repaired) {
         text += tr(" — repaired");
@@ -140,11 +161,15 @@ void MainWindow::onRequestFailed(quint64 request, const QString& message) {
 }
 
 void MainWindow::onEngineCrashed(const QString& how, bool willRestart) {
+    // Non-modal: the window stays usable, and the banner goes away when the engine is back.
+    m_canvas->showBanner(willRestart ? tr("Page failed to render — retrying…")
+                                     : tr("The page renderer stopped and could not be restarted."));
     statusBar()->showMessage(willRestart ? tr("The engine stopped (%1) — restarting").arg(how)
                                          : tr("The engine stopped (%1)").arg(how));
 }
 
 void MainWindow::onFailed(const QString& reason) {
+    m_canvas->showBanner(tr("The page renderer failed. Reopen the document."));
     setDocumentStatus(tr("Engine failed: %1").arg(reason));
 }
 
