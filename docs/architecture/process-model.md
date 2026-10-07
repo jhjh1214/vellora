@@ -13,10 +13,12 @@
 ## Lifecycle
 
 1. The user opens a file. The UI opens a **read handle** (the engine never gets a path) and spawns `vellora-engine` with:
-   - pipes for IPC
-   - the file handle
-   - a shared-memory region for tiles
+   - pipes for IPC (the engine's standard input and output)
+   - the file handle, inherited and named by number
+   - a shared-memory region for tiles, inherited and named by number, with its slot geometry
    - limits: memory cap, CPU deadline defaults
+
+   The exact command line is defined in `vellora_engine::args` ([ADR-0015](../adr/0015-os-primitives-crate-and-engine-launch-contract.md)).
 2. The engine and client exchange a **protocol-version handshake**. A mismatch is a fatal, user-visible error.
 3. The engine parses lazily (trailer and xref only), loads the current revision into PDFium, cross-checks the page tree, and replies with page count, page sizes and repair status.
 4. The UI requests tiles for visible pages. The engine schedules them (visible > prefetch > thumbnails), renders them into shared-memory slots and replies with slot descriptors. Superseded requests are **cancelled**.

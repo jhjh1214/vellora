@@ -46,6 +46,7 @@ CLI: links core crates in-process; spawns vellora-engine when it needs rendering
 | `inspect` | Summary, feature and security analysis, later size attribution | M0 |
 | `render` | Safe PDFium wrapper; engine only | M0 |
 | `ipc` | Protocol types and framing | M0 |
+| `shm` | The OS primitives the engine needs and `unsafe` code is confined to: memory-mapped documents, the shared tile region, handle passing (ADR-0015) | M0 |
 | `engine` | Engine host binary | M0 |
 | `engine-client` | UI-side client staticlib + cxx bridge | M0 |
 | `cli` | `vellora` binary | M0 |
@@ -54,7 +55,7 @@ CLI: links core crates in-process; spawns vellora-engine when it needs rendering
 | `ops` | Serialisable operations shared by GUI commands, CLI and pipelines | Phase 2 |
 | `diff` | Page alignment, text diff, change model | Phase 5 |
 
-Dependency direction: `cli`, `engine` → `ops` → `doc` → `content` → `cos`. Also `inspect`/`diff` → `doc`/`cos`, `engine` → `render`, and `engine`/`engine-client` → `ipc`. No cycles. The UI depends only on `engine-client`.
+Dependency direction: `cli`, `engine` → `ops` → `doc` → `content` → `cos`. Also `inspect`/`diff` → `doc`/`cos`, `engine` → `render`, `engine`/`engine-client` → `ipc`, and `engine`/`engine-client` → `shm` → `cos` (for the `ByteSource` trait). No cycles. The UI depends only on `engine-client`.
 
 ## UI shell (summary)
 

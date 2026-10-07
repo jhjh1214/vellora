@@ -4,7 +4,7 @@ The hard rules are in [`CLAUDE.md`](../../CLAUDE.md). This page adds the day-to-
 
 ## Rust
 
-- **Edition 2024.** Workspace lints are mandatory (`[lints] workspace = true`). Only the FFI crates (`render`, `engine-client`) define their own lint table, to allow scoped `unsafe`.
+- **Edition 2024.** Workspace lints are mandatory (`[lints] workspace = true`). Only the crates that may use `unsafe` (`render`, `engine-client`, `shm`) define their own lint table, to allow scoped `unsafe`.
 - **Errors:** libraries define error enums with `thiserror`, carrying context such as byte offset, object ref or page index. Binaries may use `anyhow` at the top level. Never use `Box<dyn Error>` in library APIs.
 - **Untrusted input:**
   - no `unwrap`/`expect`/`panic!`/`unreachable!` on data derived from a PDF

@@ -1,0 +1,43 @@
+[package]
+name = "vellora-shm"
+description = "The few operating-system primitives Vellora's engine process needs: memory-mapped files, the shared tile region and handle passing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "vellora_shm"
+
+[dependencies]
+vellora-cos = { workspace = true }
+memmap2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+# `unsafe` crate (ADR-0015): denied by default and allowed only in the three documented modules
+# (`mapped`, `region`, `handle`), with a `// SAFETY:` comment on every block (CLAUDE.md invariant 6).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+dbg_macro = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

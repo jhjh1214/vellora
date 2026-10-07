@@ -5,6 +5,7 @@ members = [
     "crates/inspect",
     "crates/render",
     "crates/ipc",
+    "crates/shm",
     "crates/engine",
     "crates/engine-client",
     "crates/cli",
@@ -30,6 +31,7 @@ vellora-cos = { path = "crates/cos" }
 vellora-inspect = { path = "crates/inspect" }
 vellora-render = { path = "crates/render" }
 vellora-ipc = { path = "crates/ipc" }
+vellora-shm = { path = "crates/shm" }
 vellora-engine-client = { path = "crates/engine-client" }
 
 # External. Small, well-maintained crates, all permissive.
@@ -48,6 +50,16 @@ cbc = "0.1"
 toml = "0.9"
 # Runtime loading of the PDFium shared library (ISC; `vellora-render` only, see ADR-0014).
 libloading = "0.9"
+# `vellora-shm` only (ADR-0015): memory mapping, the anonymous backing file of the tile region, and the
+# two platform APIs behind handle passing.
+memmap2 = "0.9"
+tempfile = "3"
+libc = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+# Engine host: logging (stderr only; nothing is ever sent anywhere) and error context in `main`.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+anyhow = "1"
 # Reads and writes the golden images of the render tests (dev-dependency of `vellora-render`).
 png = "0.18"
 
