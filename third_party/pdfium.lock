@@ -1,0 +1,36 @@
+# Pinned PDFium binaries (M0 task 14). Read by `cargo xtask pdfium fetch`.
+#
+# Source: https://github.com/bblanchon/pdfium-binaries, the plain `pdfium-<platform>.tgz` assets.
+# Those are built with `pdf_enable_v8 = false` and `pdf_enable_xfa = false` (see `args.gn` inside
+# each archive), as the security model and ADR-0011 require. The `pdfium-v8-*` assets must never
+# be used here.
+#
+# Every sha256 below was computed from a real download of the asset. To bump the pin: change the
+# tag in each `url`, download each asset, hash it, update `version` from the archive's `VERSION`
+# file, and check `args.gn` still disables V8 and XFA. Do it in its own PR.
+
+release = "chromium/8086"
+version = "157.0.8086.0"
+
+# `library` is the shared library's path inside the archive (and under
+# `third_party/pdfium/<platform>/` once fetched).
+
+[platform.win-x64]
+url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8086/pdfium-win-x64.tgz"
+sha256 = "1fd8af952832dbb0eb16d9249f68fe09e5f5ebf7c3dd9f6066ea2720cc28487d"
+library = "bin/pdfium.dll"
+
+[platform.linux-x64]
+url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8086/pdfium-linux-x64.tgz"
+sha256 = "588577cf52dabc1a444988bac841920df54cc2f141801424de97ab04f4fbb935"
+library = "lib/libpdfium.so"
+
+[platform.mac-arm64]
+url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8086/pdfium-mac-arm64.tgz"
+sha256 = "e98679e052c07edbb5a627980902abb823d4b3f35744d877bd21668bd9fc13ab"
+library = "lib/libpdfium.dylib"
+
+[platform.mac-x64]
+url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8086/pdfium-mac-x64.tgz"
+sha256 = "933a85a138f6027243c56bff8676375c33ceeb767401389415ffc44d689ca85d"
+library = "lib/libpdfium.dylib"

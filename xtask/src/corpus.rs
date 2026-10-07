@@ -32,7 +32,7 @@ pub(crate) fn file_path(dir: &Path, doc: &Doc) -> PathBuf {
     dir.join(format!("{}.pdf", doc.id))
 }
 
-fn sha256_hex(mut reader: impl Read) -> io::Result<String> {
+pub(crate) fn sha256_hex(mut reader: impl Read) -> io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
@@ -98,7 +98,7 @@ fn download_verified(part: &Path, doc: &Doc, download: &mut Downloader<'_>) -> R
 ///
 /// `curl` ships with Windows 10+, macOS and every mainstream Linux distribution. Using it keeps
 /// a TLS stack (and its license surface under `deny.toml`) out of the dependency tree.
-fn curl_download(url: &str, out: &mut dyn Write) -> Result<()> {
+pub(crate) fn curl_download(url: &str, out: &mut dyn Write) -> Result<()> {
     let mut child = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--location"])
         .args(["--proto", "=https", "--proto-redir", "=https"])

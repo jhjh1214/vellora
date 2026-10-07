@@ -51,6 +51,9 @@ jobs:
           esac
       - name: qpdf version
         run: qpdf --version
+      # PDFium (pinned in third_party/pdfium.lock) is loaded at run time by the vellora-render tests.
+      - name: Fetch PDFium
+        run: cargo xtask pdfium fetch
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       # Invariant harness (tests/invariants) on the small committed corpus subset.

@@ -14,7 +14,8 @@
 
 ## Required from M0 task 14 (rendering)
 
-- PDFium prebuilt binaries: `cargo xtask pdfium fetch`. Pinned and checksum-verified via `third_party/pdfium.lock`.
+- PDFium prebuilt binaries: `cargo xtask pdfium fetch`. Pinned and checksum-verified via `third_party/pdfium.lock`, extracted to `third_party/pdfium/<platform>/` (git-ignored); re-running verifies and is a no-op. Needs `curl` and `tar` (both ship with Windows 10+, macOS and Linux). Supported hosts: Windows x64, Linux x64, macOS arm64 and x64.
+- Run it before `cargo test --workspace`: the `vellora-render` tests load the real library and **fail**, they do not skip, if it is missing. Building and clippy do not need it (PDFium is loaded at run time, ADR-0014). `VELLORA_PDFIUM_LIB` points the tests (and the engine) at another build.
 
 ## Required from M0 task 22 (desktop app)
 
