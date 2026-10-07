@@ -34,7 +34,10 @@
 //!   (task 9)
 //! - every stream filter of §7.4 except the image codecs, and filter chains, in [`filter`]
 //!   (task 10)
+//! - the Standard Security Handler (revisions 2–6) in [`crypt`], used by the [`ObjectStore`]
+//!   (task 11)
 
+pub mod crypt;
 pub mod error;
 pub mod filter;
 pub mod lexer;
@@ -48,7 +51,8 @@ pub mod source;
 pub mod store;
 pub mod xref;
 
-pub use error::{Error, Result, SyntaxKind};
+pub use crypt::{CryptMethod, Decryptor, Encryption, EncryptionInfo, PasswordRole};
+pub use error::{EncryptionError, Error, Result, SyntaxKind};
 pub use limits::{DecodeBudget, LimitKind, Limits};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use objstm::ObjectStream;

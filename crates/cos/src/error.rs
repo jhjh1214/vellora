@@ -60,6 +60,13 @@ pub enum Error {
         offset: Option<u64>,
     },
 
+    /// The document is encrypted in a way that cannot be read, or it needs a password.
+    #[error("encryption: {kind}")]
+    Encryption {
+        /// What is wrong.
+        kind: EncryptionError,
+    },
+
     /// The underlying file or handle failed.
     #[error("I/O error{}: {source}", at(*.offset))]
     Io {
@@ -81,8 +88,51 @@ impl Error {
             Self::LimitExceeded { offset, .. }
             | Self::Decode { offset, .. }
             | Self::Io { offset, .. } => *offset,
+            Self::Encryption { .. } => None,
         }
     }
+}
+
+impl From<EncryptionError> for Error {
+    fn from(kind: EncryptionError) -> Self {
+        Self::Encryption { kind }
+    }
+}
+
+/// Why encrypted content cannot be read (see [`crate::crypt`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum EncryptionError {
+    /// The document needs a password and none has been accepted yet.
+    #[error("a password is required")]
+    PasswordRequired,
+    /// Neither the user nor the owner password matches.
+    #[error("incorrect password")]
+    IncorrectPassword,
+    /// A security handler other than `/Standard` (for example a public-key handler).
+    #[error("unsupported security handler")]
+    UnsupportedHandler,
+    /// An algorithm version (`/V`) that is not supported.
+    #[error("unsupported encryption version {version}")]
+    UnsupportedVersion {
+        /// The `/V` value.
+        version: i64,
+    },
+    /// A security handler revision (`/R`) that does not exist or is not supported.
+    #[error("unsupported security handler revision {revision}")]
+    UnsupportedRevision {
+        /// The `/R` value.
+        revision: i64,
+    },
+    /// A crypt filter with a method (`/CFM`) that is not supported.
+    #[error("unsupported crypt filter method")]
+    UnsupportedCryptFilter,
+    /// `/StmF`, `/StrF` or a stream's `/Crypt` filter names a crypt filter that `/CF` lacks.
+    #[error("unknown crypt filter")]
+    UnknownCryptFilter,
+    /// The `/Encrypt` dictionary is missing something or has an unusable value.
+    #[error("malformed /Encrypt dictionary: {0}")]
+    Malformed(&'static str),
 }
 
 /// What kind of syntax error was found.

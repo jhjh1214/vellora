@@ -25,20 +25,37 @@
 //! came from an object stream, where they are positions in that stream's decoded data.
 //! Stream *data* is not read here; [`ObjectStore::stream_raw`] gives the raw bytes.
 //!
+//! # Encryption
+//!
+//! [`ObjectStore::open`] reads the `/Encrypt` dictionary and tries the empty user password. If
+//! that works, strings are decrypted when an object is loaded and streams when their data is
+//! asked for ([`ObjectStore::stream_decrypted`], object streams internally); objects inside object
+//! streams are never decrypted separately (ISO 32000-2 §7.6.3). If it fails the store is
+//! *locked*: [`ObjectStore::is_locked`] is true and every read except [`ObjectStore::encrypt`]
+//! fails with [`EncryptionError::PasswordRequired`] until [`ObjectStore::authenticate`] accepts a
+//! password, so ciphertext is never handed out as if it were content. A handler that `cos` cannot
+//! read makes `open` fail with the typed error. The `/Encrypt` dictionary itself is never
+//! decrypted, nor are cross-reference streams or the `/Contents` of signature dictionaries.
+//!
 //! The store is `Sync`; its caches sit behind one mutex that is never held across a call that
 //! could take it again.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
-use std::mem::size_of;
+use std::mem::{replace, size_of};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use crate::error::{Error, Result, SyntaxKind};
+use crate::crypt::{Decryptor, Encryption, EncryptionInfo, PasswordRole};
+use crate::error::{EncryptionError, Error, Result, SyntaxKind};
 use crate::limits::{DecodeBudget, LimitKind, Limits};
 use crate::object::{Dict, DictEntry, ObjRef, Object, ObjectKind, Stream};
 use crate::objstm::ObjectStream;
 use crate::parser::Parser;
 use crate::recovery::{RepairReason, object_header_at, rebuild};
 use crate::xref::{Xref, XrefEntry};
+
+/// References followed to read the `/Encrypt` dictionary (it, `/CF`, and what they hold).
+const MAX_ENCRYPT_REFERENCES: u8 = 64;
 
 /// Repair reasons kept; a hostile file cannot make the list grow without bound.
 const MAX_REPAIR_REASONS: usize = 1024;
@@ -173,6 +190,14 @@ struct State<'a> {
     rebuild_attempted: bool,
     /// Objects fetched from the file or an object stream so far (cache misses).
     loaded: u64,
+    /// The parsed `/Encrypt` dictionary, if the document is encrypted.
+    encryption: Option<Arc<Encryption>>,
+    /// Object number of an indirect `/Encrypt` dictionary, whose strings are never encrypted.
+    encrypt_object: Option<u32>,
+    /// Set once a password has been accepted.
+    decryptor: Option<Arc<Decryptor>>,
+    /// Encrypted and no password accepted yet.
+    locked: bool,
 }
 
 impl<'a> State<'a> {
@@ -195,6 +220,9 @@ impl<'a> State<'a> {
 
     /// The object `number`, from the cache or the file.
     fn load(&mut self, env: Env<'_, 'a>, number: u32) -> Result<Arc<Object<'static>>> {
+        if self.locked {
+            return Err(EncryptionError::PasswordRequired.into());
+        }
         if let Some(cached) = self.objects.get(number) {
             return Ok(cached);
         }
@@ -208,7 +236,9 @@ impl<'a> State<'a> {
     fn load_uncached(&mut self, env: Env<'_, 'a>, number: u32) -> Result<Object<'static>> {
         match self.entry(number) {
             None | Some(XrefEntry::Free { .. }) => Ok(null()),
-            Some(XrefEntry::InUse { offset, .. }) => self.load_in_use(env, number, offset),
+            Some(XrefEntry::InUse { offset, generation }) => {
+                self.load_in_use(env, number, generation, offset)
+            }
             Some(XrefEntry::Compressed { stream, index }) => {
                 self.load_compressed(env, number, stream, index)
             }
@@ -219,6 +249,7 @@ impl<'a> State<'a> {
         &mut self,
         env: Env<'_, 'a>,
         number: u32,
+        generation: u16,
         offset: u64,
     ) -> Result<Object<'static>> {
         let base = self.xref.base;
@@ -244,7 +275,88 @@ impl<'a> State<'a> {
         for &recovery in &indirect.recoveries {
             self.note(RepairReason::ObjectRecovered { number, recovery });
         }
-        Ok(indirect.object.into_owned())
+        let mut object = indirect.object.into_owned();
+        if let Some(decryptor) = &self.decryptor
+            && self.encrypt_object != Some(number)
+        {
+            decrypt_object(decryptor, ObjRef::new(number, generation), &mut object);
+        }
+        Ok(object)
+    }
+
+    /// The generation number the cross-reference gives an in-use object (0 for anything else);
+    /// it is part of the per-object encryption key.
+    fn generation(&mut self, number: u32) -> u16 {
+        match self.entry(number) {
+            Some(XrefEntry::InUse { generation, .. }) => generation,
+            _ => 0,
+        }
+    }
+
+    /// Like [`load`](Self::load) but works on a locked store: the `/Encrypt` dictionary and what
+    /// it refers to are readable without a password, and are not encrypted.
+    fn load_unlocked(&mut self, env: Env<'_, 'a>, number: u32) -> Result<Arc<Object<'static>>> {
+        let locked = replace(&mut self.locked, false);
+        let loaded = self.load(env, number);
+        self.locked = locked;
+        loaded
+    }
+
+    /// Follows references from `object` with [`load_unlocked`](Self::load_unlocked); the last
+    /// object loaded is returned with its number (`None` if `object` was not a reference).
+    fn follow_unlocked(
+        &mut self,
+        env: Env<'_, 'a>,
+        object: Object<'static>,
+    ) -> Result<(Option<u32>, Arc<Object<'static>>)> {
+        let mut current = Arc::new(object);
+        let mut number = None;
+        for _ in 0..=env.limits.max_reference_depth {
+            let ObjectKind::Ref(next) = current.kind else {
+                return Ok((number, current));
+            };
+            number = Some(next.num);
+            current = self.load_unlocked(env, next.num)?;
+        }
+        let max = u64::from(env.limits.max_reference_depth);
+        Err(Error::LimitExceeded {
+            limit: LimitKind::ReferenceDepth,
+            max,
+            value: max + 1,
+            offset: None,
+        })
+    }
+
+    /// Replaces references with the objects they name, `depth` levels down, reading at most
+    /// `budget` objects: enough for the `/Encrypt` dictionary, its `/CF` and the filters in it.
+    fn resolve_for_encryption(
+        &mut self,
+        env: Env<'_, 'a>,
+        object: Object<'static>,
+        depth: u8,
+        budget: &mut u8,
+    ) -> Result<Object<'static>> {
+        if depth == 0 {
+            return Ok(object);
+        }
+        match object.kind {
+            ObjectKind::Ref(_) if *budget > 0 => {
+                *budget -= 1;
+                let (_, target) = self.follow_unlocked(env, object)?;
+                self.resolve_for_encryption(env, (*target).clone(), depth - 1, budget)
+            }
+            ObjectKind::Dict(mut dict) => {
+                for entry in &mut dict.entries {
+                    let value = replace(&mut entry.value, null());
+                    entry.value = self.resolve_for_encryption(env, value, depth - 1, budget)?;
+                }
+                Ok(Object {
+                    kind: ObjectKind::Dict(dict),
+                    span: object.span,
+                })
+            }
+            _ => Ok(object),
+        }
     }
 
     /// Replaces the cross-reference with one built by scanning the file, keeping the reasons
@@ -304,9 +416,17 @@ impl<'a> State<'a> {
             end: data.end as u64,
             len: env.data.len() as u64,
         })?;
+        // An encrypted object stream is decrypted as a whole; its objects are not decrypted again.
+        let raw = match self.decryptor.clone() {
+            Some(decryptor) => {
+                let id = ObjRef::new(number, self.generation(number));
+                decryptor.decrypt_stream(id, dict, raw)?
+            }
+            None => Cow::Borrowed(raw),
+        };
         let decoded = ObjectStream::from_stream(
             dict,
-            raw,
+            &raw,
             env.limits,
             Some(&mut self.budget),
             Some(data.start as u64),
@@ -315,6 +435,48 @@ impl<'a> State<'a> {
         let decoded = Arc::new(decoded);
         self.streams.insert(number, Arc::clone(&decoded), size);
         Ok(decoded)
+    }
+}
+
+/// Decrypts every string in `object`, which came from the file as indirect object `id`.
+/// Cross-reference streams are not encrypted (§7.5.8.2).
+fn decrypt_object(decryptor: &Decryptor, id: ObjRef, object: &mut Object<'static>) {
+    let is_xref = matches!(&object.kind, ObjectKind::Stream(s) if has_type(&s.dict, b"XRef"));
+    if !is_xref {
+        decrypt_strings(decryptor, id, object);
+    }
+}
+
+fn has_type(dict: &Dict<'_>, name: &[u8]) -> bool {
+    matches!(dict.get(b"Type").map(|t| &t.kind), Some(ObjectKind::Name(n)) if n.as_ref() == name)
+}
+
+/// Recursion is bounded by the parser's nesting limit.
+fn decrypt_strings(decryptor: &Decryptor, id: ObjRef, object: &mut Object<'static>) {
+    match &mut object.kind {
+        ObjectKind::String(bytes) => {
+            let plain = decryptor.decrypt_string(id, bytes).into_owned();
+            *bytes = Cow::Owned(plain);
+        }
+        ObjectKind::Array(items) => {
+            for item in items {
+                decrypt_strings(decryptor, id, item);
+            }
+        }
+        ObjectKind::Dict(dict) => decrypt_dict(decryptor, id, dict),
+        ObjectKind::Stream(stream) => decrypt_dict(decryptor, id, &mut stream.dict),
+        _ => {}
+    }
+}
+
+fn decrypt_dict(decryptor: &Decryptor, id: ObjRef, dict: &mut Dict<'static>) {
+    // The /Contents of a signature is the signature itself, not encrypted (§7.6.2).
+    let signature = has_type(dict, b"Sig") || has_type(dict, b"DocTimeStamp");
+    for entry in &mut dict.entries {
+        if signature && entry.key.as_ref() == b"Contents" {
+            continue;
+        }
+        decrypt_strings(decryptor, id, &mut entry.value);
     }
 }
 
@@ -365,12 +527,101 @@ impl<'a> ObjectStore<'a> {
             streams: Lru::new(limits.max_cache_bytes),
             rebuild_attempted: false,
             loaded: 0,
+            encryption: None,
+            encrypt_object: None,
+            decryptor: None,
+            locked: false,
         };
-        Ok(Self {
+        let store = Self {
             data,
             limits,
             state: Mutex::new(state),
-        })
+        };
+        store.init_encryption()?;
+        Ok(store)
+    }
+
+    /// Reads `/Encrypt` and `/ID` and tries the empty user password; a dictionary that cannot be
+    /// read is an error, a wrong password leaves the store locked.
+    fn init_encryption(&self) -> Result<()> {
+        let Some(value) = self.trailer_value(b"Encrypt") else {
+            return Ok(());
+        };
+        let id0 = match self.trailer_value(b"ID") {
+            Some(id) => match &self.deref(&id)?.kind {
+                ObjectKind::Array(items) => match items.first().map(|o| &o.kind) {
+                    Some(ObjectKind::String(s)) => s.to_vec(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        let env = self.env();
+        let mut state = self.lock();
+        let (number, object) = state.follow_unlocked(env, value)?;
+        if matches!(object.kind, ObjectKind::Null) {
+            return Ok(());
+        }
+        let mut budget = MAX_ENCRYPT_REFERENCES;
+        let object = state.resolve_for_encryption(env, (*object).clone(), 3, &mut budget)?;
+        let Some(dict) = object.as_dict() else {
+            return Err(EncryptionError::Malformed("/Encrypt is not a dictionary").into());
+        };
+        let encryption = Arc::new(Encryption::from_dict(dict, &id0)?);
+        state.encrypt_object = number;
+        state.encryption = Some(Arc::clone(&encryption));
+        match encryption.authenticate(b"") {
+            Ok(decryptor) => state.decryptor = Some(Arc::new(decryptor)),
+            Err(Error::Encryption {
+                kind: EncryptionError::IncorrectPassword,
+            }) => state.locked = true,
+            Err(error) => return Err(error),
+        }
+        // Whatever was read before the key was known (the `/ID`) must not stay cached.
+        state.objects.clear();
+        state.streams.clear();
+        Ok(())
+    }
+
+    /// Whether the document is encrypted and no password has been accepted, so that nothing can
+    /// be read yet. Call [`authenticate`](Self::authenticate).
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        self.lock().locked
+    }
+
+    /// The facts of the encryption (`None` for an unencrypted document).
+    #[must_use]
+    pub fn encryption_info(&self) -> Option<EncryptionInfo> {
+        self.lock().encryption.as_ref().map(|e| e.info())
+    }
+
+    /// Which password is in use: `None` for an unencrypted or still locked document.
+    #[must_use]
+    pub fn password_role(&self) -> Option<PasswordRole> {
+        self.lock().decryptor.as_ref().map(|d| d.role())
+    }
+
+    /// Unlocks the document with `password`, which may be the user or the owner password (see
+    /// [`crate::crypt`] for how passwords are encoded). Objects read earlier are dropped from the
+    /// caches, so everything is decrypted with the new key. An unencrypted document accepts any
+    /// password, as the user password.
+    ///
+    /// # Errors
+    /// [`EncryptionError::IncorrectPassword`]; the store stays as it was.
+    pub fn authenticate(&self, password: &[u8]) -> Result<PasswordRole> {
+        let mut state = self.lock();
+        let Some(encryption) = state.encryption.clone() else {
+            return Ok(PasswordRole::User);
+        };
+        let decryptor = encryption.authenticate(password)?;
+        let role = decryptor.role();
+        state.decryptor = Some(Arc::new(decryptor));
+        state.locked = false;
+        state.objects.clear();
+        state.streams.clear();
+        Ok(role)
     }
 
     fn lock(&self) -> MutexGuard<'_, State<'a>> {
@@ -466,6 +717,54 @@ impl<'a> ObjectStore<'a> {
         })
     }
 
+    /// The data of the stream object `reference` (references are followed), decrypted but still
+    /// encoded: run it through [`crate::filter::decode_stream`] with the stream's dictionary.
+    /// Without encryption this is [`stream_raw`](Self::stream_raw)'s borrowed slice. `None` if the
+    /// object is not a stream.
+    ///
+    /// # Errors
+    /// As [`resolve`](Self::resolve), [`EncryptionError::PasswordRequired`] on a locked store,
+    /// [`EncryptionError::UnknownCryptFilter`], and [`Error::OutOfRange`].
+    pub fn stream_decrypted(&self, reference: ObjRef) -> Result<Option<Cow<'a, [u8]>>> {
+        let env = self.env();
+        let (object, id, decryptor) = {
+            let mut state = self.lock();
+            let mut current = reference;
+            let mut found = None;
+            for _ in 0..=self.limits.max_reference_depth {
+                let object = state.load(env, current.num)?;
+                if let ObjectKind::Ref(next) = object.kind {
+                    current = next;
+                } else {
+                    found = Some(object);
+                    break;
+                }
+            }
+            let Some(object) = found else {
+                let max = u64::from(self.limits.max_reference_depth);
+                return Err(Error::LimitExceeded {
+                    limit: LimitKind::ReferenceDepth,
+                    max,
+                    value: max + 1,
+                    offset: None,
+                });
+            };
+            let id = ObjRef::new(current.num, state.generation(current.num));
+            (object, id, state.decryptor.clone())
+        };
+        let ObjectKind::Stream(stream) = &object.kind else {
+            return Ok(None);
+        };
+        let raw = self.stream_raw(stream)?;
+        Ok(Some(match decryptor {
+            None => Cow::Borrowed(raw),
+            Some(decryptor) => match decryptor.decrypt_stream(id, &stream.dict, raw)? {
+                Cow::Borrowed(_) => Cow::Borrowed(raw),
+                Cow::Owned(plain) => Cow::Owned(plain),
+            },
+        }))
+    }
+
     /// The trailer of the newest revision (for a rebuilt file, the one chosen by the scan).
     #[must_use]
     pub fn trailer(&self) -> Dict<'static> {
@@ -525,12 +824,20 @@ impl<'a> ObjectStore<'a> {
     }
 
     /// The encryption dictionary (`/Encrypt`, direct or indirect), or `None` for an unencrypted
-    /// file. Strings and streams are **not** decrypted yet (M0 task 11).
+    /// file. It is readable on a locked store and its strings are never decrypted.
     ///
     /// # Errors
     /// As [`resolve`](Self::resolve).
     pub fn encrypt(&self) -> Result<Option<Arc<Object<'static>>>> {
-        self.trailer_object(b"Encrypt")
+        let Some(value) = self.trailer_value(b"Encrypt") else {
+            return Ok(None);
+        };
+        let env = self.env();
+        let (_, object) = self.lock().follow_unlocked(env, value)?;
+        Ok(match object.kind {
+            ObjectKind::Null => None,
+            _ => Some(object),
+        })
     }
 
     /// Iterates the pages in document order, reading the page tree lazily (see

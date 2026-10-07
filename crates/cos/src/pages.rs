@@ -41,7 +41,9 @@ pub struct Inherited {
 impl Inherited {
     /// `self` overridden by whatever `node` sets itself.
     fn overridden_by(&self, store: &ObjectStore<'_>, node: &Dict<'_>) -> Result<Self> {
-        let pick = |key: &[u8], inherited: &Option<Arc<Object<'static>>>| {
+        let pick = |key: &[u8],
+                    inherited: &Option<Arc<Object<'static>>>|
+         -> Result<Option<Arc<Object<'static>>>> {
             let Some(own) = node.get(key) else {
                 return Ok(inherited.clone());
             };
