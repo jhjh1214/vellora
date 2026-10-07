@@ -220,6 +220,9 @@ impl Api {
     }
 
     /// Opens `pdf` through `FPDF_FILEACCESS` and returns its page count.
+    // `c_ulong` is 32 bits on Windows and 64 bits elsewhere, so widening it to `u64` is only a
+    // no-op on some targets.
+    #[allow(clippy::useless_conversion)]
     pub(crate) fn page_count(&self, pdf: &[u8]) -> Result<usize, Error> {
         let len = c_ulong::try_from(pdf.len()).map_err(|_| Error::DocumentTooLarge {
             len: pdf.len() as u64,
