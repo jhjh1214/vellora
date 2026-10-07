@@ -1,12 +1,9 @@
 //! Tests for the writers (M0 task 12): the canonical serializer's integration with the store, the
 //! incremental writer and the full writer, on synthetic files and on the encryption fixtures.
 //!
-//! The tests that run `qpdf --check` on every output are `#[ignore]`d like the other qpdf tests:
-//! they need qpdf (on `PATH`, or its path in the `QPDF` environment variable). Run them with
-//!
-//! ```sh
-//! cargo test -p vellora-cos --test writers -- --ignored --nocapture
-//! ```
+//! The test that runs `qpdf --check` on every output needs qpdf (on `PATH`, or its path in the
+//! `QPDF` environment variable, see `docs/dev/setup.md`) and fails without it; CI installs it on
+//! every OS.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fmt::Write as _;
@@ -1169,7 +1166,6 @@ fn qpdf_check(label: &str, bytes: &[u8], password: Option<&str>) {
 }
 
 #[test]
-#[ignore = "needs qpdf (on PATH or in QPDF); run with --ignored"]
 fn qpdf_accepts_every_writer_output() {
     let mut checked = 0;
     for (style, original) in styles() {

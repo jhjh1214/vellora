@@ -602,6 +602,13 @@ name = "vellora-inspect"
 version = "0.0.0"
 
 [[package]]
+name = "vellora-invariants"
+version = "0.0.0"
+dependencies = [
+ "vellora-cos",
+]
+
+[[package]]
 name = "vellora-ipc"
 version = "0.0.0"
 

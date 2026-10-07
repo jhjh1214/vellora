@@ -8,7 +8,7 @@ Strategy and invariants: [`../architecture/testing-strategy.md`](../architecture
 |---|---|
 | Unit | `#[cfg(test)] mod tests` next to the code |
 | Crate integration | `crates/<crate>/tests/*.rs` |
-| Cross-crate invariants and corpus runs | `tests/` (from M0 task 13) |
+| Cross-crate invariants and corpus runs | `tests/invariants/` (crate `vellora-invariants`) |
 | Fuzz targets | `fuzz/fuzz_targets/*.rs` (cargo-fuzz, nightly) |
 | Benchmarks | `bench/` (from M0 task 24) |
 
@@ -23,8 +23,13 @@ Strategy and invariants: [`../architecture/testing-strategy.md`](../architecture
 ```sh
 cargo test --workspace                     # unit + integration
 cargo test -p vellora-cos                  # one crate
-cargo xtask corpus fetch && cargo test -p vellora-invariants -- --ignored   # corpus (M0 task 13 defines the exact command)
-cd fuzz && cargo +nightly fuzz run lexer -- -max_total_time=60
+# Invariant harness: needs qpdf (PATH, or QPDF=<path>) and the corpus. Full corpus, ~1 min:
+cargo xtask corpus fetch && cargo test -p vellora-invariants -- --ignored --nocapture
+# What CI runs (20 files):
+cargo xtask corpus fetch --manifest tests/corpus/ci-manifest.toml --dir target/ci-corpus
+VELLORA_CORPUS_DIR=target/ci-corpus cargo test -p vellora-invariants -- --ignored --nocapture
+# Fuzzing (Linux/macOS, nightly; targets: lexer, object_parser, xref_open, write_roundtrip):
+cd fuzz && cargo +nightly fuzz run lexer -- ../tests/corpus-data -max_total_time=60
 ```
 
 ## When a test fails

@@ -1,0 +1,72 @@
+name: Nightly
+
+# Long-running checks that are too slow for every pull request: the invariant harness over the
+# whole corpus, and 30 minutes of fuzzing per target.
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  corpus:
+    name: invariants on the full corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: qpdf --version
+      - name: Fetch the full corpus
+        run: cargo xtask corpus fetch
+      - name: Writer invariants on the full corpus
+        run: cargo test --locked -p vellora-invariants -- --ignored --nocapture
+
+  fuzz:
+    name: fuzz 30 min (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lexer, object_parser, xref_open, write_roundtrip]
+    runs-on: ubuntu-latest
+    env:
+      # `-D warnings` is for our own builds; the nightly compiler and cargo-fuzz bring their own flags.
+      RUSTFLAGS: ""
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      # Keep the grown corpus from night to night.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fetch seed corpus
+        run: cargo +stable xtask corpus fetch
+      - name: Fuzz ${{ matrix.target }} for 30 min
+        working-directory: fuzz
+        run: >
+          cargo +nightly fuzz run ${{ matrix.target }} --
+          "$GITHUB_WORKSPACE/tests/corpus-data" -max_total_time=1800 -timeout=20
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

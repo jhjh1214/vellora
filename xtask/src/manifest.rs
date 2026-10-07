@@ -14,7 +14,7 @@ pub(crate) struct Manifest {
 }
 
 /// One corpus document.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Doc {
     /// Unique; becomes the file name `<id>.pdf`, so it is restricted to a portable charset.
@@ -153,5 +153,25 @@ mod tests {
             malformed >= 30,
             "need >= 30 malformed files, have {malformed}"
         );
+    }
+
+    /// `ci-manifest.toml` is what CI fetches for the invariant harness: a small subset whose
+    /// entries must be verbatim copies of the main manifest's, so the two cannot drift apart.
+    #[test]
+    fn ci_manifest_is_a_small_verbatim_subset_of_the_main_manifest() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/corpus");
+        let main =
+            Manifest::parse(&std::fs::read_to_string(dir.join("manifest.toml")).unwrap()).unwrap();
+        let ci = Manifest::parse(&std::fs::read_to_string(dir.join("ci-manifest.toml")).unwrap())
+            .unwrap();
+        assert!(
+            (1..=20).contains(&ci.doc.len()),
+            "the CI subset holds 1..=20 documents, has {}",
+            ci.doc.len()
+        );
+        for doc in &ci.doc {
+            let original = main.doc.iter().find(|d| d.id == doc.id);
+            assert_eq!(original, Some(doc), "{} differs from manifest.toml", doc.id);
+        }
     }
 }
