@@ -20,6 +20,10 @@ fuzz_target!(|data: &[u8]| {
     if store.is_locked() || store.root_ref().is_none() {
         return;
     }
+    // A store repairs a wrong offset when it first reads it, which can change what it reports
+    // (a rebuilt table may resolve a number to another object). A rewrite settles that first, so
+    // take the reference from the store after one.
+    let _ = write_full(&store, &FullOptions::default());
     let original_pages = pages(&store);
 
     for (xref_stream, object_streams) in [(false, false), (true, true)] {

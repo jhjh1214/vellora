@@ -839,6 +839,24 @@ impl<'a> ObjectStore<'a> {
         })
     }
 
+    /// Rebuilds the cross-reference now if an entry points at the wrong place, instead of at the
+    /// first read that notices. A writer calls this first, so that its output does not depend on
+    /// what was read before (the rebuilt table can resolve an object number to another object).
+    ///
+    /// # Errors
+    /// [`Error::LimitExceeded`] from the recovery scan.
+    pub(crate) fn settle(&self) -> Result<()> {
+        if self.offsets_are_valid() {
+            return Ok(());
+        }
+        let env = self.env();
+        let mut state = self.lock();
+        if state.rebuild_attempted {
+            return Ok(());
+        }
+        state.rebuild_xref(env)
+    }
+
     /// The effective cross-reference entry of object `number`.
     pub(crate) fn entry_of(&self, number: u32) -> Option<XrefEntry> {
         self.lock().entry(number)

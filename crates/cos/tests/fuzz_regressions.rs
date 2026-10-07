@@ -43,3 +43,25 @@ fn a_repair_during_the_first_read_does_not_lose_the_pages() {
         assert_eq!(pages(&after), 1);
     }
 }
+
+/// The table says object 4 is at an offset where `2 0 obj` (a Font) now stands, so reading object 4
+/// rebuilds the cross-reference, and the rebuilt table resolves 2 to the later, second definition
+/// instead of the page tree. Before, a rewrite depended on what had been read before it: the
+/// first one (the table variant) was made from the page tree, the second from the Font.
+#[test]
+fn a_rewrite_does_not_depend_on_what_was_read_before_it() {
+    let data = fixture("duplicate-object-after-bad-offset.pdf");
+    let mut outputs = Vec::new();
+    let store = ObjectStore::open(&data, Limits::default()).unwrap();
+    for _ in 0..2 {
+        // Same options twice: the second call must not see a different document.
+        outputs.push(write_full(&store, &FullOptions::default()).unwrap());
+    }
+    assert_eq!(outputs[0], outputs[1]);
+
+    // And it is the document a fresh store sees after the repair.
+    let fresh = ObjectStore::open(&data, Limits::default()).unwrap();
+    let _ = fresh.resolve(vellora_cos::ObjRef::new(4, 0));
+    let after = ObjectStore::open(&outputs[0], Limits::default()).unwrap();
+    assert_eq!(pages(&after), pages(&fresh));
+}

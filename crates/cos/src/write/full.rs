@@ -258,27 +258,11 @@ pub fn write_full(store: &ObjectStore<'_>, options: &FullOptions) -> Result<Vec<
     if keep && decryptor.is_none() {
         return Err(WriteError::NotEncrypted.into());
     }
-    // Reading the graph can rebuild a damaged cross-reference, and the rebuilt trailer can name
-    // another `/Root` or `/Info`: start over once with those (it cannot be rebuilt twice).
-    let mut settled = None;
-    for _ in 0..2 {
-        let (root, info) = trailer_refs(store)?;
-        let reachable = discover(
-            store,
-            VecDeque::from_iter(std::iter::once(root).chain(info)),
-        )?;
-        let unchanged = trailer_refs(store)? == (root, info);
-        settled = Some((root, info, reachable));
-        if unchanged {
-            break;
-        }
-    }
-    let Some((root, info, reachable)) = settled else {
-        return Err(WriteError::NoRoot.into());
-    };
-    // The repair may only happen while `discover` reads (the store rebuilds lazily), so this has
-    // to come after it. Objects inside an unreadable object stream are `null` by now; writing
-    // the file would drop them without a trace.
+    // A wrong offset is normally found (and the cross-reference rebuilt) by the first read that
+    // hits it; do that now, so the rewrite is the same whatever was read before. Objects inside
+    // an object stream the repair scan could not decode are `null` from here on, and writing
+    // the document would drop them without a trace.
+    store.settle()?;
     if let Some(stream) = store
         .repaired()
         .into_iter()
@@ -289,6 +273,17 @@ pub fn write_full(store: &ObjectStore<'_>, options: &FullOptions) -> Result<Vec<
     {
         return Err(WriteError::ObjectStreamLost { stream }.into());
     }
+    let Some(root) = store.root_ref() else {
+        return Err(WriteError::NoRoot.into());
+    };
+    let info = match store.trailer_value(b"Info").map(|o| o.kind) {
+        Some(ObjectKind::Ref(info)) => Some(info),
+        _ => None,
+    };
+    let reachable = discover(
+        store,
+        VecDeque::from_iter(std::iter::once(root).chain(info)),
+    )?;
     let Some(&root_number) = reachable.numbers.get(&root.num) else {
         return Err(WriteError::NoRoot.into());
     };
@@ -348,18 +343,6 @@ pub fn write_full(store: &ObjectStore<'_>, options: &FullOptions) -> Result<Vec<
     }
     write_xref(store, &plan, &trailer, &mut out)?;
     Ok(out.bytes)
-}
-
-/// The trailer's `/Root` and `/Info` references.
-fn trailer_refs(store: &ObjectStore<'_>) -> Result<(ObjRef, Option<ObjRef>)> {
-    let Some(root) = store.root_ref() else {
-        return Err(WriteError::NoRoot.into());
-    };
-    let info = match store.trailer_value(b"Info").map(|o| o.kind) {
-        Some(ObjectKind::Ref(info)) => Some(info),
-        _ => None,
-    };
-    Ok((root, info))
 }
 
 /// The two serializers a rewrite uses.
