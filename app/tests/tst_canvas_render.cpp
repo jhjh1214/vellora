@@ -110,7 +110,10 @@ private slots:
             [&] {
                 const QImage image = canvas->grabFramebuffer();
                 const double ratio = static_cast<double>(image.width()) / canvas->width();
-                const QRectF page = window.canvas().controller()->frame().pages.last().rect;
+                // The part of the last page that is on screen.
+                const QRectF page =
+                    window.canvas().controller()->frame().pages.last().rect.intersected(
+                        QRectF(QPointF(0, 0), canvas->size()));
                 for (int y = 0; y < page.height() && !ink; ++y) {
                     for (int x = 0; x < page.width() && !ink; ++x) {
                         const QRgb pixel = image.pixel(static_cast<int>((page.left() + x) * ratio),
@@ -198,21 +201,28 @@ private slots:
         vellora::MainWindow window;
         window.resize(700, 500);
         window.show();
+        qWarning("DIAG2 shown");
         vellora::EngineSession& session = window.session();
         QSignalSpy opened(&session, &vellora::EngineSession::opened);
         QSignalSpy crashed(&session, &vellora::EngineSession::engineCrashed);
         QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
         QVERIFY(opened.wait(kWaitMs));
+        qWarning("DIAG2 opened");
         vellora::CanvasWidget* canvas = window.canvas().canvas();
         QTRY_VERIFY_WITH_TIMEOUT(canvas->textureCount() > 0, kWaitMs);
+        qWarning("DIAG2 texture, pid %u", session.engineProcessId());
 
         killProcess(session.engineProcessId());
+        qWarning("DIAG2 killed");
         QTRY_VERIFY_WITH_TIMEOUT(crashed.size() >= 1, kWaitMs);
+        qWarning("DIAG2 crashed");
         QTRY_VERIFY_WITH_TIMEOUT(opened.size() >= 2, kWaitMs); // the new engine has the document
+        qWarning("DIAG2 reopened");
         QVERIFY(!window.canvas().bannerVisible());
 
         // A zoom the dead engine never drew: new tiles are rendered by the new engine and drawn.
         const int textures = canvas->textureCount();
+        qWarning("DIAG2 zooming, textures %d", textures);
         window.canvas().controller()->setZoom(2.0, QPointF(0.0, 0.0));
         QTRY_VERIFY_WITH_TIMEOUT(canvas->textureCount() > textures, kWaitMs);
     }
