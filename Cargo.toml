@@ -38,6 +38,8 @@ thiserror = "2"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 proptest = "1"
 serde = { version = "1", features = ["derive"] }
+# Wire format of the UI/engine protocol (ADR-0005). `use-std` only (no heapless, no alloc-only extras); it still pulls in `cobs` and `embedded-io`.
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 sha2 = "0.10"
 # Standard Security Handler (RustCrypto, one release line: digest 0.10 / cipher 0.4).
 md-5 = "0.10"

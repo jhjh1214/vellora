@@ -13,6 +13,12 @@ publish.workspace = true
 name = "vellora_ipc"
 
 [dependencies]
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true
