@@ -68,6 +68,33 @@ pub enum ObjectKind<'a> {
 }
 
 impl Object<'_> {
+    /// Copies every borrowed byte string so the object no longer borrows the input. Spans are
+    /// unchanged. The object store caches objects in this form.
+    #[must_use]
+    pub fn into_owned(self) -> Object<'static> {
+        let kind = match self.kind {
+            ObjectKind::Null => ObjectKind::Null,
+            ObjectKind::Bool(b) => ObjectKind::Bool(b),
+            ObjectKind::Integer(n) => ObjectKind::Integer(n),
+            ObjectKind::Real(r) => ObjectKind::Real(r),
+            ObjectKind::String(s) => ObjectKind::String(Cow::Owned(s.into_owned())),
+            ObjectKind::Name(n) => ObjectKind::Name(Cow::Owned(n.into_owned())),
+            ObjectKind::Array(items) => {
+                ObjectKind::Array(items.into_iter().map(Object::into_owned).collect())
+            }
+            ObjectKind::Dict(d) => ObjectKind::Dict(d.into_owned()),
+            ObjectKind::Stream(s) => ObjectKind::Stream(Stream {
+                dict: s.dict.into_owned(),
+                data: s.data,
+            }),
+            ObjectKind::Ref(r) => ObjectKind::Ref(r),
+        };
+        Object {
+            kind,
+            span: self.span,
+        }
+    }
+
     /// The integer value, if this is an integer.
     #[must_use]
     pub fn as_integer(&self) -> Option<i64> {
@@ -111,6 +138,22 @@ pub struct Dict<'a> {
 }
 
 impl<'a> Dict<'a> {
+    /// Copies every borrowed byte string; see [`Object::into_owned`].
+    #[must_use]
+    pub fn into_owned(self) -> Dict<'static> {
+        Dict {
+            entries: self
+                .entries
+                .into_iter()
+                .map(|e| DictEntry {
+                    key: Cow::Owned(e.key.into_owned()),
+                    key_span: e.key_span,
+                    value: e.value.into_owned(),
+                })
+                .collect(),
+        }
+    }
+
     /// The value for `key` (a name without the slash). The last entry wins on duplicates.
     #[must_use]
     pub fn get(&self, key: &[u8]) -> Option<&Object<'a>> {

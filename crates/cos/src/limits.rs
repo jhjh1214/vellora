@@ -33,6 +33,8 @@ pub enum LimitKind {
     DictEntries,
     /// Number of revisions (cross-reference sections in a `/Prev` chain).
     Revisions,
+    /// Length of a chain of indirect references followed to reach a value.
+    ReferenceDepth,
 }
 
 impl LimitKind {
@@ -50,6 +52,7 @@ impl LimitKind {
             Self::ArrayEntries => "array entry count",
             Self::DictEntries => "dictionary entry count",
             Self::Revisions => "revision count",
+            Self::ReferenceDepth => "reference chain length",
         }
     }
 }
@@ -85,6 +88,14 @@ pub struct Limits {
     pub max_dict_entries: u64,
     /// Maximum cross-reference sections in one `/Prev` chain. Default 8,192.
     pub max_revisions: u64,
+    /// Maximum indirect references followed in a row to reach a value (`5 0 obj 6 0 R`), which
+    /// also stops reference cycles. Default 32.
+    pub max_reference_depth: u32,
+    /// Approximate bytes the object store keeps cached, separately for parsed objects and for
+    /// decoded object streams. Not a hostile-input limit but a memory budget; an object stream
+    /// larger than this is never cached, so it is decoded (and charged to the
+    /// [`DecodeBudget`]) on every access. Default 64 MiB.
+    pub max_cache_bytes: u64,
 }
 
 impl Default for Limits {
@@ -100,6 +111,8 @@ impl Default for Limits {
             max_array_entries: 1 << 20,
             max_dict_entries: 1 << 18,
             max_revisions: 8192,
+            max_reference_depth: 32,
+            max_cache_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -121,6 +134,7 @@ impl Limits {
             LimitKind::ArrayEntries => self.max_array_entries,
             LimitKind::DictEntries => self.max_dict_entries,
             LimitKind::Revisions => self.max_revisions,
+            LimitKind::ReferenceDepth => u64::from(self.max_reference_depth),
         }
     }
 
@@ -214,7 +228,7 @@ impl DecodeBudget {
 mod tests {
     use super::*;
 
-    const ALL: [LimitKind; 10] = [
+    const ALL: [LimitKind; 11] = [
         LimitKind::DecodedStreamBytes,
         LimitKind::TotalDecodeBytes,
         LimitKind::DecompressionRatio,
@@ -225,6 +239,7 @@ mod tests {
         LimitKind::ArrayEntries,
         LimitKind::DictEntries,
         LimitKind::Revisions,
+        LimitKind::ReferenceDepth,
     ];
 
     #[test]
@@ -240,6 +255,8 @@ mod tests {
         assert_eq!(l.max_array_entries, 1_048_576);
         assert_eq!(l.max_dict_entries, 262_144);
         assert_eq!(l.max_revisions, 8192);
+        assert_eq!(l.max_reference_depth, 32);
+        assert_eq!(l.max_cache_bytes, 64 * 1024 * 1024);
     }
 
     #[test]

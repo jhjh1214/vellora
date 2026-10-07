@@ -37,7 +37,7 @@ use std::ops::Range;
 use crate::error::{Error, Result, SyntaxKind};
 use crate::lexer::{Lexer, TokenKind, is_regular, is_whitespace};
 use crate::limits::{DecodeBudget, LimitKind, Limits};
-use crate::object::{Dict, DictEntry, ObjRef, Object, ObjectKind};
+use crate::object::{Dict, DictEntry, ObjRef, Object, ObjectKind, Recovery};
 use crate::objstm::ObjectStream;
 use crate::parser::Parser;
 use crate::xref::{HEADER_SEARCH_BYTES, Revision, SectionKind, Xref, XrefEntry, XrefSection};
@@ -57,6 +57,13 @@ pub enum RepairReason {
     ObjectOffsetInvalid {
         /// The object number.
         number: u32,
+    },
+    /// The object parser had to repair an object (reported by the object store).
+    ObjectRecovered {
+        /// The object number.
+        number: u32,
+        /// What was repaired.
+        recovery: Recovery,
     },
     /// No usable trailer was found, so one was built from a `/Type /Catalog` object.
     TrailerSynthesized,

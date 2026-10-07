@@ -98,6 +98,12 @@ impl ObjectStream {
         self.entries.len()
     }
 
+    /// Size of the decoded data in bytes (what keeping the stream in memory costs).
+    #[must_use]
+    pub fn decoded_len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Whether the stream holds no objects.
     #[must_use]
     pub fn is_empty(&self) -> bool {
