@@ -1,6 +1,7 @@
 // The main window opens a document through the engine and shows its page count.
 #include "MainWindow.h"
 
+#include <QLabel>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -18,6 +19,13 @@ private slots:
         QVERIFY(opened.wait(60'000));
         QVERIFY2(window.documentStatus().contains(QStringLiteral("3 page")),
                  qPrintable(window.documentStatus()));
+    }
+
+    void showsEngineTextAsPlainText() {
+        vellora::MainWindow window;
+        for (const auto* label : window.findChildren<QLabel*>()) {
+            QCOMPARE(label->textFormat(), Qt::PlainText);
+        }
     }
 
     void reportsAFileThatCannotBeOpened() {

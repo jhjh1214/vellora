@@ -14,10 +14,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     resize(1000, 800);
 
     m_placeholder = new QLabel(tr("Open a PDF with File → Open"), this);
+    // File names and engine messages are untrusted: never let QLabel read them as rich text.
+    m_placeholder->setTextFormat(Qt::PlainText);
     m_placeholder->setAlignment(Qt::AlignCenter);
     setCentralWidget(m_placeholder);
 
     m_documentStatus = new QLabel(this);
+    m_documentStatus->setTextFormat(Qt::PlainText);
     statusBar()->addPermanentWidget(m_documentStatus);
 
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
