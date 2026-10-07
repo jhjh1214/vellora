@@ -10,11 +10,193 @@
 //!
 //! - **Read-only.** Never call PDFium save or edit APIs (`FPDF_SaveAsCopy`,
 //!   `FPDFPage_GenerateContent`, …). `vellora-cos` is the only writer
-//!   (ADR-0002).
+//!   (ADR-0002). The binding table in `ffi.rs` declares no such function.
 //! - PDFium is not thread-safe. One PDFium instance per process; all calls go
 //!   through a single thread owned by this crate.
 //! - Linked only into `vellora-engine`, never into the UI or the CLI process.
 //! - `unsafe` is confined to the FFI module, and every block has a `// SAFETY:`
 //!   comment.
 //!
-//! **Status:** skeleton. Implemented by M0 tasks 14–15 (`docs/milestones/M0.md`).
+//! **Loading:** PDFium is a shared library resolved at run time (ADR-0014): the
+//! engine ships it next to its executable, and `cargo xtask pdfium fetch` puts the
+//! pinned build under `third_party/pdfium/<platform>/` for development. A missing
+//! library is a typed error, never a link failure of the workspace.
+//!
+//! **Status:** bindings and the loader (M0 task 14). The renderer thread and
+//! the tile API arrive with task 15.
+
+// The FFI module is the one place `unsafe` is allowed (see the crate lints).
+#[allow(unsafe_code)]
+mod ffi;
+
+use std::env;
+use std::ffi::{OsString, c_ulong};
+use std::path::{Path, PathBuf};
+
+/// Environment variable that overrides where [`Pdfium::locate`] looks for the library.
+pub const LIBRARY_ENV: &str = "VELLORA_PDFIUM_LIB";
+
+/// The platform's file name for the PDFium shared library.
+#[must_use]
+pub const fn library_file_name() -> &'static str {
+    if cfg!(windows) {
+        "pdfium.dll"
+    } else if cfg!(target_os = "macos") {
+        "libpdfium.dylib"
+    } else {
+        "libpdfium.so"
+    }
+}
+
+/// The search behind [`Pdfium::locate`], with its two inputs made explicit.
+fn locate_in(override_path: Option<OsString>, exe_dir: Option<&Path>) -> Result<PathBuf, Error> {
+    let file = library_file_name();
+    // An explicit override is never second-guessed: if it is wrong, say so instead of quietly
+    // loading a different library.
+    let candidate = match override_path {
+        Some(path) => Some(PathBuf::from(path)),
+        None => exe_dir.map(|dir| dir.join(file)),
+    };
+    candidate
+        .filter(|path| path.is_file())
+        .ok_or(Error::NotFound { file })
+}
+
+/// Why a PDFium call failed, from `FPDF_GetLastError`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum LastError {
+    /// `FPDF_ERR_UNKNOWN`.
+    #[error("unknown error")]
+    Unknown,
+    /// `FPDF_ERR_FILE`: file not found or could not be opened.
+    #[error("file could not be read")]
+    File,
+    /// `FPDF_ERR_FORMAT`: not a PDF, or too damaged for PDFium to open.
+    #[error("not a PDF or corrupted")]
+    Format,
+    /// `FPDF_ERR_PASSWORD`: a password is required or was wrong.
+    #[error("password required or incorrect")]
+    Password,
+    /// `FPDF_ERR_SECURITY`: unsupported security scheme.
+    #[error("unsupported security scheme")]
+    Security,
+    /// `FPDF_ERR_PAGE`: page not found or content error.
+    #[error("page not found or content error")]
+    Page,
+    /// A code this wrapper does not know (or `FPDF_ERR_SUCCESS`, which PDFium may leave
+    /// behind when the failure did not set one).
+    #[error("PDFium error code {0}")]
+    Other(u32),
+}
+
+impl LastError {
+    // `c_ulong` is 32 bits on Windows and 64 bits elsewhere, so the conversion is only a no-op
+    // on some targets.
+    #[allow(clippy::useless_conversion)]
+    pub(crate) fn from_code(code: c_ulong) -> Self {
+        match code {
+            1 => Self::Unknown,
+            2 => Self::File,
+            3 => Self::Format,
+            4 => Self::Password,
+            5 => Self::Security,
+            6 => Self::Page,
+            other => Self::Other(u32::try_from(other).unwrap_or(u32::MAX)),
+        }
+    }
+}
+
+/// Errors from loading or calling PDFium.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// The shared library could not be opened.
+    #[error("cannot load the PDFium library {}: {source}", path.display())]
+    Load {
+        /// The path that was tried.
+        path: PathBuf,
+        /// The loader's message.
+        source: libloading::Error,
+    },
+    /// The library lacks a function we need (a wrong or truncated build).
+    #[error("the PDFium library does not export {name}: {source}")]
+    Symbol {
+        /// The missing function.
+        name: &'static str,
+        /// The loader's message.
+        source: libloading::Error,
+    },
+    /// No library file was found by [`Pdfium::locate`].
+    #[error("no PDFium library found: set {LIBRARY_ENV} or put {file} next to the executable")]
+    NotFound {
+        /// The file name that was looked for.
+        file: &'static str,
+    },
+    /// PDFium is already loaded in this process; it keeps global state, so there is one instance.
+    #[error("PDFium is already loaded in this process")]
+    AlreadyLoaded,
+    /// The document is larger than PDFium's custom file access can describe (the length is a C
+    /// `unsigned long`, 32 bits on Windows).
+    #[error("document of {len} bytes exceeds the {max} bytes PDFium's file access can address")]
+    DocumentTooLarge {
+        /// Size of the document.
+        len: u64,
+        /// The largest size PDFium can take on this platform.
+        max: u64,
+    },
+    /// PDFium refused to open the document.
+    #[error("PDFium could not open the document: {0}")]
+    Open(LastError),
+}
+
+/// A loaded and initialised PDFium library.
+///
+/// There is at most one per process, and it must stay on the thread that created it (it is
+/// neither `Send` nor `Sync`). Dropping it destroys the library.
+pub struct Pdfium {
+    api: ffi::Api,
+}
+
+impl Pdfium {
+    /// Loads the shared library at `path` and initialises PDFium.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AlreadyLoaded`] if another instance is alive, [`Error::Load`] if the file cannot
+    /// be opened, [`Error::Symbol`] if it lacks an entry point we need.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
+        ffi::Api::load(path.as_ref()).map(|api| Self { api })
+    }
+
+    /// Finds the library: `$VELLORA_PDFIUM_LIB` if set, else [`library_file_name`] in the
+    /// directory of the running executable (where the engine ships it).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] if neither exists.
+    pub fn locate() -> Result<PathBuf, Error> {
+        let exe_dir = env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        locate_in(env::var_os(LIBRARY_ENV), exe_dir.as_deref())
+    }
+
+    /// Opens `pdf` through PDFium's custom file access and returns its page count.
+    ///
+    /// The bytes are only read while this call runs. This is the narrowest end-to-end use of
+    /// the bindings; the renderer proper arrives with task 15.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Open`] if PDFium cannot open the document, [`Error::DocumentTooLarge`] above the
+    /// platform's file access limit.
+    pub fn page_count(&self, pdf: &[u8]) -> Result<usize, Error> {
+        self.api.page_count(pdf)
+    }
+}
+
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod tests;

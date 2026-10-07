@@ -36,6 +36,7 @@ MIT, MIT-0, Apache-2.0 (incl. LLVM exception), BSD-2-Clause, BSD-3-Clause, ISC, 
 | PDFium (pinned prebuilt, `bblanchon/pdfium-binaries`) | BSD-3 / Apache-2.0 | M0 |
 | Qt 6.8 LTS | LGPLv3 (dynamic) | M0 |
 | cxx | MIT/Apache-2.0 | M0 |
+| libloading (loads the PDFium shared library; `vellora-render` only) | ISC | M0 |
 | serde, postcard, thiserror, anyhow, tracing | MIT/Apache-2.0 | M0 |
 | toml (manifest parsing in `xtask`) | MIT/Apache-2.0 | M0 (dev) |
 | clap (CLI) | MIT/Apache-2.0 | M0 |

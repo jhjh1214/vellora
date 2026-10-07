@@ -22,7 +22,7 @@ compile_commands.json
 /bench/data/
 
 # Third-party binaries (fetched by script, verified by checksum)
-/third_party/pdfium/*/
+/third_party/pdfium/
 
 # Editors / OS
 .vscode/

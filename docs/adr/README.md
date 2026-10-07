@@ -19,3 +19,4 @@ We record every significant architectural decision as an ADR ([MADR](https://adr
 | [0011](0011-xfa-out-of-scope.md) | XFA forms are out of scope | Accepted |
 | [0012](0012-no-telemetry-local-crash-dumps.md) | No telemetry; local-only crash dumps | Accepted |
 | [0013](0013-cos-parser-foundation.md) | `cos` parser foundation: hayro-syntax vs our own | **Accepted**: own parser (option C) |
+| [0014](0014-pdfium-acquisition-and-bindings.md) | PDFium: pinned prebuilt binaries, thin hand-written bindings, loaded at run time | Accepted |

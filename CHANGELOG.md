@@ -8,3 +8,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 - Repository foundation: governance documents, architecture documentation and ADRs, Rust workspace skeleton, CI.
+- `cargo xtask pdfium fetch`: downloads the PDFium build pinned in `third_party/pdfium.lock`, verifies its SHA-256 and extracts it.
+- `vellora-render`: thin bindings to PDFium, loaded at run time (ADR-0014).

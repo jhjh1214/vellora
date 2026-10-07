@@ -13,6 +13,8 @@ publish.workspace = true
 name = "vellora_render"
 
 [dependencies]
+libloading = { workspace = true }
+thiserror = { workspace = true }
 
 # FFI crate: `unsafe` is denied by default and allowed only in the documented FFI
 # module, with a `// SAFETY:` comment on every block (CLAUDE.md invariant 6).
