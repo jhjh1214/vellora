@@ -2,6 +2,8 @@
 #include "canvas/PageLayout.h"
 
 #include <QTest>
+#include <cmath>
+#include <limits>
 
 using vellora::PageLayout;
 
@@ -88,6 +90,28 @@ private slots:
         QCOMPARE(anchor.page, 1U);
         QCOMPARE(anchor.offsetPoints, 26.0);
         QCOMPARE(layout.yOf(anchor, 2.0), layout.pageTop(1, 2.0) + 52.0);
+    }
+
+    void whatTheEngineReportsIsBounded() {
+        PageLayout layout;
+        // An absurd page count is cut instead of allocating gigabytes.
+        layout.setPages(0xFFFFFFFFU, {});
+        QCOMPARE(layout.pageCount(), PageLayout::kMaxPages);
+
+        // Sizes that are not finite or not plausible are not believed.
+        const double inf = std::numeric_limits<double>::infinity();
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        layout.setPages(6, {{100, 200}, {inf, 50}, {nan, 50}, {1e12, 50}, {-5, 50}, {0.5, 50}});
+        for (quint32 page = 1; page < 6; ++page) {
+            QCOMPARE(layout.pageSize(page), QSizeF(100, 200));
+        }
+        QCOMPARE(layout.maxPageWidth(), 100.0);
+        QVERIFY(std::isfinite(layout.totalHeight(8.0)));
+
+        // With no sane size at all, Letter.
+        layout.setPages(2, {{inf, inf}, {nan, nan}});
+        QCOMPARE(layout.pageSize(1),
+                 QSizeF(PageLayout::kFallbackWidth, PageLayout::kFallbackHeight));
     }
 
     void anEmptyDocumentHasNoPages() {

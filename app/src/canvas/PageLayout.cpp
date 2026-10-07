@@ -1,16 +1,35 @@
 #include "canvas/PageLayout.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace vellora {
 
+namespace {
+
+bool isSane(const QSizeF& size) {
+    const auto sane = [](double side) {
+        return std::isfinite(side) && side >= 1.0 && side <= PageLayout::kMaxPageDimension;
+    };
+    return sane(size.width()) && sane(size.height());
+}
+
+} // namespace
+
 void PageLayout::setPages(quint32 pageCount, const QVector<QSizeF>& sizes) {
+    pageCount = std::min(pageCount, kMaxPages);
     m_pageCount = pageCount;
     m_known = sizes;
     if (static_cast<quint32>(m_known.size()) > pageCount) {
         m_known.resize(static_cast<qsizetype>(pageCount));
     }
-    m_fallback = m_known.isEmpty() ? QSizeF(kFallbackWidth, kFallbackHeight) : m_known.last();
+    m_fallback = QSizeF(kFallbackWidth, kFallbackHeight);
+    for (qsizetype i = m_known.size(); i > 0; --i) {
+        if (isSane(m_known.at(i - 1))) {
+            m_fallback = m_known.at(i - 1);
+            break;
+        }
+    }
 
     m_heightBefore.resize(static_cast<qsizetype>(pageCount) + 1);
     m_maxWidth = 0.0;
@@ -28,7 +47,7 @@ QSizeF PageLayout::pageSize(quint32 page) const {
     if (page < static_cast<quint32>(m_known.size())) {
         const QSizeF known = m_known.at(static_cast<qsizetype>(page));
         // A page the engine could not measure arrives as an invalid size.
-        if (known.width() > 0.0 && known.height() > 0.0) {
+        if (isSane(known)) {
             return known;
         }
     }

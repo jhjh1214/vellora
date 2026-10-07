@@ -16,6 +16,11 @@ class PageLayout {
 public:
     // Gap above the first page, between pages and below the last one, in logical pixels.
     static constexpr double kGap = 12.0;
+    // The engine is a separate, possibly compromised process, so what it reports is bounded here:
+    // at most this many pages (the layout costs 8 bytes a page), and only page sizes between 1 and
+    // `kMaxPageDimension` points (Acrobat's own limit is 14,400) are believed.
+    static constexpr quint32 kMaxPages = 1U << 22;
+    static constexpr double kMaxPageDimension = 100'000.0;
     // Size of pages the engine has not told us about (US Letter), in points.
     static constexpr double kFallbackWidth = 612.0;
     static constexpr double kFallbackHeight = 792.0;
@@ -27,8 +32,9 @@ public:
         double offsetPoints = 0.0;
     };
 
-    // `sizes` holds the pages whose size is known (a prefix of the document). The others take the
-    // size of the last known page, or Letter if none is known.
+    // `sizes` holds the pages whose size is known (a prefix of the document). The others, and any
+    // whose size is not a sane finite size, take the size of the last sane known page, or Letter
+    // if there is none. A page count above `kMaxPages` is cut to it.
     void setPages(quint32 pageCount, const QVector<QSizeF>& sizes);
 
     quint32 pageCount() const { return m_pageCount; }
@@ -40,7 +46,7 @@ public:
     double pageTop(quint32 page, double zoom) const;
     double totalHeight(double zoom) const;
 
-    // The page whose band (the page and the gap above it) contains `y`; clamped to the document.
+    // The last page whose top edge is at or above `y`; clamped to the document.
     quint32 pageAt(double y, double zoom) const;
     // The pages that intersect [top, bottom): `first..last` inclusive. Both 0 for an empty
     // document, and `count` is 0 when nothing intersects.

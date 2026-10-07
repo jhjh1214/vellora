@@ -9,6 +9,10 @@ namespace {
 
 // Sizes the engine sends at open (the first chunk of pages, see EngineSession::pageSize).
 constexpr quint32 kMaxKnownSizes = 4096;
+// Tiles of one request pass. A viewport needs a few dozen at most; this only bounds the work if
+// the geometry (an absurdly large window, say) ever asks for more.
+constexpr int kMaxTilesPerPass = 4096;
+constexpr int kMaxFailedTiles = 4096;
 
 int bucketIndex(float scale) {
     return static_cast<int>(std::lround(std::log2(scale) * 4.0));
@@ -169,6 +173,10 @@ void CanvasController::onRequestFailed(quint64 request) {
         const auto it = m_inFlight.constFind(request);
         if (it != m_inFlight.constEnd()) {
             // Not asked for again until the engine restarts or the document is reopened.
+            // Bounded: a hostile engine could otherwise grow this by failing every tile.
+            if (m_failed.size() >= kMaxFailedTiles) {
+                m_failed.clear();
+            }
             m_failed.insert(it.value());
             m_inFlight.remove(request);
         }
@@ -230,6 +238,9 @@ QVector<TileDraw> CanvasController::tilesIn(double top, double bottom) const {
         const auto lastY = static_cast<quint32>(std::ceil(y1 / tilePts)) - 1;
         for (quint32 ty = firstY; ty <= lastY; ++ty) {
             for (quint32 tx = firstX; tx <= lastX; ++tx) {
+                if (tiles.size() >= kMaxTilesPerPass) {
+                    return tiles;
+                }
                 const QRectF all(tx * tilePts, ty * tilePts, tilePts, tilePts);
                 const QRectF shown = all.intersected(QRectF(0.0, 0.0, size.width(), size.height()));
                 if (shown.isEmpty()) {
