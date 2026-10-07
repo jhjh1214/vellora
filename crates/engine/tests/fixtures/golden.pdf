@@ -1,0 +1,50 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 140] /Rotate 0 /Contents 6 0 R >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 200] /Rotate 90 /Contents 7 0 R >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 180 120] /Rotate 0 /Contents 8 0 R >>
+endobj
+6 0 obj
+<< /Length 230 >>
+stream
+0.85 0.85 0.85 rg 10 10 60 120 re f 0.2 0.4 0.9 rg 160 70 m 160 97.6 137.6 120 110 120 c          82.4 120 60 97.6 60 70 c 60 42.4 82.4 20 110 20 c 137.6 20 160 42.4 160 70 c f                  0.9 0.1 0.1 RG 3 w 5 5 m 215 135 l S
+endstream
+endobj
+7 0 obj
+<< /Length 102 >>
+stream
+1 0.6 0 rg 20 20 m 140 40 l 80 180 l f                       0 0 0 RG 2 w [6 3] 0 d 10 10 140 180 re S
+endstream
+endobj
+8 0 obj
+<< /Length 350 >>
+stream
+q 30 20 120 80 re W n 0.00 g 10 0 13 120 re f 0.08 g 23 0 13 120 re f 0.17 g 36 0 13 120 re f 0.25 g 49 0 13 120 re f 0.33 g 62 0 13 120 re f 0.42 g 75 0 13 120 re f 0.50 g 88 0 13 120 re f 0.58 g 101 0 13 120 re f 0.67 g 114 0 13 120 re f 0.75 g 127 0 13 120 re f 0.83 g 140 0 13 120 re f 0.92 g 153 0 13 120 re f Q 0 0 1 RG 1 w 0.5 0.5 179 119 re S
+endstream
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000322 00000 n 
+0000000419 00000 n 
+0000000700 00000 n 
+0000000853 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+1254
+%%EOF

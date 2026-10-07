@@ -68,7 +68,7 @@ Tests are evidence. **Never** weaken an assertion, skip or ignore a test, or loo
    - no `unwrap`/`expect`/`panic!`/unchecked indexing on input-derived data
    - every decoder and recursion goes through the limits in `cos::limits`
    - return typed errors (`thiserror`)
-6. **`unsafe` is forbidden** (workspace lint) except in `vellora-render` and `vellora-engine-client` (FFI). Every `unsafe` block there needs a `// SAFETY:` comment.
+6. **`unsafe` is forbidden** (workspace lint) except in `vellora-render`, `vellora-engine-client` (FFI) and `vellora-shm` (memory mapping and handle passing, ADR-0015). Every `unsafe` block there needs a `// SAFETY:` comment. `cos` and `vellora-engine` stay `forbid`.
 7. **No network access from the engine.** No telemetry, ever. No new network feature without an ADR.
 8. **PDF JavaScript is never executed.** Launch actions are never executed. Attachments are never opened.
 9. **Dependencies:** every new crate must pass `deny.toml` (permissive licenses only; Qt is the sole LGPL exception, dynamically linked). Prefer the standard library and a few well-maintained crates. Justify each new dependency in the commit body. GPL, AGPL and LGPL code must never be copied into the repo.

@@ -842,10 +842,12 @@ impl<'a> ObjectStore<'a> {
     /// Rebuilds the cross-reference now if an entry points at the wrong place, instead of at the
     /// first read that notices. A writer calls this first, so that its output does not depend on
     /// what was read before (the rebuilt table can resolve an object number to another object).
+    /// The engine calls it at open for the same reason: what it reports must not depend on which
+    /// object was read first.
     ///
     /// # Errors
     /// [`Error::LimitExceeded`] from the recovery scan.
-    pub(crate) fn settle(&self) -> Result<()> {
+    pub fn settle(&self) -> Result<()> {
         if self.offsets_are_valid() {
             return Ok(());
         }
