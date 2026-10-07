@@ -1,18 +1,31 @@
 //! Stream filters (ISO 32000-2:2020 §7.4).
 //!
-//! Only what M0 task 7 needs exists so far: `FlateDecode` with PNG and TIFF predictors, which
-//! cross-reference streams and object streams use. Task 10 adds the other filters and filter
-//! chains on top of these functions, so they are written as the final API: every decoder takes
-//! [`Limits`] and an optional [`DecodeBudget`] and checks them **as output grows**.
+//! Every decoder takes [`Limits`] and an optional [`DecodeBudget`] and checks them **as output
+//! grows**, so a decompression bomb is stopped early. [`decode_stream`] runs a whole `/Filter`
+//! chain; the individual decoders are public for callers that already know the filter (inline
+//! images, tests).
 //!
-//! Corrupt or truncated Flate data is common in the wild. [`flate_decode`] returns the bytes
-//! decoded so far with [`Decoded::complete`] set to `false` when the stream ended early or broke
-//! after producing output; it fails only when nothing at all could be decoded.
+//! Corrupt or truncated data is common in the wild. Every decoder returns the bytes decoded so
+//! far with [`Decoded::complete`] set to `false` when the input ended early or broke after
+//! producing output; it fails only when nothing at all could be decoded.
+//!
+//! DCT, JPX, CCITT and JBIG2 are image codecs that PDFium handles: [`decode_stream`] stops in
+//! front of them and reports which one it found ([`ImageFilter`]).
+
+mod ascii;
+mod chain;
+mod lzw;
+mod runlength;
+
+pub use ascii::{ascii_hex_decode, ascii85_decode};
+pub use chain::{DecodedStream, ImageFilter, decode_chain, decode_stream, decode_stream_bytes};
+pub use lzw::lzw_decode;
+pub use runlength::run_length_decode;
 
 use flate2::{Decompress, FlushDecompress, Status};
 
 use crate::error::{Error, Result};
-use crate::limits::{DecodeBudget, LimitKind, Limits};
+use crate::limits::{DecodeBudget, Limits};
 use crate::object::{Dict, ObjectKind};
 
 /// Output of a decoder.
@@ -27,6 +40,78 @@ pub struct Decoded {
 const FLATE: &str = "FlateDecode";
 /// Size of the output step: limits are checked after every step.
 const CHUNK: usize = 16 * 1024;
+
+/// Checks the limits and charges the document budget while a decoder produces output.
+///
+/// Checking every [`CHUNK`] bytes keeps the overshoot bounded by one chunk plus the largest
+/// burst a single input unit can produce (128 bytes for run-length, one string for LZW).
+struct Guard<'a> {
+    limits: &'a Limits,
+    budget: Option<&'a mut DecodeBudget>,
+    offset: Option<u64>,
+    charged: u64,
+    checked_at: usize,
+}
+
+impl<'a> Guard<'a> {
+    fn new(limits: &'a Limits, budget: Option<&'a mut DecodeBudget>, offset: Option<u64>) -> Self {
+        Self {
+            limits,
+            budget,
+            offset,
+            charged: 0,
+            checked_at: 0,
+        }
+    }
+
+    /// `consumed` input bytes have produced `produced` output bytes so far. `last` forces the
+    /// check (call it once when the decoder is done).
+    fn step(&mut self, consumed: usize, produced: usize, last: bool) -> Result<()> {
+        if !last && produced - self.checked_at < CHUNK {
+            return Ok(());
+        }
+        self.checked_at = produced;
+        self.limits
+            .check_decode_progress(consumed as u64, produced as u64, self.offset)?;
+        if let Some(budget) = self.budget.as_deref_mut() {
+            let total = produced as u64;
+            budget.charge(total - self.charged, self.offset)?;
+            self.charged = total;
+        }
+        Ok(())
+    }
+}
+
+/// Builds the result of a decoder that stopped at `failure` (if any): output that exists is
+/// kept and marked incomplete, no output at all is an error.
+fn finish(
+    filter: &'static str,
+    out: Vec<u8>,
+    complete: bool,
+    failure: Option<&'static str>,
+    offset: Option<u64>,
+) -> Result<Decoded> {
+    match failure {
+        Some(detail) if out.is_empty() => Err(Error::Decode {
+            filter,
+            detail,
+            offset,
+        }),
+        Some(_) => Ok(Decoded {
+            data: out,
+            complete: false,
+        }),
+        None => Ok(Decoded {
+            data: out,
+            complete,
+        }),
+    }
+}
+
+/// PDF white-space characters (§7.2.3, Table 1).
+fn is_pdf_space(byte: u8) -> bool {
+    matches!(byte, 0 | 9 | 10 | 12 | 13 | 32)
+}
 
 fn decode_error(detail: &'static str, offset: Option<u64>) -> Error {
     Error::Decode {
@@ -319,78 +404,6 @@ fn tiff_sub_byte_row(row: &mut [u8], bits: u32, colors: usize) {
             *byte = u8::try_from(cleared | (sum << shift)).unwrap_or(0);
         }
     }
-}
-
-/// Decodes a stream whose only filter is `FlateDecode` (or that has none), applying its
-/// predictor. This is the subset cross-reference streams and object streams need; M0 task 10
-/// replaces it with the full filter chain.
-///
-/// A stream truncated or corrupted after some output returns the part that decoded; callers
-/// that need all of it check the length they expect.
-///
-/// # Errors
-/// [`Error::Decode`] for any other filter or a filter chain, bad `/DecodeParms`, or data that
-/// cannot be decoded at all; [`Error::LimitExceeded`] from the decode limits.
-pub fn decode_flate_only(
-    dict: &Dict<'_>,
-    raw: &[u8],
-    limits: &Limits,
-    budget: Option<&mut DecodeBudget>,
-    offset: Option<u64>,
-) -> Result<Vec<u8>> {
-    let unsupported = || {
-        decode_error(
-            "only FlateDecode is supported here (filter chains come later)",
-            offset,
-        )
-    };
-    let filter = dict.get(b"Filter").or_else(|| dict.get(b"F"));
-    let is_flate = match filter.map(|o| &o.kind) {
-        None | Some(ObjectKind::Null) => false,
-        Some(ObjectKind::Name(n)) if is_flate_name(n) => true,
-        Some(ObjectKind::Array(items)) => match items.as_slice() {
-            [] => false,
-            [one] if matches!(&one.kind, ObjectKind::Name(n) if is_flate_name(n)) => true,
-            _ => return Err(unsupported()),
-        },
-        Some(_) => return Err(unsupported()),
-    };
-    if !is_flate {
-        limits.check(LimitKind::DecodedStreamBytes, raw.len() as u64, offset)?;
-        if let Some(budget) = budget {
-            budget.charge(raw.len() as u64, offset)?;
-        }
-        return Ok(raw.to_vec());
-    }
-
-    let decoded = flate_decode(raw, limits, budget, offset)?;
-    let invalid_parms = || decode_error("invalid /DecodeParms", offset);
-    let decode_parms = dict.get(b"DecodeParms").or_else(|| dict.get(b"DP"));
-    let parm_dict: Option<&Dict<'_>> = match decode_parms.map(|o| &o.kind) {
-        None | Some(ObjectKind::Null) => None,
-        Some(ObjectKind::Dict(d)) => Some(d),
-        Some(ObjectKind::Array(items)) => match items.as_slice() {
-            [] => None,
-            [one] => match &one.kind {
-                ObjectKind::Dict(d) => Some(d),
-                ObjectKind::Null => None,
-                _ => return Err(invalid_parms()),
-            },
-            _ => return Err(invalid_parms()),
-        },
-        Some(_) => return Err(invalid_parms()),
-    };
-    match parm_dict {
-        Some(parm_dict) => {
-            let predictor = PredictorParams::from_dict(parm_dict, offset)?;
-            apply_predictor(decoded.data, &predictor, offset)
-        }
-        None => Ok(decoded.data),
-    }
-}
-
-fn is_flate_name(name: &[u8]) -> bool {
-    name == b"FlateDecode" || name == b"Fl"
 }
 
 #[cfg(test)]

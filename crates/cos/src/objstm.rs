@@ -8,7 +8,7 @@
 //! *before* it reaches [`ObjectStream::new`], and the objects inside are not encrypted again.
 
 use crate::error::{Error, Result, SyntaxKind};
-use crate::filter::decode_flate_only;
+use crate::filter::decode_stream_bytes;
 use crate::lexer::{Lexer, TokenKind};
 use crate::limits::{DecodeBudget, LimitKind, Limits};
 use crate::object::{Dict, Object, ObjectKind};
@@ -88,7 +88,7 @@ impl ObjectStream {
         let (Some(n), Some(first)) = (count(b"N"), count(b"First")) else {
             return Err(malformed(0));
         };
-        let decoded = decode_flate_only(dict, raw, limits, budget, offset)?;
+        let decoded = decode_stream_bytes(dict, raw, limits, budget, offset)?;
         Self::new(decoded, n, first, limits)
     }
 
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn from_stream_rejects_unsupported_filters_and_enforces_decode_limits() {
-        let dict_object = Parser::new(b"<< /N 1 /First 4 /Filter /LZWDecode >>", &limits())
+        let dict_object = Parser::new(b"<< /N 1 /First 4 /Filter /DCTDecode >>", &limits())
             .parse_object()
             .unwrap();
         let err =
