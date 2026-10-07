@@ -44,3 +44,10 @@
 | Windows | M0 | M0 (Job object) | M0 | Phase 1–2 |
 | Linux | M0 | M0 (rlimit) | M0 | Phase 1–2 |
 | macOS | M0 | M0 (rlimit) | M0 | before macOS release |
+
+### Known gaps in the engine boundary
+
+| Gap | Effect | Planned fix |
+|---|---|---|
+| The engine holds a writable handle to the shared tile region, so a compromised engine on Linux or macOS can shrink the file | The UI faults (SIGBUS) when it reads a lost page: a denial of service of the UI process, no data exposure or corruption. Not possible on Windows | Sealed anonymous region (`memfd` + `F_SEAL_SHRINK` on Linux; evaluate `shm_open` on macOS), see ADR-0015 |
+| The engine maps the document, so a file truncated by another process kills the engine (not the UI) | The client restarts the engine | Parent denies writers on the file where the OS allows it (task 20) |

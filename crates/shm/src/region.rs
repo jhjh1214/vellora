@@ -86,6 +86,18 @@ impl SlotGeometry {
 ///
 /// The backing file is anonymous (unlinked, or deleted when the last handle closes), so the
 /// region has no name another process could open.
+///
+/// # Known gap: a compromised engine can crash the UI
+///
+/// The engine maps the region writable, which needs a handle that also allows resizing the
+/// file. On Linux and macOS a compromised engine can shrink the file; the UI's next read of a
+/// lost page then raises SIGBUS and ends the UI process. (On Windows a mapped file cannot be
+/// shortened.) The UI's data is not exposed and no memory is corrupted, but the engine is
+/// meant to be untrusted, so this is tracked in the security model and closes with a sealed
+/// anonymous region (`memfd` with `F_SEAL_SHRINK` on Linux; the other backings in ADR-0015) or
+/// a UI that reads slots through a handler for the fault. Until then the UI must read slots
+/// only after the matching `TileReady`, and a crashed UI loses at most the open view: the
+/// document and its journal are the UI's, not the engine's.
 #[derive(Debug)]
 pub struct TileRegion {
     geometry: SlotGeometry,
@@ -134,10 +146,12 @@ impl TileRegion {
         let len = usize::try_from(geometry.total_bytes())
             .map_err(|_| Error::InvalidGeometry("the region does not fit the address space"))?;
         // SAFETY: the file is the region's anonymous backing file, created by the UI for this
-        // purpose, and neither side ever shrinks it (the UI keeps it at full size, the engine
-        // never resizes it), so every mapped page stays backed. The peer process reads or writes
-        // the same pages concurrently by design; the protocol gives each slot one writer at a
-        // time, and no safe code here relies on a slot's contents staying stable between reads.
+        // purpose. Our own code never resizes it, so every mapped page stays backed. The peer
+        // reads or writes the same pages concurrently by design; the protocol gives each slot
+        // one writer at a time, and no safe code here relies on a slot's contents staying stable
+        // between reads. One hazard remains and is documented on the type: the engine holds a
+        // writable handle, so a *compromised* engine can shrink the file, and the UI then faults
+        // when it touches a lost page. That is a denial of service, not memory corruption.
         let map = unsafe { memmap2::MmapOptions::new().len(len).map_mut(file) }
             .map_err(|source| Error::io("cannot map the tile region", source))?;
         Ok(Self { geometry, map })
