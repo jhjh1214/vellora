@@ -73,13 +73,25 @@ fn start(launch: &LaunchArgs) -> anyhow::Result<Engine> {
         .context("cannot map the tile region")?;
     let library = Pdfium::locate().context("cannot find PDFium")?;
     let renderer = Renderer::start(library).context("cannot start PDFium")?;
-    Ok(Engine::new(
+    let mut engine = Engine::new(
         renderer,
         file,
         launch.file,
         region,
         launch.max_document_bytes,
-    ))
+    );
+    engine.set_deadlines(launch.deadlines);
+    // A PDFium call cannot be interrupted, so a tile past its hard deadline ends the process;
+    // the UI sees the pipe close and restarts the engine (ADR-0004). `abort`, not `exit`: the
+    // stuck thread may hold locks that exit-time cleanup would wait for.
+    engine.set_hard_deadline_hook(|req_id| {
+        tracing::error!(
+            req_id = req_id.0,
+            "a tile exceeded its hard deadline: aborting the engine"
+        );
+        std::process::abort();
+    });
+    Ok(engine)
 }
 
 /// Best effort: if the pipe is already gone there is nobody to tell.

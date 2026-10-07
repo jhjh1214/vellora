@@ -32,6 +32,7 @@ vellora-inspect = { path = "crates/inspect" }
 vellora-render = { path = "crates/render" }
 vellora-ipc = { path = "crates/ipc" }
 vellora-shm = { path = "crates/shm" }
+vellora-engine = { path = "crates/engine" }
 vellora-engine-client = { path = "crates/engine-client" }
 
 # External. Small, well-maintained crates, all permissive.

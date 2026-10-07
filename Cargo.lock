@@ -751,6 +751,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vellora-cos",
+ "vellora-engine-client",
  "vellora-ipc",
  "vellora-render",
  "vellora-shm",
@@ -759,6 +760,13 @@ dependencies = [
 [[package]]
 name = "vellora-engine-client"
 version = "0.0.0"
+dependencies = [
+ "libc",
+ "thiserror",
+ "vellora-engine",
+ "vellora-shm",
+ "windows-sys",
+]
 
 [[package]]
 name = "vellora-inspect"

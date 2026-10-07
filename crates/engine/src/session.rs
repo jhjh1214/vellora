@@ -83,7 +83,8 @@ impl Engine {
             document: None,
             deadlines: Deadlines::default(),
             on_hard_deadline: Box::new(|req_id| {
-                // The process-level kill is attached here by the watchdog work (M0 task 19).
+                // The library only reports; the executable's `main` replaces this hook with the
+                // process abort (a library must not end its host process by default).
                 tracing::error!(
                     req_id = req_id.0,
                     "a tile exceeded its hard deadline and nothing is attached to stop it"

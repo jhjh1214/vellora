@@ -14,6 +14,17 @@ name = "vellora_engine_client"
 # M0 task 20 adds crate-type = ["staticlib", "rlib"] together with the cxx bridge.
 
 [dependencies]
+# `LaunchArgs` and `Deadlines`: the client builds the command line with the type the engine parses.
+vellora-engine = { workspace = true }
+vellora-shm = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+# Job objects (memory limit, kill-on-close, no child processes) for the engine process.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
 
 # FFI crate (cxx bridge): `unsafe` is denied by default and allowed only where
 # documented, with a `// SAFETY:` comment on every block (CLAUDE.md invariant 6).

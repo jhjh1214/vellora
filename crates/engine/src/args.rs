@@ -5,7 +5,11 @@
 //! output. [`LaunchArgs::to_args`] and [`parse`] are each other's inverse, so the engine client
 //! builds the command line with the same type the engine parses it with.
 
+use std::time::Duration;
+
 use vellora_shm::{HandleToken, SlotGeometry};
+
+use crate::Deadlines;
 
 /// Flag naming the document file.
 pub const FILE_HANDLE: &str = "--file-handle";
@@ -17,6 +21,12 @@ pub const REGION_SLOTS: &str = "--region-slots";
 pub const REGION_SLOT_BYTES: &str = "--region-slot-bytes";
 /// Flag giving the largest document the engine will map.
 pub const MAX_DOCUMENT_BYTES: &str = "--max-document-bytes";
+
+/// Flag giving the per-tile soft deadline in milliseconds.
+pub const SOFT_DEADLINE_MS: &str = "--soft-deadline-ms";
+/// Flag giving the per-tile hard deadline in milliseconds. The engine aborts itself when a tile
+/// is still rendering after it.
+pub const HARD_DEADLINE_MS: &str = "--hard-deadline-ms";
 
 /// Largest document accepted when the parent does not say otherwise: PDFium's file access takes
 /// the length as a C `unsigned long`, which is 32 bits on Windows (ADR-0014).
@@ -33,6 +43,8 @@ pub struct LaunchArgs {
     pub geometry: SlotGeometry,
     /// Documents larger than this are refused before they are mapped.
     pub max_document_bytes: u64,
+    /// How long a tile may take before it is logged (soft) and before the engine aborts (hard).
+    pub deadlines: Deadlines,
 }
 
 impl LaunchArgs {
@@ -50,6 +62,10 @@ impl LaunchArgs {
             self.geometry.slot_bytes().to_string(),
             MAX_DOCUMENT_BYTES.to_owned(),
             self.max_document_bytes.to_string(),
+            SOFT_DEADLINE_MS.to_owned(),
+            self.deadlines.soft.as_millis().to_string(),
+            HARD_DEADLINE_MS.to_owned(),
+            self.deadlines.hard.as_millis().to_string(),
         ]
     }
 }
@@ -91,12 +107,14 @@ pub enum ArgsError {
     },
 }
 
-const FLAGS: [&str; 5] = [
+const FLAGS: [&str; 7] = [
     FILE_HANDLE,
     REGION_HANDLE,
     REGION_SLOTS,
     REGION_SLOT_BYTES,
     MAX_DOCUMENT_BYTES,
+    SOFT_DEADLINE_MS,
+    HARD_DEADLINE_MS,
 ];
 
 /// Parses the arguments after the program name. Accepts `--flag value` and `--flag=value`.
@@ -136,7 +154,7 @@ where
         );
     }
 
-    let [file, region, slots, slot_bytes, max_bytes] = values;
+    let [file, region, slots, slot_bytes, max_bytes, soft, hard] = values;
     let required = |value: Option<String>, flag| value.ok_or(ArgsError::Missing(flag));
     let number = |text: String, flag: &'static str| -> Result<u64, ArgsError> {
         text.parse().map_err(|error| ArgsError::Invalid {
@@ -176,11 +194,33 @@ where
         None => DEFAULT_MAX_DOCUMENT_BYTES,
     };
 
+    let defaults = Deadlines::default();
+    let millis = |text: Option<String>, flag, default: Duration| -> Result<Duration, ArgsError> {
+        match text {
+            Some(text) => {
+                let value = number(text, flag)?;
+                if value == 0 {
+                    return Err(ArgsError::Invalid {
+                        flag,
+                        reason: "must be at least 1 ms".to_owned(),
+                    });
+                }
+                Ok(Duration::from_millis(value))
+            }
+            None => Ok(default),
+        }
+    };
+    let deadlines = Deadlines {
+        soft: millis(soft, SOFT_DEADLINE_MS, defaults.soft)?,
+        hard: millis(hard, HARD_DEADLINE_MS, defaults.hard)?,
+    };
+
     Ok(Invocation::Serve(LaunchArgs {
         file,
         region,
         geometry,
         max_document_bytes,
+        deadlines,
     }))
 }
 
@@ -201,6 +241,7 @@ mod tests {
             region: HandleToken::new(8),
             geometry: SlotGeometry::new(16, 1 << 20).unwrap(),
             max_document_bytes: DEFAULT_MAX_DOCUMENT_BYTES,
+            deadlines: Deadlines::default(),
         }
     }
 
@@ -213,6 +254,10 @@ mod tests {
     fn to_args_is_the_inverse_of_parse() {
         let launch = LaunchArgs {
             max_document_bytes: 123_456,
+            deadlines: Deadlines {
+                soft: Duration::from_millis(250),
+                hard: Duration::from_millis(1500),
+            },
             ..valid()
         };
         assert_eq!(parse(launch.to_args()), Ok(Invocation::Serve(launch)));
@@ -266,6 +311,8 @@ mod tests {
                 "--file-handle 7 --region-handle 8 --region-slots 5000000000 --region-slot-bytes 4",
                 "32 bits",
             ),
+            (&format!("{VALID} --hard-deadline-ms 0"), "at least 1 ms"),
+            (&format!("{VALID} --soft-deadline-ms soon"), "not a number"),
             (
                 "--file-handle -1 --region-handle 8 --region-slots 1 --region-slot-bytes 4",
                 "not a number",
