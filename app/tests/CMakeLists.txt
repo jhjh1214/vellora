@@ -7,7 +7,10 @@ function(vellora_add_test name source)
     VELLORA_GOLDEN_PDF="${VELLORA_ROOT}/crates/engine/tests/fixtures/golden.pdf")
   vellora_stage_runtime(${name})
   add_test(NAME ${name} COMMAND ${name})
-  set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+  # QTEST_FUNCTION_TIMEOUT makes Qt name the test function that hangs, before CTest's timeout kills
+  # the whole executable without saying which one it was.
+  set_tests_properties(${name} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTEST_FUNCTION_TIMEOUT=90000" TIMEOUT 150)
 endfunction()
 
 vellora_add_test(tst_engine_session tst_engine_session.cpp)
@@ -31,13 +34,14 @@ if(UNIX AND NOT APPLE)
   if(VELLORA_XVFB_RUN)
     add_test(NAME tst_canvas_render
              COMMAND ${VELLORA_XVFB_RUN} -a -s "-screen 0 1280x1024x24" $<TARGET_FILE:tst_canvas_render>)
-    set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb")
+    set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb;QTEST_FUNCTION_TIMEOUT=90000")
   else()
     message(WARNING "xvfb-run not found: tst_canvas_render (GPU drawing) is not registered")
   endif()
 else()
   add_test(NAME tst_canvas_render COMMAND tst_canvas_render)
+  set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=90000")
 endif()
 if(TEST tst_canvas_render)
-  set_tests_properties(tst_canvas_render PROPERTIES TIMEOUT 120)
+  set_tests_properties(tst_canvas_render PROPERTIES TIMEOUT 150)
 endif()

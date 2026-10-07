@@ -35,6 +35,17 @@ private slots:
         QSignalSpy crashed(&session, &vellora::EngineSession::engineCrashed);
         QSignalSpy restarted(&session, &vellora::EngineSession::engineRestarted);
 
+        // What the window shows at the moment of the crash. The session delivers a crash and the
+        // restart that follows it from one poll when the engine comes back fast, so by the time
+        // the test looks, the notice may already be gone again; this slot runs right after the
+        // window's own one.
+        bool noticeShownAtCrash = false;
+        QString noticeText;
+        connect(&session, &vellora::EngineSession::engineCrashed, this, [&] {
+            noticeShownAtCrash = window.canvas().bannerVisible();
+            noticeText = window.canvas().bannerText();
+        });
+
         QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
         QVERIFY(opened.wait(kWaitMs));
         QTRY_VERIFY_WITH_TIMEOUT(firstVisibleTileReady(window), kWaitMs);
@@ -47,9 +58,8 @@ private slots:
         QVERIFY(crashed.wait(kWaitMs));
         QCOMPARE(crashed.last().at(1).toBool(), true); // will restart
         // Non-modal notice, shown at once; the window is not blocked (this loop is running).
-        QVERIFY(window.canvas().bannerVisible());
-        QVERIFY2(window.canvas().bannerText().contains(QStringLiteral("retrying")),
-                 qPrintable(window.canvas().bannerText()));
+        QVERIFY(noticeShownAtCrash);
+        QVERIFY2(noticeText.contains(QStringLiteral("retrying")), qPrintable(noticeText));
 
         // A new engine takes over the same document; the notice goes away.
         // `EngineRestarted` may already have arrived with the crash (the signals are separate
