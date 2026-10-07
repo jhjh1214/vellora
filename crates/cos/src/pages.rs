@@ -113,6 +113,19 @@ impl<'s, 'a> Pages<'s, 'a> {
 
     /// The root `/Pages` node, as the first frame.
     fn start(&mut self) -> Result<Vec<Frame>> {
+        let rebuilt = self.store.was_rebuilt();
+        let frames = self.start_once()?;
+        // A damaged cross-reference is rebuilt the first time an object it points at is not
+        // there, and then the catalog read so far can be stale (the rebuilt trailer may even name
+        // another one). It cannot be rebuilt twice, so one more pass settles it.
+        if !rebuilt && self.store.was_rebuilt() {
+            self.visited.clear();
+            return self.start_once();
+        }
+        Ok(frames)
+    }
+
+    fn start_once(&mut self) -> Result<Vec<Frame>> {
         let Some(root) = self.store.root()? else {
             return Ok(Vec::new());
         };

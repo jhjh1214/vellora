@@ -865,6 +865,13 @@ impl<'a> ObjectStore<'a> {
             .map(|value| value.clone().into_owned())
     }
 
+    /// Whether the cross-reference has been rebuilt by now. That can happen on any read (a wrong
+    /// offset is only found when its object is read) and replaces the trailer and every cached
+    /// object, so whatever a caller read before may be stale.
+    pub(crate) fn was_rebuilt(&self) -> bool {
+        self.lock().rebuild_attempted
+    }
+
     /// The reference in the trailer's `/Root`.
     #[must_use]
     pub fn root_ref(&self) -> Option<ObjRef> {
