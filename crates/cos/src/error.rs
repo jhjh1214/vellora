@@ -67,6 +67,13 @@ pub enum Error {
         kind: EncryptionError,
     },
 
+    /// The requested write cannot be done (see [`crate::write`]).
+    #[error("write: {kind}")]
+    Write {
+        /// What is wrong.
+        kind: WriteError,
+    },
+
     /// The underlying file or handle failed.
     #[error("I/O error{}: {source}", at(*.offset))]
     Io {
@@ -88,7 +95,7 @@ impl Error {
             Self::LimitExceeded { offset, .. }
             | Self::Decode { offset, .. }
             | Self::Io { offset, .. } => *offset,
-            Self::Encryption { .. } => None,
+            Self::Encryption { .. } | Self::Write { .. } => None,
         }
     }
 }
@@ -97,6 +104,46 @@ impl From<EncryptionError> for Error {
     fn from(kind: EncryptionError) -> Self {
         Self::Encryption { kind }
     }
+}
+
+impl From<WriteError> for Error {
+    fn from(kind: WriteError) -> Self {
+        Self::Write { kind }
+    }
+}
+
+/// Why a write request was refused (see [`crate::write`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum WriteError {
+    /// The file's cross-reference was rebuilt by the recovery scan (or the file has no usable
+    /// `/Root`), so there is no revision chain to append to: use the full writer.
+    #[error("the file was repaired and cannot be updated incrementally; write it in full")]
+    NeedsFullRewrite,
+    /// Object number 0 (the head of the free list), or a number past what the cross-reference
+    /// can hold.
+    #[error("object number {0} cannot be written")]
+    InvalidObjectNumber(u32),
+    /// The change replaces or frees the `/Encrypt` dictionary, which the writer never touches.
+    #[error("object {0} is the encryption dictionary and cannot be changed")]
+    EncryptionDictionary(u32),
+    /// An object value of kind stream was given without its data; use
+    /// [`NewObject::Stream`](crate::write::NewObject::Stream).
+    #[error("a stream object needs its data")]
+    StreamWithoutData,
+    /// A file offset needs more digits than a classic cross-reference table has (10).
+    #[error("file offset {0} does not fit a cross-reference table entry")]
+    OffsetTooLarge(u64),
+    /// A cross-reference entry that the chosen section style cannot hold (an entry for an object
+    /// inside an object stream in a classic table).
+    #[error("this cross-reference style cannot hold the entry")]
+    EntryNotRepresentable,
+    /// The document has no `/Root`, so there is nothing to write.
+    #[error("the document has no /Root")]
+    NoRoot,
+    /// Re-encryption was requested for a document that is not encrypted.
+    #[error("the document is not encrypted")]
+    NotEncrypted,
 }
 
 /// Why encrypted content cannot be read (see [`crate::crypt`]).

@@ -67,6 +67,14 @@ pub enum ObjectKind<'a> {
     Ref(ObjRef),
 }
 
+impl<'a> Object<'a> {
+    /// An object that was not parsed from a file (a span of `0..0`), for the writer.
+    #[must_use]
+    pub fn new(kind: ObjectKind<'a>) -> Self {
+        Self { kind, span: 0..0 }
+    }
+}
+
 impl Object<'_> {
     /// Copies every borrowed byte string so the object no longer borrows the input. Spans are
     /// unchanged. The object store caches objects in this form.
@@ -162,6 +170,22 @@ impl<'a> Dict<'a> {
             .rev()
             .find(|e| e.key.as_ref() == key)
             .map(|e| &e.value)
+    }
+
+    /// Sets `key` to `value`: every existing entry for the key is removed and one is appended.
+    /// The new entry has empty spans (it did not come from a file).
+    pub fn set(&mut self, key: &[u8], value: Object<'a>) {
+        self.remove(key);
+        self.entries.push(DictEntry {
+            key: Cow::Owned(key.to_vec()),
+            key_span: 0..0,
+            value,
+        });
+    }
+
+    /// Removes every entry for `key`.
+    pub fn remove(&mut self, key: &[u8]) {
+        self.entries.retain(|e| e.key.as_ref() != key);
     }
 
     /// Whether a key occurs more than once.

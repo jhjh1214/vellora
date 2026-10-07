@@ -36,6 +36,8 @@
 //!   (task 10)
 //! - the Standard Security Handler (revisions 2–6) in [`crypt`], used by the [`ObjectStore`]
 //!   (task 11)
+//! - the writers in [`write`]: canonical object serialisation, incremental updates and full
+//!   rewrites (task 12)
 
 pub mod crypt;
 pub mod error;
@@ -49,10 +51,11 @@ pub mod parser;
 pub mod recovery;
 pub mod source;
 pub mod store;
+pub mod write;
 pub mod xref;
 
 pub use crypt::{CryptMethod, Decryptor, Encryption, EncryptionInfo, PasswordRole};
-pub use error::{EncryptionError, Error, Result, SyntaxKind};
+pub use error::{EncryptionError, Error, Result, SyntaxKind, WriteError};
 pub use limits::{DecodeBudget, LimitKind, Limits};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use objstm::ObjectStream;
@@ -61,4 +64,7 @@ pub use parser::{LengthResolver, Parser};
 pub use recovery::{RepairReason, object_header_at, rebuild};
 pub use source::{ByteSource, FileSource, MemorySource};
 pub use store::ObjectStore;
+pub use write::{
+    Changes, EncryptionPolicy, FullOptions, NewObject, incremental_update, write_full, write_object,
+};
 pub use xref::{Revision, SectionKind, Startxref, Xref, XrefEntry, XrefSection, XrefWarning};

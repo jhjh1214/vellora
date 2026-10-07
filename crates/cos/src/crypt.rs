@@ -3,7 +3,9 @@
 //! [`Encryption::from_dict`] reads an `/Encrypt` dictionary, [`Encryption::authenticate`] checks a
 //! password (the user password first, then the owner password) and gives a [`Decryptor`] that
 //! decrypts strings and stream data per object. [`crate::ObjectStore`] drives all of this: it tries
-//! the empty password on open and decrypts strings and streams when they are read.
+//! the empty password on open and decrypts strings and streams when they are read. The writers
+//! ([`crate::write`]) use [`Decryptor::encrypt_string`] and [`Decryptor::encrypt_stream`] to
+//! encrypt what they write with the same key.
 //!
 //! # Supported
 //!
@@ -580,6 +582,34 @@ fn aes_cbc_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     plain
 }
 
+/// AES-CBC encryption with PKCS#5 padding; the output is `IV || blocks`. `key` must be 16 or 32
+/// bytes.
+fn aes_cbc_encrypt(key: &[u8], iv: &[u8; 16], data: &[u8]) -> Vec<u8> {
+    let pad = 16 - data.len() % 16;
+    let mut buffer = data.to_vec();
+    buffer.resize(data.len() + pad, u8::try_from(pad).unwrap_or(16));
+    let length = buffer.len();
+    let encrypted = match key.len() {
+        16 => cbc::Encryptor::<Aes128>::new_from_slices(key, iv).map(|c| {
+            c.encrypt_padded_mut::<NoPadding>(&mut buffer, length)
+                .is_ok()
+        }),
+        32 => cbc::Encryptor::<Aes256>::new_from_slices(key, iv).map(|c| {
+            c.encrypt_padded_mut::<NoPadding>(&mut buffer, length)
+                .is_ok()
+        }),
+        // Unreachable for keys made by `authenticate`; the data would otherwise go out in clear.
+        _ => return Vec::new(),
+    };
+    if encrypted != Ok(true) {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(16 + buffer.len());
+    out.extend_from_slice(iv);
+    out.extend_from_slice(&buffer);
+    out
+}
+
 /// Holds the file encryption key of an authenticated document and decrypts with it.
 #[derive(Debug, Clone)]
 pub struct Decryptor {
@@ -621,10 +651,17 @@ impl Decryptor {
         dict: &Dict<'_>,
         data: &'d [u8],
     ) -> Result<Cow<'d, [u8]>> {
+        let method = self.stream_method(dict)?;
+        Ok(self.decrypt(method, id, data))
+    }
+
+    /// The method that applies to the stream with dictionary `dict`; see
+    /// [`decrypt_stream`](Self::decrypt_stream) for the streams that are never encrypted.
+    fn stream_method(&self, dict: &Dict<'_>) -> Result<CryptMethod> {
         if name(dict, b"Type") == Some(b"XRef") {
-            return Ok(Cow::Borrowed(data));
+            return Ok(CryptMethod::Identity);
         }
-        let method = match crypt_filter_name(dict) {
+        Ok(match crypt_filter_name(dict) {
             Some(filter) => self.method_named(filter)?,
             None if !self.encryption.encrypt_metadata
                 && name(dict, b"Type") == Some(b"Metadata") =>
@@ -632,8 +669,69 @@ impl Decryptor {
                 CryptMethod::Identity
             }
             None => self.encryption.stream_method,
-        };
-        Ok(self.decrypt(method, id, data))
+        })
+    }
+
+    /// Encrypts a string of object `id`: the inverse of [`decrypt_string`](Self::decrypt_string),
+    /// with the same file key, for writers that append to an encrypted document.
+    ///
+    /// AES needs an initialisation vector. `cos` has no source of randomness, so the IV is
+    /// derived from the key, the object and the plain text (SHA-256, first 16 bytes): output is
+    /// deterministic, and, because the IV depends on the plain text, equal inputs are the only
+    /// way to get equal IVs.
+    #[must_use]
+    pub fn encrypt_string<'d>(&self, id: ObjRef, data: &'d [u8]) -> Cow<'d, [u8]> {
+        self.encrypt(self.encryption.string_method, id, data)
+    }
+
+    /// Encrypts the (already encoded) data of the stream `id` with dictionary `dict`, using the
+    /// same rules as [`decrypt_stream`](Self::decrypt_stream) about which streams are left alone.
+    ///
+    /// # Errors
+    /// [`EncryptionError::UnknownCryptFilter`] if the stream names a crypt filter that `/CF` does
+    /// not define.
+    pub fn encrypt_stream<'d>(
+        &self,
+        id: ObjRef,
+        dict: &Dict<'_>,
+        data: &'d [u8],
+    ) -> Result<Cow<'d, [u8]>> {
+        let method = self.stream_method(dict)?;
+        Ok(self.encrypt(method, id, data))
+    }
+
+    fn encrypt<'d>(&self, method: CryptMethod, id: ObjRef, data: &'d [u8]) -> Cow<'d, [u8]> {
+        match method {
+            CryptMethod::Identity => Cow::Borrowed(data),
+            CryptMethod::Rc4 => {
+                let mut out = data.to_vec();
+                rc4(&self.object_key(id, false), &mut out);
+                Cow::Owned(out)
+            }
+            CryptMethod::AesV2 => Cow::Owned(aes_cbc_encrypt(
+                &self.object_key(id, true),
+                &self.synthetic_iv(id, data),
+                data,
+            )),
+            CryptMethod::AesV3 => Cow::Owned(aes_cbc_encrypt(
+                &self.key,
+                &self.synthetic_iv(id, data),
+                data,
+            )),
+        }
+    }
+
+    fn synthetic_iv(&self, id: ObjRef, data: &[u8]) -> [u8; 16] {
+        let mut hash = Sha256::new();
+        hash.update(b"vellora-aes-iv");
+        hash.update(&self.key);
+        hash.update(id.num.to_le_bytes());
+        hash.update(id.generation.to_le_bytes());
+        hash.update(data);
+        let digest = hash.finalize();
+        let mut iv = [0u8; 16];
+        iv.copy_from_slice(prefix(&digest, 16));
+        iv
     }
 
     fn method_named(&self, filter: &[u8]) -> Result<CryptMethod> {

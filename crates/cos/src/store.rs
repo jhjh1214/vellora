@@ -52,7 +52,7 @@ use crate::object::{Dict, DictEntry, ObjRef, Object, ObjectKind, Stream};
 use crate::objstm::ObjectStream;
 use crate::parser::Parser;
 use crate::recovery::{RepairReason, object_header_at, rebuild};
-use crate::xref::{Xref, XrefEntry};
+use crate::xref::{SectionKind, Xref, XrefEntry};
 
 /// References followed to read the `/Encrypt` dictionary (it, `/CF`, and what they hold).
 const MAX_ENCRYPT_REFERENCES: u8 = 64;
@@ -502,6 +502,29 @@ fn length_of(
     indirect.object.as_integer()
 }
 
+/// What the writers need to know about the newest revision of a file.
+pub(crate) struct WriteBase {
+    /// Offset of `%PDF-`; cross-reference offsets are relative to it.
+    pub base: usize,
+    /// How the newest cross-reference section is written (`None`: there is none).
+    pub kind: Option<SectionKind>,
+    /// File offset of the newest section.
+    pub section_offset: usize,
+    /// One more than the highest object number known, from the cross-reference and `/Size`.
+    pub size: u32,
+    /// The header version `(major, minor)`, `(1, 7)` if the header cannot be read.
+    pub version: (u8, u8),
+}
+
+/// The version in the `%PDF-M.m` header at `base`.
+fn header_version(data: &[u8], base: usize) -> (u8, u8) {
+    let digits = data.get(base + 5..base + 8).unwrap_or_default();
+    match digits {
+        [major @ b'0'..=b'9', b'.', minor @ b'0'..=b'9'] => (major - b'0', minor - b'0'),
+        _ => (1, 7),
+    }
+}
+
 /// A PDF file's objects, parsed lazily. See the [module documentation](self).
 pub struct ObjectStore<'a> {
     data: &'a [u8],
@@ -775,9 +798,65 @@ impl<'a> ObjectStore<'a> {
             .unwrap_or_default()
     }
 
+    /// The facts about the newest revision that the writers build on.
+    pub(crate) fn write_base(&self) -> WriteBase {
+        let mut state = self.lock();
+        state.ensure_index();
+        let highest = state
+            .index
+            .as_ref()
+            .and_then(|index| index.keys().max().copied())
+            .unwrap_or(0);
+        let newest = state.xref.revisions.first();
+        let declared = newest
+            .and_then(|r| r.section.trailer.get(b"Size"))
+            .and_then(Object::as_integer)
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0);
+        WriteBase {
+            base: state.xref.base,
+            kind: newest.map(|r| r.section.kind),
+            section_offset: newest.map_or(0, |r| r.section.offset),
+            size: declared.max(highest.saturating_add(1)),
+            version: header_version(self.data, state.xref.base),
+        }
+    }
+
+    /// Whether every in-use entry of the cross-reference points at its object's header. The
+    /// store checks offsets one object at a time when they are read; an incremental update must
+    /// know up front, because it adds a section on top of entries it does not read.
+    pub(crate) fn offsets_are_valid(&self) -> bool {
+        let mut state = self.lock();
+        state.ensure_index();
+        let base = state.xref.base;
+        state.index.as_ref().is_none_or(|index| {
+            index.iter().all(|(&number, entry)| match *entry {
+                XrefEntry::InUse { offset, .. } => {
+                    object_header_at(self.data, base, offset, number)
+                }
+                _ => true,
+            })
+        })
+    }
+
+    /// The effective cross-reference entry of object `number`.
+    pub(crate) fn entry_of(&self, number: u32) -> Option<XrefEntry> {
+        self.lock().entry(number)
+    }
+
+    /// The decryptor of an unlocked encrypted document.
+    pub(crate) fn decryptor(&self) -> Option<Arc<Decryptor>> {
+        self.lock().decryptor.clone()
+    }
+
+    /// The object number of an indirect `/Encrypt` dictionary.
+    pub(crate) fn encrypt_object_number(&self) -> Option<u32> {
+        self.lock().encrypt_object
+    }
+
     /// The trailer value for `key`, from the newest revision that has one: a damaged file can
     /// lose `/Info` or `/Encrypt` from its newest trailer.
-    fn trailer_value(&self, key: &[u8]) -> Option<Object<'static>> {
+    pub(crate) fn trailer_value(&self, key: &[u8]) -> Option<Object<'static>> {
         self.lock()
             .xref
             .revisions
