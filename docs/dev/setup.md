@@ -27,17 +27,25 @@
 
 | Tool | Version | Notes |
 |---|---|---|
-| CMake | ≥ 3.28 | |
-| Qt | 6.8 LTS | Qt Online Installer or `aqtinstall`. Modules: qtbase only for M0. |
-| C++ compiler | MSVC 2022 / GCC ≥ 12 / Clang ≥ 15 | C++20 |
-| clang-format | ≥ 17 | Style in `.clang-format` |
+| CMake | ≥ 3.28 | Corrosion (pinned tag) is fetched by CMake at configure time, so the first configure needs network access |
+| Ninja | any | Used as the generator in CI; any generator works except that Windows needs the MSVC environment |
+| Qt | 6.8 LTS | Modules: qtbase only (Widgets, Test). Qt Online Installer, or project-local with `uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --archives qtbase -O .qt` (`.qt/` is git-ignored) |
+| C++ compiler | MSVC 2022 or newer / GCC ≥ 12 / Clang ≥ 15 | C++20 |
+| clang-format | 23.1.3 (CI pins it) | `uvx clang-format@23.1.3`, or `pip install clang-format==23.1.3`; style in `.clang-format` |
 
-Build the app:
+Build and test the app (the shell stages `vellora-engine` and PDFium next to itself, so run `cargo xtask pdfium fetch` first):
 
 ```sh
-cmake -S app -B build -DCMAKE_PREFIX_PATH=<Qt install>/6.8.x/<kit>
+cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=<Qt install>/6.8.3/<kit>
 cmake --build build
+ctest --test-dir build --output-on-failure   # Qt Test suites against the real engine
+build/vellora <file.pdf>                      # run the shell (build/vellora.exe on Windows)
 ```
+
+- **Windows:** run these from a shell where the MSVC environment is loaded (`vcvars64.bat`, or the "x64 Native Tools" prompt), and put the Qt `bin` directory on `PATH` so the tests find the Qt DLLs. All MSVC configurations, Debug included, use the release C runtime and release Qt libraries, because Rust links the release runtime and the two cannot be mixed.
+- **Linux (headless):** the tests set `QT_QPA_PLATFORM=offscreen`; Qt needs `libgl1-mesa-dev`, `libxkbcommon-x11-0`, `libegl1` and `libfontconfig1`.
+- The cxx bridge header (`bridge.rs.h`, `rust/cxx.h`) is written by `vellora-engine-client`'s `build.rs` to `$VELLORA_CXXBRIDGE_DIR/include` (CMake sets it to `build/cxxbridge`), else to `target/<profile>/cxxbridge/include`.
+- Check formatting with `clang-format --dry-run -Werror $(find app -name '*.cpp' -o -name '*.h')`.
 
 ## Useful commands
 
