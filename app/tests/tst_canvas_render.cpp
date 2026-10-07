@@ -32,14 +32,18 @@ private slots:
         vellora::MainWindow window;
         window.resize(700, 500);
         window.show();
+        qWarning("DIAG shown");
         QSignalSpy opened(&window.session(), &vellora::EngineSession::opened);
         QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
         QVERIFY(opened.wait(kWaitMs));
+        qWarning("DIAG opened");
 
         vellora::CanvasWidget* canvas = window.canvas().canvas();
         // Tiles arrive, the canvas repaints, and finished tiles become textures.
         QTRY_VERIFY_WITH_TIMEOUT(canvas->framesRendered() > 0, kWaitMs);
+        qWarning("DIAG first frame");
         QTRY_VERIFY_WITH_TIMEOUT(canvas->textureCount() > 0, kWaitMs);
+        qWarning("DIAG texture");
 
         // Wait until a frame after the first tile was uploaded has been drawn.
         const quint64 frames = canvas->framesRendered();
@@ -47,7 +51,9 @@ private slots:
         window.canvas().controller()->setScrollPosition(QPointF(0.0, 0.0));
         QTRY_VERIFY_WITH_TIMEOUT(canvas->framesRendered() > frames, kWaitMs);
 
+        qWarning("DIAG grabbing");
         const QImage image = canvas->grabFramebuffer();
+        qWarning("DIAG grabbed %d x %d", image.width(), image.height());
         QVERIFY(!image.isNull());
         const double ratio = static_cast<double>(image.width()) / canvas->width();
 
