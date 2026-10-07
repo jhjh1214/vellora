@@ -1,11 +1,11 @@
-//! The messages of protocol v0 and their validation.
+//! The messages of the protocol and their validation.
 
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 0;
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Most page sizes one `Opened` may carry (the first chunk; the rest follow
 /// lazily so opening a 10,000-page file does not wait for every page).
@@ -39,6 +39,20 @@ pub struct PageSize {
     pub width: f32,
     /// Height in points.
     pub height: f32,
+}
+
+/// How urgently a tile is wanted. The engine renders queued tiles in this order (first-in,
+/// first-out within one priority), so the UI can keep prefetching cheap to abandon.
+///
+/// The variant order is part of the wire format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Priority {
+    /// On screen now.
+    Visible,
+    /// Near the viewport; likely to be needed soon.
+    Prefetch,
+    /// A page thumbnail.
+    Thumbnail,
 }
 
 /// A pixel rectangle of the page at the requested scale, top-left origin.
@@ -94,9 +108,12 @@ pub enum Request {
         rect: TileRect,
         /// Slot the engine writes the pixels into.
         slot: SlotId,
+        /// How urgently the tile is wanted; it decides the order of queued tiles.
+        priority: Priority,
     },
     /// Drop queued work for `req_id`; work already running finishes but its
-    /// result is discarded.
+    /// result is discarded. A cancelled request gets no answer at all, and the engine may still
+    /// write its slot until the next `TileReady` it sends (rendering is one tile at a time).
     Cancel {
         /// The request to cancel.
         req_id: RequestId,

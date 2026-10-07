@@ -9,7 +9,8 @@ use std::process::Stdio;
 
 use support::{GOLDEN_PDF, Session, bgrx_to_rgb, difference, engine_command, golden_image};
 use vellora_ipc::{
-    ErrorKind, PROTOCOL_VERSION, PageSize, Request, RequestId, Response, SlotId, TileRect,
+    ErrorKind, PROTOCOL_VERSION, PageSize, Priority, Request, RequestId, Response, SlotId,
+    TileRect, write_frame,
 };
 use vellora_shm::SlotGeometry;
 
@@ -19,7 +20,19 @@ const MEAN_LIMIT: f64 = 0.5;
 const LOUD_LIMIT: f64 = 0.005;
 
 fn tile(req_id: u64, page: u32, scale: f32, rect: (u32, u32, u32, u32), slot: u32) -> Request {
+    tile_with(req_id, Priority::Visible, page, scale, rect, slot)
+}
+
+fn tile_with(
+    req_id: u64,
+    priority: Priority,
+    page: u32,
+    scale: f32,
+    rect: (u32, u32, u32, u32),
+    slot: u32,
+) -> Request {
     Request::RenderTile {
+        priority,
         req_id: RequestId(req_id),
         page,
         scale,
@@ -225,8 +238,14 @@ fn requests_that_do_not_make_sense_are_refused_and_the_session_survives() {
         bytes
     };
     let one = 1.0_f32.to_le_bytes();
-    let zero_scale = [&[2, 5, 0][..], &0.0_f32.to_le_bytes(), &[0, 0, 10, 10, 0]].concat();
-    let zero_width = [&[2, 6, 0][..], &one, &[0, 0, 0, 10, 0]].concat();
+    // The last byte is the priority (0 = Visible).
+    let zero_scale = [
+        &[2, 5, 0][..],
+        &0.0_f32.to_le_bytes(),
+        &[0, 0, 10, 10, 0, 0],
+    ]
+    .concat();
+    let zero_width = [&[2, 6, 0][..], &one, &[0, 0, 0, 10, 0, 0]].concat();
     for (payload, expected) in [(zero_scale, "scale"), (zero_width, "sides")] {
         engine.send_raw(&frame(&payload));
         let (_, kind, message) = expect_error(engine.recv());
@@ -339,6 +358,102 @@ fn cancel_is_accepted_without_an_answer() {
             slot: SlotId(0)
         }
     );
+}
+
+/// Six 8 MiB slots: room for a tile that takes PDFium long enough to build a queue behind it.
+#[allow(clippy::unwrap_used)] // a test helper: a failure should panic
+fn session_with_big_slots() -> Session {
+    let mut engine = Session::start_with(GOLDEN_PDF, SlotGeometry::new(6, 8 << 20).unwrap(), None);
+    engine.handshake();
+    assert!(matches!(engine.open(), Response::Opened { .. }));
+    engine
+}
+
+/// Page 0 at ten times its size: slow enough that everything sent after it is queued before it
+/// is done.
+fn blocker(req_id: u64, slot: u32) -> Request {
+    tile(req_id, 0, 10.0, (0, 0, 1400, 1400), slot)
+}
+
+fn ready(req_id: u64, slot: u32) -> Response {
+    Response::TileReady {
+        req_id: RequestId(req_id),
+        slot: SlotId(slot),
+    }
+}
+
+/// All requests in one write, so that the engine reads them back to back.
+#[allow(clippy::unwrap_used)] // a test helper: a failure should panic
+fn send_together(engine: &mut Session, requests: &[Request]) {
+    let mut bytes = Vec::new();
+    for request in requests {
+        write_frame(&mut bytes, request).unwrap();
+    }
+    engine.send_raw(&bytes);
+}
+
+#[test]
+fn queued_tiles_are_rendered_by_priority_and_cancelled_ones_are_never_answered() {
+    let mut engine = session_with_big_slots();
+    let small = (0, 0, 10, 10);
+    send_together(
+        &mut engine,
+        &[
+            blocker(1, 0),
+            tile_with(2, Priority::Thumbnail, 1, 1.0, small, 1),
+            tile_with(3, Priority::Prefetch, 1, 1.0, small, 2),
+            tile_with(4, Priority::Visible, 1, 1.0, small, 3),
+            tile_with(5, Priority::Prefetch, 1, 1.0, small, 4),
+            tile_with(6, Priority::Visible, 1, 1.0, small, 5),
+            Request::Cancel {
+                req_id: RequestId(5),
+            },
+        ],
+    );
+    // The blocker was taken first; then visible (in request order), prefetch, thumbnail. Request
+    // 5 was cancelled while queued.
+    for (req_id, slot) in [(1, 0), (4, 3), (6, 5), (3, 2), (2, 1)] {
+        assert_eq!(engine.recv(), ready(req_id, slot));
+    }
+    // Nothing is left over: the next answer is the next request's.
+    engine.send(&tile(7, 0, 1.0, small, 0));
+    assert_eq!(engine.recv(), ready(7, 0));
+}
+
+#[test]
+fn a_cancelled_request_gets_no_tile_ready_whether_queued_or_running() {
+    let mut engine = session_with_big_slots();
+    // The blocker is either still queued or already rendering when the cancel is read; both
+    // ways it must stay silent.
+    send_together(
+        &mut engine,
+        &[
+            blocker(1, 0),
+            Request::Cancel {
+                req_id: RequestId(1),
+            },
+        ],
+    );
+    engine.send(&tile(2, 1, 1.0, (0, 0, 10, 10), 1));
+    assert_eq!(engine.recv(), ready(2, 1));
+
+    // Again with two blockers: the first is most likely rendering and the second queued when
+    // the cancels are read, so both paths are covered in one go.
+    send_together(
+        &mut engine,
+        &[
+            blocker(3, 2),
+            blocker(4, 3),
+            Request::Cancel {
+                req_id: RequestId(3),
+            },
+            Request::Cancel {
+                req_id: RequestId(4),
+            },
+        ],
+    );
+    engine.send(&tile(5, 1, 1.0, (0, 0, 10, 10), 4));
+    assert_eq!(engine.recv(), ready(5, 4));
 }
 
 #[test]

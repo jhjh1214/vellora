@@ -147,6 +147,23 @@ mod tests {
                 scale: 1.5,
                 rect: rect(),
                 slot: SlotId(3),
+                priority: Priority::Visible,
+            },
+            Request::RenderTile {
+                req_id: RequestId(8),
+                page: 0,
+                scale: 0.25,
+                rect: rect(),
+                slot: SlotId(0),
+                priority: Priority::Prefetch,
+            },
+            Request::RenderTile {
+                req_id: RequestId(9),
+                page: 1,
+                scale: 0.25,
+                rect: rect(),
+                slot: SlotId(1),
+                priority: Priority::Thumbnail,
             },
             Request::Cancel {
                 req_id: RequestId(u64::MAX),
@@ -253,6 +270,30 @@ mod tests {
         .unwrap();
         // Variant 0, then the varint 0.
         assert_eq!(wire, [2, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn priority_is_the_last_byte_of_a_tile_request_in_variant_order() {
+        for (priority, byte) in [
+            (Priority::Visible, 0),
+            (Priority::Prefetch, 1),
+            (Priority::Thumbnail, 2),
+        ] {
+            let mut wire = Vec::new();
+            write_frame(
+                &mut wire,
+                &Request::RenderTile {
+                    req_id: RequestId(1),
+                    page: 0,
+                    scale: 1.0,
+                    rect: rect(),
+                    slot: SlotId(0),
+                    priority,
+                },
+            )
+            .unwrap();
+            assert_eq!(wire.last(), Some(&byte), "{priority:?}");
+        }
     }
 
     #[test]
@@ -385,6 +426,7 @@ mod tests {
             scale,
             rect,
             slot: SlotId(0),
+            priority: Priority::Visible,
         }
     }
 
