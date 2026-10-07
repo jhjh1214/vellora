@@ -13,7 +13,11 @@ publish.workspace = true
 name = "vellora_cos"
 
 [dependencies]
+aes = { workspace = true }
+cbc = { workspace = true }
 flate2 = { workspace = true }
+md-5 = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

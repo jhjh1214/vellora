@@ -427,7 +427,7 @@ fn trailer_accessors() {
     pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>")
         .object(2, "<< /Type /Pages /Kids [] >>")
         .object(7, "<< /Title (t) >>");
-    let data = pdf.finish("/Root 1 0 R /Info 7 0 R /Encrypt << /Filter /Standard /V 1 >>");
+    let data = pdf.finish("/Root 1 0 R /Info 7 0 R");
     let store = open(&data);
     assert_eq!(store.root_ref(), Some(r(1)));
     assert!(store.root().unwrap().unwrap().as_dict().is_some());
@@ -441,7 +441,8 @@ fn trailer_accessors() {
             .get(b"Title")
             .is_some()
     );
-    assert_eq!(dict_int(&store.encrypt().unwrap().unwrap(), b"V"), Some(1));
+    // `encrypt()` on real encrypted files is tested in encryption.rs.
+    assert!(store.encrypt().unwrap().is_none());
     assert!(store.trailer().get(b"Size").is_some());
 
     let plain = doc(&[(2, "<< /Type /Pages /Kids [] >>")]);

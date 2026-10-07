@@ -38,6 +38,10 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 proptest = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
+# Standard Security Handler (RustCrypto, one release line: digest 0.10 / cipher 0.4).
+md-5 = "0.10"
+aes = "0.8"
+cbc = "0.1"
 toml = "0.9"
 
 [workspace.lints.rust]
@@ -56,6 +60,19 @@ dbg_macro = "warn"
 # Pedantic lints that cost more than they give.
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+
+# The revision 6 password check hashes for hundreds of rounds; unoptimised that makes tests that open
+# many encrypted files take minutes. Build the crypto crates with optimisations in dev and test.
+[profile.dev.package.aes]
+opt-level = 3
+[profile.dev.package.cbc]
+opt-level = 3
+[profile.dev.package.cipher]
+opt-level = 3
+[profile.dev.package.md-5]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
 
 [profile.release]
 lto = "thin"
