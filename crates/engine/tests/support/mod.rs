@@ -101,6 +101,7 @@ impl Session {
             geometry,
             max_document_bytes: max_document_bytes
                 .unwrap_or(vellora_engine::DEFAULT_MAX_DOCUMENT_BYTES),
+            deadlines: vellora_engine::Deadlines::default(),
         };
         let child = engine_command()
             .args(launch.to_args())

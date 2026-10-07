@@ -27,6 +27,9 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+# Starts the engine under resource limits (`tests/limits.rs`). A dev-dependency cycle: the client
+# depends on this crate's library for `LaunchArgs`, and the binary under test lives here.
+vellora-engine-client = { workspace = true }
 png = { workspace = true }
 tempfile = { workspace = true }
 

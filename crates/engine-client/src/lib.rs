@@ -14,4 +14,12 @@
 //! only protocol messages and pixels. No Qt types cross the bridge; the C++
 //! side adapts to Qt.
 //!
-//! **Status:** skeleton. Implemented by M0 tasks 20–21 (`docs/milestones/M0.md`).
+//! **Status:** M0 task 19 added process start-up under OS resource limits ([`process`],
+//! [`limits`]); the protocol client, restart logic, tile cache and the `cxx` bridge follow in
+//! tasks 20–21 (`docs/milestones/M0.md`).
+
+pub mod limits;
+pub mod process;
+
+pub use limits::ResourceLimits;
+pub use process::{Crash, EngineProcess, SpawnConfig, SpawnError, Termination};

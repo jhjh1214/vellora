@@ -43,11 +43,17 @@
 |---|---|---|---|---|
 | Windows | M0 | M0 (Job object) | M0 | Phase 1–2 |
 | Linux | M0 | M0 (rlimit) | M0 | Phase 1–2 |
-| macOS | M0 | M0 (rlimit) | M0 | before macOS release |
+| macOS | M0 | M0 (CPU only; memory not enforced) | M0 | before macOS release |
+
+Resource limits are applied by `vellora-engine-client` at spawn (`limits.rs`): Windows job object (memory, kill-on-close, no child processes, optional CPU time), Linux `RLIMIT_AS` and `RLIMIT_CPU`, macOS `RLIMIT_CPU`. A tile past its hard deadline makes the engine abort itself; the client sees the pipe close and reports a typed crash.
 
 ### Known gaps in the engine boundary
 
 | Gap | Effect | Planned fix |
 |---|---|---|
 | The engine holds a writable handle to the shared tile region, so a compromised engine on Linux or macOS can shrink the file | The UI faults (SIGBUS) when it reads a lost page: a denial of service of the UI process, no data exposure or corruption. Not possible on Windows | Sealed anonymous region (`memfd` + `F_SEAL_SHRINK` on Linux; evaluate `shm_open` on macOS), see ADR-0015 |
+| macOS ignores `RLIMIT_AS` and `RLIMIT_DATA`, so the engine's memory is not capped there | A memory bomb can take the machine's memory until the OS intervenes; only the in-code limits (`cos::limits`) and the hard deadline apply | Find a macOS-specific memory cap (to be evaluated with the macOS sandbox profile) |
+| The engine may start child processes on Linux and macOS (the Windows job forbids it) | A compromised engine could run programs as the user | seccomp-bpf (Linux) and the sandbox profile (macOS) with the per-OS sandbox |
+| The Windows job is applied just after the process starts, not at creation | The engine runs for a few milliseconds outside its limits; it reads no untrusted data until the UI sends `Open` | `CREATE_SUSPENDED` plus resume, or a process-thread attribute for the job list, with the AppContainer work |
+| No CPU-time limit by default | A render that spins is ended by the hard deadline (default 10 s), not by the OS; a hang outside a tile (for example in `Open`) is not covered by it | A client-side timeout on the handshake and `Open` (to be decided with task 20) |
 | The engine maps the document, so a file truncated by another process kills the engine (not the UI) | The client restarts the engine | Parent denies writers on the file where the OS allows it (task 20) |
