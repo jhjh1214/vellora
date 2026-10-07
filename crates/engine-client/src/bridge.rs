@@ -8,8 +8,15 @@
 //! The generated header is `vellora-engine-client/src/bridge.rs.h` (the build script runs
 //! `cxx-build` on this file), and the Rust side links as a static library next to the shell.
 //!
-//! Reading a finished tile's pixels is not part of the bridge yet: the tile cache of task 21 owns
-//! the slots and will expose its tiles to C++.
+//! # Tiles
+//!
+//! Tiles go through the client's cache (task 22a), so C++ never handles slots. A tile is
+//! `tile_pixels()` square (`BGRx`, 4 bytes a pixel) at a *bucketed* scale: `bucket_scale(s)` is the
+//! scale tiles are really rendered at, and `request_tile` / `read_tile` take the page, a scale
+//! (bucketed internally) and the tile's column and row. The loop is: `request_tile`; on `Ready`
+//! call `read_tile`; on `Requested` wait for `TileReady` (match `request`), then `read_tile`.
+//! `out` of `read_tile` must be exactly `slot_bytes()` long, of which the first
+//! `tile_pixels() * tile_pixels() * 4` bytes are the tile.
 
 // The bridge macro expands to `unsafe` glue (extern "C" shims and `no_mangle` exports); the
 // hand-written code below contains none.
@@ -18,10 +25,10 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId, SlotId, TileRect};
+use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId};
 
-use crate::cache::{DEFAULT_BUDGET_BYTES, TileCache};
-use crate::client::{Client, ClientConfig, ClientError, Event, TileRequest};
+use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
+use crate::client::{Client, ClientConfig, ClientError, Event, TILE_PIXELS, TileLookup};
 
 /// Environment variable that overrides where [`open`] looks for `vellora-engine`. For development
 /// and tests; an installed shell finds the engine next to its own executable.
@@ -76,6 +83,27 @@ mod ffi {
         Thumbnail,
     }
 
+    /// What `request_tile` did.
+    #[derive(Debug)]
+    enum TileState {
+        /// Cached: call `read_tile`. Nothing was sent.
+        Ready,
+        /// Already requested; its `TileReady` will come.
+        InFlight,
+        /// A new request was sent; `request` is its id.
+        Requested,
+        /// All cache capacity is held by requests in flight; ask again later.
+        Full,
+    }
+
+    /// The answer to `request_tile`.
+    #[derive(Debug)]
+    struct TileTicket {
+        state: TileState,
+        /// The request id, when `state` is `Requested`.
+        request: u64,
+    }
+
     /// One thing that happened. A flat struct, so C++ needs no variant type.
     #[derive(Debug)]
     struct EngineEvent {
@@ -107,21 +135,40 @@ mod ffi {
         /// Size of a page in points; `0 x 0` before `Opened` and beyond the first 4096 pages.
         fn page_size(self: &EngineClient, page: u32) -> PageExtent;
 
-        /// Asks for a tile of `page` at `scale` device pixels per point, rendered into `slot`.
-        /// Returns the id its answer carries. Throws when the engine is down or the request is
+        /// Side of a tile in pixels.
+        fn tile_pixels() -> u32;
+
+        /// The scale tiles are rendered at when `scale` is asked for; 0 for an invalid scale.
+        fn bucket_scale(scale: f32) -> f32;
+
+        /// Bytes of the buffer `read_tile` fills (one slot of the tile region).
+        fn slot_bytes(self: &EngineClient) -> u32;
+
+        /// Returns the tile (column `x`, row `y`) of `page` at `scale` from the cache, or asks the
+        /// engine for it. Throws when the engine is down, the handle is closed or the tile is
         /// invalid.
-        #[allow(clippy::too_many_arguments)]
         fn request_tile(
             self: &EngineClient,
             page: u32,
             scale: f32,
             x: u32,
             y: u32,
-            width: u32,
-            height: u32,
-            slot: u32,
             priority: TilePriority,
-        ) -> Result<u64>;
+        ) -> Result<TileTicket>;
+
+        /// Copies a ready tile into `out` (exactly `slot_bytes()` long). `false` if it is not
+        /// ready.
+        fn read_tile(
+            self: &EngineClient,
+            page: u32,
+            scale: f32,
+            x: u32,
+            y: u32,
+            out: &mut [u8],
+        ) -> Result<bool>;
+
+        /// Drops the cached tiles of a page (it changed).
+        fn invalidate_page(self: &EngineClient, page: u32);
 
         /// Withdraws a request; it is never reported. `false` if it was not in flight.
         fn cancel(self: &EngineClient, request: u64) -> bool;
@@ -134,7 +181,9 @@ mod ffi {
     }
 }
 
-pub use ffi::{EngineEvent, EventKind, FailureKind, PageExtent, TilePriority};
+pub use ffi::{
+    EngineEvent, EventKind, FailureKind, PageExtent, TilePriority, TileState, TileTicket,
+};
 
 /// The client behind the bridge's opaque handle. `None` after `close`.
 #[derive(Debug)]
@@ -208,37 +257,59 @@ impl EngineClient {
             )
     }
 
-    /// Asks for a tile; see [`Client::request_tile`].
+    /// Size of the buffer [`read_tile`](Self::read_tile) fills; 0 once closed.
+    pub fn slot_bytes(&self) -> u32 {
+        self.client
+            .as_ref()
+            .map_or(0, |client| client.geometry().slot_bytes())
+    }
+
+    /// Asks for a tile; see [`Client::request_cached_tile`].
     ///
     /// # Errors
     ///
-    /// [`ClientError`] when the engine is down, the handle is closed or the request is invalid.
-    #[allow(clippy::too_many_arguments)] // The flat argument list is the bridge's contract.
+    /// [`ClientError`] when the engine is down, the handle is closed or the tile is invalid.
     pub fn request_tile(
         &self,
         page: u32,
         scale: f32,
         x: u32,
         y: u32,
-        width: u32,
-        height: u32,
-        slot: u32,
         priority: TilePriority,
-    ) -> Result<u64, ClientError> {
+    ) -> Result<TileTicket, ClientError> {
         let client = self.client.as_ref().ok_or(ClientError::Closed)?;
-        let id = client.request_tile(&TileRequest {
-            page,
-            scale,
-            rect: TileRect {
-                x,
-                y,
-                width,
-                height,
-            },
-            slot: SlotId(slot),
-            priority: priority.into(),
-        })?;
-        Ok(id.0)
+        let key = tile_key(page, scale, x, y)?;
+        Ok(match client.request_cached_tile(key, priority.into())? {
+            TileLookup::Ready => ticket(TileState::Ready, 0),
+            TileLookup::InFlight => ticket(TileState::InFlight, 0),
+            TileLookup::Requested(id) => ticket(TileState::Requested, id.0),
+            // `TileLookup` is non-exhaustive; an unknown outcome is the safe "try again later".
+            _ => ticket(TileState::Full, 0),
+        })
+    }
+
+    /// Copies a ready tile into `out`; see [`Client::read_tile`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the handle is closed, the tile is invalid or `out` has the wrong length.
+    pub fn read_tile(
+        &self,
+        page: u32,
+        scale: f32,
+        x: u32,
+        y: u32,
+        out: &mut [u8],
+    ) -> Result<bool, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.read_tile(&tile_key(page, scale, x, y)?, out)
+    }
+
+    /// Drops the cached tiles of `page`.
+    pub fn invalidate_page(&self, page: u32) {
+        if let Some(client) = &self.client {
+            client.invalidate_page(page);
+        }
     }
 
     /// Withdraws a request; false if it was not in flight.
@@ -265,6 +336,27 @@ impl EngineClient {
             client.close();
         }
     }
+}
+
+fn ticket(state: TileState, request: u64) -> TileTicket {
+    TileTicket { state, request }
+}
+
+fn tile_key(page: u32, scale: f32, x: u32, y: u32) -> Result<TileKey, ClientError> {
+    let scale = ScaleBucket::from_scale(scale).ok_or(ClientError::InvalidTile)?;
+    Ok(TileKey { page, scale, x, y })
+}
+
+/// Side of a tile in pixels (the bridge's `tile_pixels`).
+#[must_use]
+pub fn tile_pixels() -> u32 {
+    TILE_PIXELS
+}
+
+/// The scale tiles are rendered at when `scale` is asked for (the bridge's `bucket_scale`).
+#[must_use]
+pub fn bucket_scale(scale: f32) -> f32 {
+    ScaleBucket::from_scale(scale).map_or(0.0, ScaleBucket::scale)
 }
 
 impl From<TilePriority> for Priority {
@@ -360,7 +452,7 @@ impl From<Event> for EngineEvent {
 mod tests {
     use std::fs;
 
-    use vellora_ipc::RequestId;
+    use vellora_ipc::{RequestId, SlotId};
 
     use super::*;
     use crate::process::{Crash, Termination};
@@ -377,6 +469,9 @@ mod tests {
             "struct EngineClient final : public ::rust::Opaque",
             "::rust::Box<::vellora::EngineClient> open(::rust::Str path)",
             "request_tile(",
+            "read_tile(",
+            "struct TileTicket",
+            "enum class TileState",
             "poll_events()",
             "void close()",
         ] {
@@ -445,9 +540,15 @@ mod tests {
         assert!(handle.poll_events().is_empty());
         assert!(!handle.cancel(1));
         assert!(matches!(
-            handle.request_tile(0, 1.0, 0, 0, 8, 8, 0, TilePriority::Visible),
+            handle.request_tile(0, 1.0, 0, 0, TilePriority::Visible),
             Err(ClientError::Closed)
         ));
+        assert!(matches!(
+            handle.read_tile(0, 1.0, 0, 0, &mut []),
+            Err(ClientError::Closed)
+        ));
+        assert_eq!(handle.slot_bytes(), 0);
+        handle.invalidate_page(0);
         handle.close();
         handle.close();
     }
