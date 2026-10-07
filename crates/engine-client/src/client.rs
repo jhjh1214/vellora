@@ -25,13 +25,23 @@
 //! is down fails with [`ClientError::EngineUnavailable`]. Tile slots may hold garbage after a
 //! crash: a slot is valid only between a request's [`Event::TileReady`] and its reuse.
 //!
+//! # The tile cache
+//!
+//! The client owns a [`TileCache`] over the shared region. [`Client::request_cached_tile`] answers
+//! a cache hit at once ([`TileLookup::Ready`]) and otherwise reserves a slot and asks the engine;
+//! the reader thread completes the entry when `TileReady` arrives and drops it when the request is
+//! cancelled, fails or is lost in a crash. [`Client::read_tile`] copies a ready tile. The cache and
+//! the slot hand-out are one critical section with the request, so a slot is never reused while
+//! the engine may still write it for a live request. Do not mix this with [`Client::request_tile`]
+//! on the same client: that call lets the caller pick slots the cache knows nothing about.
+//!
 //! # Not done
 //!
 //! No deadline covers the handshake and `Open` (a hung start-up waits for the user to close the
 //! document), and the UI cannot yet ask for a stuck tile to be killed from its side; the engine's
 //! own hard deadline aborts it (task 19).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter};
@@ -48,12 +58,21 @@ use vellora_ipc::{
 };
 use vellora_shm::{SlotGeometry, TileRegion};
 
+use crate::cache::{DEFAULT_BUDGET_BYTES, ReserveError, TileCache, TileKey};
 use crate::limits::ResourceLimits;
 use crate::process::{Crash, EngineProcess, SpawnConfig, SpawnError};
 
 /// Engines restarted after crashes in a row, with no tile delivered in between, before the client
 /// gives up with [`Event::EngineCrashed`] `will_restart: false`.
 pub const DEFAULT_MAX_RESTARTS: u32 = 3;
+
+/// Side of a cached tile in device pixels. A tile is `TILE_PIXELS` square at 4 bytes a pixel, which
+/// is exactly one [`crate::cache::SLOT_BYTES`] slot. Tiles on the right and bottom edges of a page
+/// extend past it (white there), so every tile costs the same.
+pub const TILE_PIXELS: u32 = 512;
+
+/// Bytes of one cached tile.
+const TILE_BYTES: u64 = TILE_PIXELS as u64 * TILE_PIXELS as u64 * 4;
 
 /// How long a reader waits for a process whose pipe closed to finish exiting before killing it.
 const CRASH_GRACE: Duration = Duration::from_secs(2);
@@ -79,6 +98,8 @@ pub struct ClientConfig {
     pub env: Vec<(OsString, OsString)>,
     /// How many crashes in a row (no tile delivered in between) are answered with a restart.
     pub max_restarts: u32,
+    /// Bytes of finished and pending tiles the cache may hold.
+    pub cache_budget_bytes: u64,
 }
 
 impl ClientConfig {
@@ -93,6 +114,7 @@ impl ClientConfig {
             limits: None,
             env: Vec::new(),
             max_restarts: DEFAULT_MAX_RESTARTS,
+            cache_budget_bytes: DEFAULT_BUDGET_BYTES,
         }
     }
 }
@@ -121,6 +143,26 @@ pub enum ClientError {
     /// The client was closed.
     #[error("the client is closed")]
     Closed,
+    /// The tile cannot exist: a slot of the region is smaller than a tile.
+    #[error("invalid tile")]
+    InvalidTile,
+    /// The cache refused the tile for a reason other than being full.
+    #[error("tile cache: {0}")]
+    Cache(#[from] ReserveError),
+}
+
+/// What [`Client::request_cached_tile`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TileLookup {
+    /// The tile is cached; read it with [`Client::read_tile`]. Nothing was sent.
+    Ready,
+    /// A request for this tile is already in flight; its [`Event::TileReady`] will come.
+    InFlight,
+    /// A new request was sent; the id is the one its answer carries.
+    Requested(RequestId),
+    /// Every slot is held by requests in flight. Ask again after some finish.
+    Full,
 }
 
 /// A tile to render.
@@ -306,6 +348,32 @@ struct State {
     ledger: Ledger,
     process: Option<EngineProcess>,
     opened: Option<OpenedInfo>,
+    cache: TileCache,
+    /// The cache entry each in-flight cached request is for.
+    tile_keys: HashMap<RequestId, TileKey>,
+}
+
+impl State {
+    /// Updates the cache for what the engine just said about a request.
+    fn settle_tile(&mut self, event: &Event) {
+        match event {
+            Event::TileReady { request, .. } => {
+                if let Some(key) = self.tile_keys.remove(request) {
+                    // `false`: invalidated while in flight, the slot is freed instead.
+                    self.cache.complete(&key);
+                }
+            }
+            Event::RequestFailed {
+                request: Some(request),
+                ..
+            } => {
+                if let Some(key) = self.tile_keys.remove(request) {
+                    self.cache.abandon(&key);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The write side of the current engine's pipe. Locked separately from [`State`]: a write can
@@ -385,6 +453,8 @@ impl Client {
                 ledger: Ledger::new(config.max_restarts),
                 process: None,
                 opened: None,
+                cache: TileCache::new(config.geometry, config.cache_budget_bytes),
+                tile_keys: HashMap::new(),
             }),
             sink: Mutex::new(Sink(None)),
             wake: Condvar::new(),
@@ -430,6 +500,98 @@ impl Client {
         Ok(id)
     }
 
+    /// Returns the tile at `key` from the cache, or asks the engine for it. The tile is
+    /// [`TILE_PIXELS`] square at the bucket's scale ([`crate::ScaleBucket::scale`]), `key.x` and
+    /// `key.y` counting tiles from the page's top left.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile), plus [`ClientError::InvalidTile`] if a slot cannot
+    /// hold a tile and [`ClientError::Cache`] if the budget cannot hold one.
+    pub fn request_cached_tile(
+        &self,
+        key: TileKey,
+        priority: Priority,
+    ) -> Result<TileLookup, ClientError> {
+        let (id, slot) = {
+            let mut state = self.shared.state();
+            Self::check_running(&state)?;
+            if state.cache.get(&key).is_some() {
+                return Ok(TileLookup::Ready);
+            }
+            if state.cache.contains(&key) {
+                return Ok(TileLookup::InFlight);
+            }
+            if u64::from(self.shared.config.geometry.slot_bytes()) < TILE_BYTES {
+                return Err(ClientError::InvalidTile);
+            }
+            let slot = match state.cache.reserve(key, TILE_BYTES) {
+                Ok(slot) => slot,
+                Err(ReserveError::Full) => return Ok(TileLookup::Full),
+                Err(error) => return Err(error.into()),
+            };
+            let id = state.ledger.begin();
+            state.tile_keys.insert(id, key);
+            (id, slot)
+        };
+        let request = Request::RenderTile {
+            req_id: id,
+            page: key.page,
+            scale: key.scale.scale(),
+            rect: TileRect {
+                // Saturating: a position the protocol refuses is reported by validation below.
+                x: key.x.saturating_mul(TILE_PIXELS),
+                y: key.y.saturating_mul(TILE_PIXELS),
+                width: TILE_PIXELS,
+                height: TILE_PIXELS,
+            },
+            slot,
+            priority,
+        };
+        let sent = match self.shared.sink().0.as_mut() {
+            Some(writer) => write_frame(writer, &request).map_err(ClientError::from),
+            None => Err(ClientError::EngineUnavailable),
+        };
+        if let Err(error) = sent {
+            let mut state = self.shared.state();
+            state.ledger.forget(id);
+            if state.tile_keys.remove(&id).is_some() {
+                state.cache.abandon(&key);
+            }
+            return Err(error);
+        }
+        Ok(TileLookup::Requested(id))
+    }
+
+    /// Copies a ready tile into `out`, which must be exactly one slot long, and marks it most
+    /// recently used. `false` if the tile is not ready (absent, in flight or invalidated).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Region`] for a buffer of the wrong length.
+    pub fn read_tile(&self, key: &TileKey, out: &mut [u8]) -> Result<bool, ClientError> {
+        // The lock is held across the copy: the slot can only be handed out again by a request,
+        // which needs this lock, so the engine cannot overwrite it meanwhile.
+        let mut state = self.shared.state();
+        let Some(slot) = state.cache.get(key) else {
+            return Ok(false);
+        };
+        self.shared.region.read_slot(slot.0, out)?;
+        Ok(true)
+    }
+
+    /// Forgets the cached tiles of `page` (it changed): ready ones at once, in-flight ones when the
+    /// engine answers. Returns how many ready tiles were dropped.
+    pub fn invalidate_page(&self, page: u32) -> usize {
+        self.shared.state().cache.invalidate_page(page)
+    }
+
+    /// Number of tiles in the cache, in flight and ready.
+    #[must_use]
+    pub fn cached_tiles(&self) -> usize {
+        self.shared.state().cache.len()
+    }
+
     /// Withdraws a request. Queued work is dropped by the engine; a render already running
     /// finishes, but the caller never hears of it. Returns `false` if the request was not in
     /// flight (already answered, lost in a crash, or unknown), in which case nothing is sent.
@@ -437,8 +599,14 @@ impl Client {
     /// The engine may still write the request's slot until its next answer, so the slot is not
     /// safe to reuse at once.
     pub fn cancel(&self, request: RequestId) -> bool {
-        if !self.shared.state().ledger.forget(request) {
-            return false;
+        {
+            let mut state = self.shared.state();
+            if !state.ledger.forget(request) {
+                return false;
+            }
+            if let Some(key) = state.tile_keys.remove(&request) {
+                state.cache.abandon(&key);
+            }
         }
         if let Some(writer) = self.shared.sink().0.as_mut() {
             // A broken pipe means the engine is gone, which cancels the work anyway.
@@ -667,6 +835,7 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: ChildStdout) {
                                 repaired: *repaired,
                             });
                         }
+                        state.settle_tile(&event);
                         shared.push(&mut state, event);
                     }
                     Accepted::Dropped => {}
@@ -706,6 +875,9 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
             return;
         }
         let (lost, will_restart) = state.ledger.crashed();
+        // Their answers will never come; ready tiles stay valid (task 21).
+        state.cache.abandon_pending();
+        state.tile_keys.clear();
         if !will_restart {
             state.phase = Phase::Failed;
         }
