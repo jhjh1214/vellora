@@ -51,7 +51,8 @@ fn main() -> ExitCode {
     };
 
     let stdin = io::stdin().lock();
-    let stdout = BufWriter::new(io::stdout().lock());
+    // Not `.lock()`ed: the writer is shared with the render worker thread, which needs `Send`.
+    let stdout = BufWriter::new(io::stdout());
     match engine.serve(stdin, stdout) {
         Ok(exit) => {
             tracing::info!(?exit, "session ended");

@@ -35,6 +35,6 @@ pub use error::Error;
 pub use frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 pub use message::{
     ErrorKind, MAX_ERROR_MESSAGE_BYTES, MAX_PAGE_SIZES_PER_MESSAGE, MAX_TILE_AREA, MAX_TILE_ORIGIN,
-    MAX_TILE_SCALE, MAX_TILE_SIDE, PROTOCOL_VERSION, PageSize, Request, RequestId, Response,
-    SlotId, TileRect, Validate, check_version,
+    MAX_TILE_SCALE, MAX_TILE_SIDE, PROTOCOL_VERSION, PageSize, Priority, Request, RequestId,
+    Response, SlotId, TileRect, Validate, check_version,
 };
