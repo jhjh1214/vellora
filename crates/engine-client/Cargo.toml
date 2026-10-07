@@ -11,13 +11,19 @@ publish.workspace = true
 
 [lib]
 name = "vellora_engine_client"
-# M0 task 20 adds crate-type = ["staticlib", "rlib"] together with the cxx bridge.
+# The Qt shell links the staticlib; the engine's tests and other Rust code use the rlib.
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 # `LaunchArgs` and `Deadlines`: the client builds the command line with the type the engine parses.
 vellora-engine = { workspace = true }
+vellora-ipc = { workspace = true }
 vellora-shm = { workspace = true }
 thiserror = { workspace = true }
+cxx = { workspace = true }
+
+[build-dependencies]
+cxx-build = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

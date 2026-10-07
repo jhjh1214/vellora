@@ -61,6 +61,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 anyhow = "1"
+# `vellora-engine-client` only (ADR-0003): the C++ bridge to the Qt shell, and the build script that
+# generates its header and glue.
+cxx = "1"
+cxx-build = "1"
 # Reads and writes the golden images of the render tests (dev-dependency of `vellora-render`).
 png = "0.18"
 
