@@ -22,8 +22,11 @@
 //! pinned build under `third_party/pdfium/<platform>/` for development. A missing
 //! library is a typed error, never a link failure of the workspace.
 //!
-//! **Status:** bindings and the loader (M0 task 14). The renderer thread and
-//! the tile API arrive with task 15.
+//! **Rendering:** [`Renderer`] owns the PDFium thread. Documents are opened from shared bytes
+//! ([`Renderer::open`]) and rendered tile by tile into caller buffers
+//! ([`DocHandle::render_tile`]); requests from any number of threads are serialised on it.
+//!
+//! **Status:** bindings and loader (M0 task 14), renderer thread and tile API (task 15).
 
 // The FFI module is the one place `unsafe` is allowed (see the crate lints).
 #[allow(unsafe_code)]
@@ -32,6 +35,12 @@ mod ffi;
 use std::env;
 use std::ffi::{OsString, c_ulong};
 use std::path::{Path, PathBuf};
+
+mod renderer;
+
+pub use renderer::{
+    DocHandle, MAX_SCALE, MAX_TILE_PIXELS, MAX_TILE_SIDE, Renderer, TileRect, TileRequest,
+};
 
 /// Environment variable that overrides where [`Pdfium::locate`] looks for the library.
 pub const LIBRARY_ENV: &str = "VELLORA_PDFIUM_LIB";
@@ -148,6 +157,38 @@ pub enum Error {
     /// PDFium refused to open the document.
     #[error("PDFium could not open the document: {0}")]
     Open(LastError),
+    /// The page index is not in the document.
+    #[error("page {page} is out of range: the document has {count} pages")]
+    PageOutOfRange {
+        /// The requested page (zero-based).
+        page: usize,
+        /// Pages in the document.
+        count: usize,
+    },
+    /// PDFium could not load or measure a page.
+    #[error("PDFium could not load page {page}: {source}")]
+    Page {
+        /// The page (zero-based).
+        page: usize,
+        /// PDFium's reason.
+        source: LastError,
+    },
+    /// PDFium could not wrap the pixel buffer in a bitmap.
+    #[error("PDFium could not create a bitmap for the tile")]
+    Bitmap,
+    /// A render request is malformed (scale, tile size, buffer or stride).
+    #[error("invalid render request: {0}")]
+    InvalidRequest(&'static str),
+    /// The renderer thread has shut down (or never started), so the request was not served.
+    #[error("the renderer has shut down")]
+    Closed,
+    /// The renderer thread panicked while serving this request. The request failed; the thread
+    /// keeps serving others.
+    #[error("the renderer panicked while serving the request")]
+    Panicked,
+    /// The renderer thread could not be started.
+    #[error("cannot start the renderer thread: {0}")]
+    Spawn(std::io::Error),
 }
 
 /// A loaded and initialised PDFium library.
@@ -196,6 +237,8 @@ impl Pdfium {
     }
 }
 
+#[cfg(test)]
+mod renderer_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
