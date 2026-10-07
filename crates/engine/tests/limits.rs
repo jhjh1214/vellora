@@ -211,6 +211,7 @@ impl Client {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 /// The memory cap of the bomb tests: what is mapped plus half a gigabyte, well under what the
 /// bomb needs and well over what a healthy engine uses.
 fn tight(mapped: u64) -> ResourceLimits {

@@ -96,22 +96,24 @@ mod os {
     }
 
     pub(super) fn prepare(command: &mut Command, limits: ResourceLimits) {
-        // SAFETY: the closure runs in the forked child before `exec` and only calls `setrlimit`
+        // Built outside the `unsafe` block below: its own `unsafe` is the `setrlimit` call.
+        let apply = move || -> io::Result<()> {
+            #[cfg(not(target_os = "macos"))]
+            if let Some(bytes) = limits.memory_bytes {
+                set_limit!(libc::RLIMIT_AS, bytes)?;
+            }
+            if let Some(seconds) = limits.cpu_seconds {
+                set_limit!(libc::RLIMIT_CPU, seconds)?;
+            }
+            Ok(())
+        };
+        // SAFETY: `apply` runs in the forked child before `exec` and only calls `setrlimit`
         // (async-signal-safe): no allocation, no locks, none of the parent's other threads' state.
-        unsafe {
-            command.pre_exec(move || {
-                #[cfg(not(target_os = "macos"))]
-                if let Some(bytes) = limits.memory_bytes {
-                    set_limit!(libc::RLIMIT_AS, bytes)?;
-                }
-                if let Some(seconds) = limits.cpu_seconds {
-                    set_limit!(libc::RLIMIT_CPU, seconds)?;
-                }
-                Ok(())
-            });
-        }
+        unsafe { command.pre_exec(apply) };
     }
 
+    // Same signature as on Windows, where the job object can fail.
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn confine(_child: &Child, _limits: ResourceLimits) -> io::Result<Guard> {
         Ok(Guard {})
     }
