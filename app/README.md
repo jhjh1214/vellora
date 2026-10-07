@@ -15,7 +15,11 @@ app/
 │  ├─ main.cpp
 │  ├─ MainWindow.{h,cpp}        # menu bar, File -> Open, status bar
 │  ├─ bridge/EngineSession.*    # QObject over the cxx bridge: polled events -> signals, tiles
-│  ├─ canvas/                   # later (22c): QRhiWidget tile compositor, page layout, scrolling
+│  ├─ canvas/
+│  │  ├─ PageLayout.*           # page column geometry (pure)
+│  │  ├─ CanvasController.*     # what is on screen, which tiles to ask for / cancel, zoom anchoring
+│  │  ├─ CanvasWidget.*         # QRhiWidget: draws the controller's frame (shaders/ -> qsb)
+│  │  └─ CanvasView.*           # scroll area + wheel/keys around the widget
 │  └─ commands/                 # later (22d): command registry, palette, keymap
 └─ tests/             # Qt Test suites; they run the real engine (cargo xtask pdfium fetch first)
 ```

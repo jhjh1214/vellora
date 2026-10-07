@@ -1,8 +1,10 @@
-// The main window: native menu bar, File -> Open, and a status bar. Later tasks add the scrolling
-// canvas (22c) and route every action through the command registry (22d).
+// The main window: native menu bar (File, View), the scrolling canvas, and a status bar with the
+// page, the zoom and the document's state. Task 22d routes every action through the command
+// registry.
 #pragma once
 
 #include "bridge/EngineSession.h"
+#include "canvas/CanvasView.h"
 
 #include <QMainWindow>
 
@@ -15,14 +17,18 @@ class MainWindow : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     // Opens `path` (the File -> Open dialog calls this with the chosen file). Shows the error in
     // the status bar and returns false if the engine cannot be started.
     bool openDocument(const QString& path);
 
     EngineSession& session() { return m_session; }
-    // What the status bar shows for the document, for tests.
+    CanvasView& canvas() { return *m_canvas; }
+    // What the status bar shows, for tests.
     QString documentStatus() const;
+    QString pageStatus() const;
+    QString zoomStatus() const;
 
 private slots:
     void chooseDocument();
@@ -30,13 +36,18 @@ private slots:
     void onRequestFailed(quint64 request, const QString& message);
     void onEngineCrashed(const QString& how, bool willRestart);
     void onFailed(const QString& reason);
+    void onPageChanged(quint32 page, quint32 pageCount);
+    void onZoomChanged(double zoom);
 
 private:
     void setDocumentStatus(const QString& text);
 
+    // The canvas uses the session, so the destructor deletes the canvas before this member goes.
     EngineSession m_session;
-    QLabel* m_placeholder = nullptr;
+    CanvasView* m_canvas = nullptr;
     QLabel* m_documentStatus = nullptr;
+    QLabel* m_pageStatus = nullptr;
+    QLabel* m_zoomStatus = nullptr;
     QString m_fileName;
 };
 

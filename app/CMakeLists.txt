@@ -20,7 +20,10 @@ if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Test)
+# Qt6::GuiPrivate: QRhi (the GPU abstraction QRhiWidget draws with) is only available through Qt's
+# private headers. ShaderTools provides `qsb`, which turns the GLSL in src/canvas/shaders into
+# shaders for every graphics API.
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Test ShaderTools)
 if(MSVC)
   # Only Qt's targets: Corrosion's imported targets exist for the active configuration only.
   set_target_properties(Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
@@ -51,10 +54,25 @@ corrosion_set_env_vars(vellora_engine_client "VELLORA_CXXBRIDGE_DIR=${VELLORA_CX
 add_library(vellora_shell STATIC
   src/MainWindow.cpp
   src/MainWindow.h
+  src/canvas/CanvasController.cpp
+  src/canvas/CanvasController.h
+  src/canvas/CanvasView.cpp
+  src/canvas/CanvasView.h
+  src/canvas/CanvasWidget.cpp
+  src/canvas/CanvasWidget.h
+  src/canvas/PageLayout.cpp
+  src/canvas/PageLayout.h
   src/bridge/EngineSession.cpp
   src/bridge/EngineSession.h)
 target_include_directories(vellora_shell PUBLIC src "${VELLORA_CXXBRIDGE_DIR}/include")
-target_link_libraries(vellora_shell PUBLIC Qt6::Widgets vellora_engine_client)
+target_link_libraries(vellora_shell PUBLIC Qt6::Widgets Qt6::GuiPrivate vellora_engine_client)
+qt_add_shaders(vellora_shell "vellora_shaders"
+  PREFIX "/shaders"
+  BASE src/canvas/shaders
+  GLSL "100es,120,150"
+  HLSL 50
+  MSL 12
+  FILES src/canvas/shaders/quad.vert src/canvas/shaders/quad.frag)
 target_compile_features(vellora_shell PUBLIC cxx_std_20)
 if(MSVC)
   target_compile_options(vellora_shell PUBLIC /W4 /permissive- /utf-8)
