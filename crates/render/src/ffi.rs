@@ -8,24 +8,21 @@
 //! read-side functions are declared: no save, edit or page-generation entry point exists here
 //! (ADR-0002). `FPDF_CALLCONV` is empty in the public headers, so everything is `extern "C"`.
 
-// Until task 15 lands, only the unit tests call most of the table; they check each entry against
-// the real library.
-#![allow(
-    dead_code,
-    reason = "bindings are used by the renderer from task 15 on"
-)]
-
 use std::ffi::{c_int, c_ulong, c_void};
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::ptr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use libloading::Library;
 
 use crate::{Error, LastError};
+
+/// The bytes of one document revision, kept alive for as long as PDFium may read them.
+pub(crate) type DocumentBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
 /// `FPDF_DOCUMENT` points at one of these (opaque to us).
 #[repr(C)]
@@ -91,6 +88,23 @@ pub(crate) struct RectF {
 pub(crate) struct SizeF {
     pub(crate) width: f32,
     pub(crate) height: f32,
+}
+
+/// A borrowed view of the document bytes that `read_block` reads through. A raw pointer, not a
+/// reference, so it can live next to the `Arc` that owns the bytes (see [`OpenDocument`]).
+pub(crate) struct Source {
+    ptr: *const u8,
+    len: usize,
+}
+
+impl Source {
+    /// The view stays valid only while `bytes` is alive and unmoved.
+    pub(crate) fn new(bytes: &[u8]) -> Self {
+        Self {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
 }
 
 /// `FPDFBitmap_BGRx`: 4 bytes per pixel, blue, green, red, unused.
@@ -220,32 +234,202 @@ impl Api {
     }
 
     /// Opens `pdf` through `FPDF_FILEACCESS` and returns its page count.
+    pub(crate) fn page_count(&self, pdf: &[u8]) -> Result<usize, Error> {
+        let source = Source::new(pdf);
+        let document = self.load_document(&source, pdf.len())?;
+        // SAFETY: `document.handle` is a live handle returned just above.
+        let count = unsafe { (self.get_page_count)(document.handle) };
+        let count = usize::try_from(count).map_err(|_| Error::Open(self.last_error()));
+        // SAFETY: closed exactly once (`document` is consumed); `source` and `pdf` outlive it.
+        unsafe { (self.close_document)(document.handle) };
+        count
+    }
+
+    /// Opens a document that stays open until [`Api::close`]. `bytes` is kept alive with it.
+    pub(crate) fn open(&self, bytes: DocumentBytes) -> Result<OpenDocument, Error> {
+        let slice: &[u8] = AsRef::<[u8]>::as_ref(&*bytes);
+        // The addresses of the `Source` and of the bytes behind the `Arc` do not change when the
+        // `OpenDocument` moves, so PDFium's pointers to them stay valid.
+        let source = Box::new(Source::new(slice));
+        let loaded = self.load_document(&source, slice.len())?;
+        // SAFETY: `loaded.handle` is live.
+        let count = unsafe { (self.get_page_count)(loaded.handle) };
+        let Ok(page_count) = usize::try_from(count) else {
+            let error = Error::Open(self.last_error());
+            // SAFETY: closed exactly once; nothing else holds the handle.
+            unsafe { (self.close_document)(loaded.handle) };
+            return Err(error);
+        };
+        Ok(OpenDocument {
+            handle: loaded.handle,
+            page_count,
+            _access: loaded.access,
+            _source: source,
+            _bytes: bytes,
+        })
+    }
+
+    /// Closes a document opened with [`Api::open`]. Consumes it: the handle is dead afterwards.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the document must not be usable after it is closed"
+    )]
+    pub(crate) fn close(&self, document: OpenDocument) {
+        // SAFETY: the handle is live and closed exactly once (the document is consumed).
+        unsafe { (self.close_document)(document.handle) };
+    }
+
+    /// Size in points of page `index` (rotation applied), from the page tree.
+    pub(crate) fn page_size(
+        &self,
+        document: &OpenDocument,
+        index: usize,
+    ) -> Result<(f32, f32), Error> {
+        let page = Self::page_number(document, index)?;
+        let mut size = SizeF::default();
+        // SAFETY: the handle is live and `size` is a valid out parameter.
+        let ok = unsafe { (self.get_page_size_by_index_f)(document.handle, page, &raw mut size) };
+        if ok == 0 {
+            return Err(Error::Page {
+                page: index,
+                source: self.last_error(),
+            });
+        }
+        Ok((size.width, size.height))
+    }
+
+    /// Renders page `index` through `matrix` into `pixels`: `width` x `height` `BGRx` with no row
+    /// padding, over opaque white. The clip is the whole bitmap.
+    pub(crate) fn render(
+        &self,
+        document: &OpenDocument,
+        index: usize,
+        matrix: Matrix,
+        (width, height): (u32, u32),
+        pixels: &mut [u8],
+    ) -> Result<(), Error> {
+        let page_number = Self::page_number(document, index)?;
+        let (Ok(w), Ok(h)) = (c_int::try_from(width), c_int::try_from(height)) else {
+            return Err(Error::InvalidRequest("tile size does not fit a C int"));
+        };
+        let stride = w
+            .checked_mul(4)
+            .ok_or(Error::InvalidRequest("tile too wide"))?;
+        let expected = usize::try_from(stride)
+            .ok()
+            .zip(usize::try_from(h).ok())
+            .and_then(|(stride, rows)| stride.checked_mul(rows));
+        if expected != Some(pixels.len()) {
+            return Err(Error::InvalidRequest(
+                "pixel buffer does not match the tile size",
+            ));
+        }
+
+        // SAFETY: `pixels` holds exactly `stride * h` bytes (checked above), and the bitmap, which
+        // is destroyed on every path below, is the only thing that touches them until then.
+        let bitmap = unsafe {
+            (self.bitmap_create_ex)(w, h, BITMAP_BGRX, pixels.as_mut_ptr().cast(), stride)
+        };
+        if bitmap.is_null() {
+            return Err(Error::Bitmap);
+        }
+        // SAFETY: the document handle is live and `page_number` was range-checked.
+        let page = unsafe { (self.load_page)(document.handle, page_number) };
+        let result = if page.is_null() {
+            Err(Error::Page {
+                page: index,
+                source: self.last_error(),
+            })
+        } else {
+            // Tile sides are capped far below 2^24, so these are exact.
+            #[allow(clippy::cast_precision_loss)]
+            let clip = RectF {
+                left: 0.0,
+                top: 0.0,
+                right: width as f32,
+                bottom: height as f32,
+            };
+            // SAFETY: `bitmap` and `page` are live, the matrix and clip are locals that outlive
+            // the calls, and `page` is closed once, before its document. Pages are transparent,
+            // hence the opaque white fill first.
+            unsafe {
+                (self.bitmap_fill_rect)(bitmap, 0, 0, w, h, 0xFFFF_FFFF);
+                (self.render_page_bitmap_with_matrix)(
+                    bitmap,
+                    page,
+                    &raw const matrix,
+                    &raw const clip,
+                    RENDER_ANNOT,
+                );
+                (self.close_page)(page);
+            }
+            Ok(())
+        };
+        // SAFETY: destroyed once; with an external buffer PDFium does not free `pixels`.
+        unsafe { (self.bitmap_destroy)(bitmap) };
+        result
+    }
+
+    /// `index` as a C int, if the document has such a page.
+    fn page_number(document: &OpenDocument, index: usize) -> Result<c_int, Error> {
+        if index >= document.page_count {
+            return Err(Error::PageOutOfRange {
+                page: index,
+                count: document.page_count,
+            });
+        }
+        c_int::try_from(index).map_err(|_| Error::PageOutOfRange {
+            page: index,
+            count: document.page_count,
+        })
+    }
+
+    /// Calls `FPDF_LoadCustomDocument` over `source`.
     // `c_ulong` is 32 bits on Windows and 64 bits elsewhere, so widening it to `u64` is only a
     // no-op on some targets.
     #[allow(clippy::useless_conversion)]
-    pub(crate) fn page_count(&self, pdf: &[u8]) -> Result<usize, Error> {
-        let len = c_ulong::try_from(pdf.len()).map_err(|_| Error::DocumentTooLarge {
-            len: pdf.len() as u64,
+    fn load_document(&self, source: &Source, len: usize) -> Result<Loaded, Error> {
+        let len = c_ulong::try_from(len).map_err(|_| Error::DocumentTooLarge {
+            len: len as u64,
             max: u64::from(c_ulong::MAX),
         })?;
-        let source: &[u8] = pdf;
-        let mut access = FileAccess {
+        let mut access = Box::new(FileAccess {
             len,
             get_block: Some(read_block),
-            param: ptr::from_ref(&source).cast_mut().cast(),
-        };
-        // SAFETY: `access` and `source` stay alive until the document is closed below; the
-        // callback only reads through `param`, and PDFium copies the `FPDF_FILEACCESS` struct.
-        // A null password means none.
-        let document = unsafe { (self.load_custom_document)(&raw mut access, ptr::null()) };
-        if document.is_null() {
+            param: ptr::from_ref(source).cast_mut().cast(),
+        });
+        // SAFETY: `access` is returned with the handle, and `source` (with the bytes it views) is
+        // kept by the caller until the document is closed. The callback only reads through
+        // `param`. A null password means none.
+        let handle = unsafe { (self.load_custom_document)(&raw mut *access, ptr::null()) };
+        if handle.is_null() {
             return Err(Error::Open(self.last_error()));
         }
-        // SAFETY: `document` is a live handle returned just above.
-        let count = unsafe { (self.get_page_count)(document) };
-        // SAFETY: `document` is closed exactly once and not used afterwards.
-        unsafe { (self.close_document)(document) };
-        usize::try_from(count).map_err(|_| Error::Open(self.last_error()))
+        Ok(Loaded { handle, access })
+    }
+}
+
+/// A document handle together with the `FILEACCESS` struct it was opened with.
+struct Loaded {
+    handle: Document,
+    access: Box<FileAccess>,
+}
+
+/// An open document. It does not close itself: the owner calls [`Api::close`] (the renderer
+/// thread does so for every document before it destroys the library). Not `Send`, like the raw
+/// handle it holds.
+pub(crate) struct OpenDocument {
+    handle: Document,
+    page_count: usize,
+    // Kept alive because PDFium may call `read_block` until the document is closed.
+    _access: Box<FileAccess>,
+    _source: Box<Source>,
+    _bytes: DocumentBytes,
+}
+
+impl OpenDocument {
+    pub(crate) fn page_count(&self) -> usize {
+        self.page_count
     }
 }
 
@@ -257,7 +441,7 @@ impl Drop for Api {
     }
 }
 
-/// `FPDF_FILEACCESS::m_GetBlock` over an in-memory document. `param` is a `*const &[u8]`.
+/// `FPDF_FILEACCESS::m_GetBlock` over an in-memory document. `param` is a `*const Source`.
 ///
 /// Never unwinds into C: a panic would be undefined behaviour, so it is caught and reported
 /// as a read error.
@@ -271,9 +455,11 @@ unsafe extern "C" fn read_block(
         if param.is_null() || buf.is_null() {
             return false;
         }
-        // SAFETY: `param` is the `&&[u8]` that `Api::page_count` put in `FileAccess::param`,
-        // alive for as long as the document is open.
-        let data: &[u8] = unsafe { *param.cast::<&[u8]>() };
+        // SAFETY: `param` is the `Source` that `Api::load_document` put in `FileAccess::param`; it and the
+        // bytes it views are kept alive for as long as the document is open.
+        let source = unsafe { &*param.cast::<Source>() };
+        // SAFETY: `ptr` and `len` come from a live slice (see `Source::new`) that is not mutated.
+        let data = unsafe { std::slice::from_raw_parts(source.ptr, source.len) };
         let (Ok(start), Ok(len)) = (usize::try_from(position), usize::try_from(size)) else {
             return false;
         };
@@ -367,7 +553,7 @@ mod tests {
         let pdf = sample_pdf();
         with_pdfium(|pdfium| {
             let api = &pdfium.api;
-            let source: &[u8] = &pdf;
+            let source = Source::new(&pdf);
             let mut access = FileAccess {
                 len: c_ulong::try_from(pdf.len()).unwrap(),
                 get_block: Some(read_block),
@@ -469,8 +655,8 @@ mod tests {
 
     #[test]
     fn the_read_callback_rejects_ranges_outside_the_document() {
-        let data: &[u8] = b"0123456789";
-        let param = ptr::from_ref(&data).cast_mut().cast::<c_void>();
+        let source = Source::new(b"0123456789");
+        let param = ptr::from_ref(&source).cast_mut().cast::<c_void>();
         let mut out = [0u8; 4];
         let read = |position: c_ulong, size: c_ulong, out: &mut [u8; 4]| {
             // SAFETY: `param` points at `data`; `out` is a writable buffer of 4 bytes and `size`

@@ -46,6 +46,8 @@ cbc = "0.1"
 toml = "0.9"
 # Runtime loading of the PDFium shared library (ISC; `vellora-render` only, see ADR-0014).
 libloading = "0.9"
+# Reads and writes the golden images of the render tests (dev-dependency of `vellora-render`).
+png = "0.18"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -16,6 +16,9 @@ name = "vellora_render"
 libloading = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+png = { workspace = true }
+
 # FFI crate: `unsafe` is denied by default and allowed only in the documented FFI
 # module, with a `// SAFETY:` comment on every block (CLAUDE.md invariant 6).
 [lints.rust]
