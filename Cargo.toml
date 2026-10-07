@@ -9,6 +9,7 @@ members = [
     "crates/engine-client",
     "crates/cli",
     "xtask",
+    "tests/invariants",
 ]
 
 [workspace.package]

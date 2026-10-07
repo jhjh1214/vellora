@@ -1,0 +1,45 @@
+[package]
+name = "vellora-fuzz"
+description = "cargo-fuzz targets for the cos crate (not a workspace member)"
+version = "0.0.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+vellora-cos = { path = "../crates/cos" }
+
+# Detach from the root workspace: this crate needs the nightly toolchain.
+[workspace]
+
+[[bin]]
+name = "lexer"
+path = "fuzz_targets/lexer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "object_parser"
+path = "fuzz_targets/object_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xref_open"
+path = "fuzz_targets/xref_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "write_roundtrip"
+path = "fuzz_targets/write_roundtrip.rs"
+test = false
+doc = false
+bench = false

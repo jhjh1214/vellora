@@ -144,6 +144,15 @@ pub enum WriteError {
     /// Re-encryption was requested for a document that is not encrypted.
     #[error("the document is not encrypted")]
     NotEncrypted,
+    /// The cross-reference was rebuilt and an object stream could not be decoded in the process,
+    /// so the objects inside it are missing. A full rewrite would silently drop them.
+    #[error(
+        "object stream {stream} could not be read during repair; a rewrite would lose its objects"
+    )]
+    ObjectStreamLost {
+        /// Object number of the stream.
+        stream: u32,
+    },
 }
 
 /// Why encrypted content cannot be read (see [`crate::crypt`]).

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::error::{EncryptionError, Result, WriteError};
 use crate::limits::LimitKind;
 use crate::object::{Dict, ObjRef, Object, ObjectKind};
+use crate::recovery::RepairReason;
 use crate::store::ObjectStore;
 use crate::xref::XrefEntry;
 
@@ -257,6 +258,21 @@ pub fn write_full(store: &ObjectStore<'_>, options: &FullOptions) -> Result<Vec<
     if keep && decryptor.is_none() {
         return Err(WriteError::NotEncrypted.into());
     }
+    // A wrong offset is normally found (and the cross-reference rebuilt) by the first read that
+    // hits it; do that now, so the rewrite is the same whatever was read before. Objects inside
+    // an object stream the repair scan could not decode are `null` from here on, and writing
+    // the document would drop them without a trace.
+    store.settle()?;
+    if let Some(stream) = store
+        .repaired()
+        .into_iter()
+        .find_map(|reason| match reason {
+            RepairReason::ObjectStreamNotExpanded { stream } => Some(stream),
+            _ => None,
+        })
+    {
+        return Err(WriteError::ObjectStreamLost { stream }.into());
+    }
     let Some(root) = store.root_ref() else {
         return Err(WriteError::NoRoot.into());
     };
@@ -264,7 +280,6 @@ pub fn write_full(store: &ObjectStore<'_>, options: &FullOptions) -> Result<Vec<
         Some(ObjectKind::Ref(info)) => Some(info),
         _ => None,
     };
-
     let reachable = discover(
         store,
         VecDeque::from_iter(std::iter::once(root).chain(info)),

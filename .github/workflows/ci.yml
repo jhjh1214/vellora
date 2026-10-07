@@ -40,8 +40,59 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # qpdf is the test oracle (`qpdf --check` on every writer output).
+      - name: Install qpdf
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get update && sudo apt-get install -y qpdf ;;
+            macOS) brew install qpdf ;;
+            Windows) choco install qpdf --no-progress -y ;;
+          esac
+      - name: qpdf version
+        run: qpdf --version
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      # Invariant harness (tests/invariants) on the small committed corpus subset.
+      - name: Fetch the CI corpus subset
+        run: cargo xtask corpus fetch --manifest tests/corpus/ci-manifest.toml
+      - name: Writer invariants on the CI corpus subset
+        run: cargo test --locked -p vellora-invariants -- --ignored --nocapture
+
+  fuzz:
+    name: fuzz smoke (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lexer, object_parser, xref_open, write_roundtrip]
+    runs-on: ubuntu-latest
+    env:
+      # `-D warnings` is for our own builds; the nightly compiler and cargo-fuzz bring their own flags.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # cargo-fuzz needs the nightly toolchain; only this job uses it.
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      # The CI corpus subset seeds the run: real files reach much deeper than random bytes.
+      - name: Fetch seed corpus
+        run: cargo +stable xtask corpus fetch --manifest tests/corpus/ci-manifest.toml
+      - name: Fuzz ${{ matrix.target }} for 60 s
+        working-directory: fuzz
+        run: >
+          cargo +nightly fuzz run ${{ matrix.target }} --
+          "$GITHUB_WORKSPACE/tests/corpus-data" -max_total_time=60 -timeout=20
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
 
   deny:
     name: cargo-deny (licenses, advisories, sources)

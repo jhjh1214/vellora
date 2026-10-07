@@ -1,0 +1,164 @@
+# The corpus subset CI runs the invariant harness on (M0 task 13): <= 20 documents covering classic and
+# stream cross-references, object streams, encryption, signatures, linearization, an incremental save
+# and damaged files. Every entry is a verbatim copy of its entry in manifest.toml (a test in xtask
+# checks that). Fetch it with: cargo xtask corpus fetch --manifest tests/corpus/ci-manifest.toml
+
+[[doc]]
+id = "pdfjs-tracemonkey"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/tracemonkey.pdf"
+sha256 = "3662ff519e485810520552bf301d8c3b2b917fd2f83303f4965d7abed367e113"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-franz"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/franz.pdf"
+sha256 = "050ae194d21d9b257db62b85cdb632178bbcf71fd7e26c13e75e473a3fa4e8ea"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-scorecard_reduced"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/scorecard_reduced.pdf"
+sha256 = "5b1ede16c90bb63d121d037966c7786ba37c20c15e55ff2fadf14c28500c38f7"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-openoffice"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/openoffice.pdf"
+sha256 = "5c9841d641406b074f16087442a62f652057a607364b7aa82f8b4851f7e2acfc"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-nested_outline"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/nested_outline.pdf"
+sha256 = "1283aa2173bc57def82323ea2601a4e08ada5beb2466873aec8aa04ddd74c013"
+license = "Apache-2.0"
+categories = ["navigation", "structure"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-empty_protected"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/empty_protected.pdf"
+sha256 = "69556af04215faec7da3e93e823c64f1b74679e52fd10379176f0e0462dd4b6c"
+license = "Apache-2.0"
+categories = ["encrypted"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-secHandler"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/secHandler.pdf"
+sha256 = "ae133ad139e2b6fad8f2a74b035779b41c0a008d519503ac48eb70ae61b0609c"
+license = "Apache-2.0"
+categories = ["encrypted"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfium-encrypted"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/encrypted.pdf"
+sha256 = "cbbead7185d9cd46daecaf60165a9aa7b9f2daceb3623218c328cb015ae862d5"
+license = "BSD-3-Clause"
+categories = ["encrypted"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-encrypted_hello_world_r3"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/encrypted_hello_world_r3.pdf"
+sha256 = "cdbfd4f6728786dc70c7514bd5c669a38b03bba38be3e91ec46ccb02168b9ad3"
+license = "BSD-3-Clause"
+categories = ["encrypted"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfa20-pdf-2-0-via-incremental-save"
+url = "https://raw.githubusercontent.com/pdf-association/pdf20examples/c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa/PDF%202.0%20via%20incremental%20save.pdf"
+sha256 = "9b25d59d07034634a990e79db6ef82b9f86769d9b94d8d8635f20d06aaec9d18"
+license = "CC-BY-SA-4.0"
+categories = ["pdf20", "incremental"]
+notes = "PDF Association PDF 2.0 example"
+
+[[doc]]
+id = "pdfa20-simple-pdf-2-0-file"
+url = "https://raw.githubusercontent.com/pdf-association/pdf20examples/c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa/Simple%20PDF%202.0%20file.pdf"
+sha256 = "296d2a0b2ce19b606f29265694f194a754fbc61783982b5b8d730e8637482236"
+license = "CC-BY-SA-4.0"
+categories = ["pdf20", "small-synthetic"]
+notes = "PDF Association PDF 2.0 example"
+
+[[doc]]
+id = "pdfium-linearized"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/linearized.pdf"
+sha256 = "ab49d0fa2790cecc932a2130a675058ff80aaedb453a7f9321e560d171f6cfff"
+license = "BSD-3-Clause"
+categories = ["linearized"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-two_signatures"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/two_signatures.pdf"
+sha256 = "47b9aa0d893f1f70a675a9d703fc072b0a435ad566ac789ff15b167e15443119"
+license = "BSD-3-Clause"
+categories = ["signed"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-bug_1139"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/bug_1139.pdf"
+sha256 = "ff69e1b892dd95cf1c1d8e1367bc93290cb632d165783296b4fb4f5e09af5d80"
+license = "BSD-3-Clause"
+categories = ["regression"]
+notes = "PDFium bug regression file; not necessarily corrupt"
+
+[[doc]]
+id = "pdfium-hello_world"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/hello_world.pdf"
+sha256 = "1e06a6e12329f0c3760680a70baea126e040e66e0bf34d3b14a71863096ee1e3"
+license = "BSD-3-Clause"
+categories = ["small-synthetic"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfjs-poppler-85140-0"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/poppler-85140-0.pdf"
+sha256 = "a358d66cfcf9bfd348908a54cde605b5d9b2f974ce68f7c8a327f074c0b76f9a"
+license = "Apache-2.0"
+categories = ["malformed", "fuzzed"]
+notes = "fuzzer-found regression file"
+
+[[doc]]
+id = "pdfjs-GHOSTSCRIPT-698804-1-fuzzed"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/GHOSTSCRIPT-698804-1-fuzzed.pdf"
+sha256 = "62e518ca7894e8b8b8ed9927da3007cdc5e9ccc5b111bbb22d6101d4a8d7490e"
+license = "Apache-2.0"
+categories = ["malformed", "fuzzed"]
+notes = "fuzzer-found regression file"
+
+[[doc]]
+id = "pdfium-bad_dict_keys"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/bad_dict_keys.pdf"
+sha256 = "07f17d7ef9d53545c8ede782f701a297abc74d2b5912b8e9c922f7e44395ceea"
+license = "BSD-3-Clause"
+categories = ["malformed"]
+notes = "deliberately broken structure in PDFium's own test suite"
+
+[[doc]]
+id = "pdfjs-xfa_issue14315"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/xfa_issue14315.pdf"
+sha256 = "d039a40ea28384bae8d1a24929a4288aae1aeb433c441fd39c04fad618fa6f19"
+license = "Apache-2.0"
+categories = ["forms", "xfa"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-issue6010_1"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/issue6010_1.pdf"
+sha256 = "d7fd95e016b7d43bc9eed1041b0cdd6ee00e3dd902e50d0307b0a428782c543c"
+license = "Apache-2.0"
+categories = ["encrypted"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
