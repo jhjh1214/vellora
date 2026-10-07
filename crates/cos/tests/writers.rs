@@ -14,8 +14,8 @@ use vellora_cos::filter::decode_stream;
 use vellora_cos::xref::XrefEntry;
 use vellora_cos::{
     Changes, EncryptionError, EncryptionPolicy, Error, FullOptions, LimitKind, Limits, NewObject,
-    ObjRef, Object, ObjectKind, ObjectStore, PasswordRole, SectionKind, WriteError, Xref,
-    incremental_update, write_full,
+    ObjRef, Object, ObjectKind, ObjectStore, PasswordRole, RepairReason, SectionKind, WriteError,
+    Xref, incremental_update, write_full,
 };
 
 const USER: &[u8] = b"user-pw";
@@ -637,6 +637,85 @@ fn a_repaired_file_is_refused_and_the_full_writer_takes_it() {
     assert!(again.repaired().is_empty(), "{:?}", again.repaired());
     assert_eq!(page_count(&again), 2);
     assert_eq!(title(&again), b"Original");
+}
+
+/// An object stream that does not decode, holding the page tree (object 2). The catalog also
+/// refers to the page (3), so that the writer reads it.
+fn with_unreadable_object_stream(pdf: &mut Builder) {
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R /Extra 3 0 R >>");
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>");
+    pdf.stream(
+        8,
+        "/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode",
+        "not flate data",
+    );
+}
+
+#[test]
+fn a_full_rewrite_refuses_a_file_whose_repair_lost_an_object_stream() {
+    // Found by fuzzing (write_roundtrip): the damaged object stream's objects are `null` after
+    // the repair scan, and the writer used to write the document without its pages.
+    let mut pdf = Builder::new("1.5");
+    with_unreadable_object_stream(&mut pdf);
+    let mut data = pdf.data;
+    data.extend_from_slice(
+        b"trailer
+<< /Root 1 0 R >>
+",
+    );
+    let store = open(&data);
+    assert!(
+        store
+            .repaired()
+            .contains(&RepairReason::ObjectStreamNotExpanded { stream: 8 }),
+        "{:?}",
+        store.repaired()
+    );
+    for (xref_stream, object_streams) in [(false, false), (true, true)] {
+        let error = write_full(
+            &store,
+            &options(xref_stream, object_streams, EncryptionPolicy::Remove),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Write {
+                    kind: WriteError::ObjectStreamLost { stream: 8 }
+                }
+            ),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn the_refusal_also_holds_when_the_repair_only_happens_during_the_write() {
+    // The table is fine as far as `open` can tell; object 3's offset is wrong, which the store
+    // finds out (and rebuilds the table for) only when the writer reads it. The same writer
+    // call must refuse, and so must every call after it.
+    let mut pdf = Builder::new("1.5");
+    with_unreadable_object_stream(&mut pdf);
+    for entry in &mut pdf.offsets {
+        if entry.0 == 3 {
+            entry.1 += 3;
+        }
+    }
+    let data = finish_table(pdf, "/Root 1 0 R");
+    let store = open(&data);
+    assert_eq!(store.repaired(), Vec::<RepairReason>::new());
+    for _ in 0..2 {
+        let error = write_full(&store, &FullOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Write {
+                    kind: WriteError::ObjectStreamLost { stream: 8 }
+                }
+            ),
+            "{error:?}"
+        );
+    }
 }
 
 #[test]

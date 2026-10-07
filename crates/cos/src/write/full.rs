@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::error::{EncryptionError, Result, WriteError};
 use crate::limits::LimitKind;
 use crate::object::{Dict, ObjRef, Object, ObjectKind};
+use crate::recovery::RepairReason;
 use crate::store::ObjectStore;
 use crate::xref::XrefEntry;
 
@@ -269,6 +270,19 @@ pub fn write_full(store: &ObjectStore<'_>, options: &FullOptions) -> Result<Vec<
         store,
         VecDeque::from_iter(std::iter::once(root).chain(info)),
     )?;
+    // The repair may only happen while `discover` reads (the store rebuilds lazily), so this has
+    // to come after it. Objects inside an unreadable object stream are `null` by now; writing
+    // the file would drop them without a trace.
+    if let Some(stream) = store
+        .repaired()
+        .into_iter()
+        .find_map(|reason| match reason {
+            RepairReason::ObjectStreamNotExpanded { stream } => Some(stream),
+            _ => None,
+        })
+    {
+        return Err(WriteError::ObjectStreamLost { stream }.into());
+    }
     let Some(&root_number) = reachable.numbers.get(&root.num) else {
         return Err(WriteError::NoRoot.into());
     };
