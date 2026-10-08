@@ -16,8 +16,10 @@
 //! - **A minimal environment** and a neutral working directory, so nothing about the user's shell
 //!   or profile reaches the engine.
 //!
-//! The `AppContainer` SID is derived from a fixed name; no profile is registered, so nothing is
-//! written to the registry or the user's profile except the two file-level ACL entries above.
+//! The `AppContainer` has a fixed name, `Vellora.Engine`. Its profile is registered on first use (a
+//! container without one cannot start a process), which writes a mapping under `HKCU` and a folder
+//! under `%LOCALAPPDATA%\Packages`; the SID is then derived from the name. Besides these, the only
+//! change to the machine is the two file-level ACL entries above.
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -41,7 +43,9 @@ use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, SE_FILE_OBJECT, SetEntriesInAclW,
     SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
-use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
+use windows_sys::Win32::Security::Isolation::{
+    CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+};
 use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, FreeSid, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     SECURITY_CAPABILITIES,
@@ -63,6 +67,12 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::limits::{self, Guard, ResourceLimits};
 use crate::process::{PDFIUM_ENV, PDFIUM_LIBRARY_WINDOWS};
+
+/// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`.
+const ALREADY_EXISTS: i32 = 0x8007_00B7_u32.cast_signed();
+
+/// Whether the container's profile is known to exist (see `ensure_profile`).
+static PROFILE_READY: Mutex<bool> = Mutex::new(false);
 
 /// The name the `AppContainer` SID is derived from. Fixed, so the ACL entries we add for it stay
 /// valid across runs and versions.
@@ -241,22 +251,60 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
     })
 }
 
-/// The `AppContainer` SID derived from [`CONTAINER_NAME`].
+/// The `AppContainer` SID derived from [`CONTAINER_NAME`], released with `FreeSid`.
 struct ContainerSid(PSID);
 
 impl ContainerSid {
     fn new() -> io::Result<Self> {
         let name = wide(OsStr::new(CONTAINER_NAME))?;
+        ensure_profile(&name)?;
         let mut sid: PSID = ptr::null_mut();
         // SAFETY: `name` is a NUL-terminated string and `sid` receives the result.
         let status =
             unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &raw mut sid) };
         if status < 0 {
-            // An HRESULT; `from_raw_os_error` shows the message of the matching Win32 code.
-            return Err(io::Error::from_raw_os_error(status & 0xFFFF));
+            return Err(from_hresult(status));
         }
         Ok(Self(sid))
     }
+}
+
+/// Registers the container's profile if this process has not yet made sure it exists. A container
+/// without a registered profile cannot start a process (`CreateProcess` fails with error 2,
+/// measured on a clean machine), and registering costs about 16 ms, so it is done once per process.
+fn ensure_profile(name: &[u16]) -> io::Result<()> {
+    let mut ready = PROFILE_READY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *ready {
+        return Ok(());
+    }
+    let mut sid: PSID = ptr::null_mut();
+    // SAFETY: the strings are NUL-terminated and `sid` receives the result.
+    let status = unsafe {
+        CreateAppContainerProfile(
+            name.as_ptr(),
+            name.as_ptr(),
+            name.as_ptr(),
+            ptr::null(),
+            0,
+            &raw mut sid,
+        )
+    };
+    if status >= 0 {
+        // SAFETY: the SID came from `CreateAppContainerProfile`, which documents `FreeSid`; it is
+        // not needed, as the SID is derived for each launch.
+        unsafe { FreeSid(sid) };
+    } else if status != ALREADY_EXISTS {
+        return Err(from_hresult(status));
+    }
+    *ready = true;
+    Ok(())
+}
+
+/// An `HRESULT` as an error; `from_raw_os_error` shows the message of the matching Win32 code.
+fn from_hresult(status: i32) -> io::Error {
+    io::Error::from_raw_os_error(status & 0xFFFF)
 }
 
 impl Drop for ContainerSid {

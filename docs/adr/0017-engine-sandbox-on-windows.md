@@ -14,7 +14,7 @@ What the engine genuinely needs: the executable and the PDFium library, the docu
 
 `vellora-engine-client` starts the engine with `CreateProcessW` and builds the sandbox itself (`crates/engine-client/src/sandbox.rs`):
 
-- **AppContainer with no capabilities.** The token has an AppContainer SID and no capability SIDs: no network (the loopback is blocked too), no access to the user's files, registry or other processes' objects. The SID is *derived* from the fixed name `Vellora.Engine` (`DeriveAppContainerSidFromAppContainerName`); **no profile is registered**, so nothing is written to the registry or to `%LOCALAPPDATA%\Packages`. Measured: with the profile deleted, a derived SID still starts the process.
+- **AppContainer with no capabilities.** The token has an AppContainer SID and no capability SIDs: no network (the loopback is blocked too), no access to the user's files, registry or other processes' objects. The container is named `Vellora.Engine`. Its **profile is registered on first use** (`CreateAppContainerProfile`, once per process; the SID is then derived from the name with `DeriveAppContainerSidFromAppContainerName`). This is required: with no registered profile `CreateProcess` fails with `ERROR_FILE_NOT_FOUND`, which the first Windows CI run showed and `crates/engine-client/tests/clean_machine.rs` reproduces by deleting the profile first. Registering writes a mapping under `HKCU` and a folder under `%LOCALAPPDATA%\Packages\Vellora.Engine`.
 - **Read access for the container to exactly two files**: the engine executable and the PDFium library (`$VELLORA_PDFIUM_LIB`, else `pdfium.dll` next to the engine). The grant is one ACL entry for the container SID, read and execute, on the file only (not on any directory), added once per file and process. Best effort: where the files are already readable by `ALL APPLICATION PACKAGES` (an installation under `Program Files`) the user may not change the ACL and does not need to. If the container really cannot read them, process creation fails and the error says so. The container needs nothing on the parent directories (checked: `NT AUTHORITY\Authenticated Users`-only ancestors in a user profile are traversed).
 - **An explicit handle list** (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`): only the document, the tile region, and the three standard streams are inherited, whatever else the UI holds that is inheritable. This also narrows the share/spawn window of [ADR-0015](0015-os-primitives-crate-and-engine-launch-contract.md) on Windows.
 - **Created suspended, jailed, then resumed.** The job object is assigned before the first instruction runs, which closes the "job applied just after start" gap. The job gets what it had (memory cap, kill-on-close, no child processes, die on unhandled exception) plus UI restrictions: no clipboard, global atoms, display settings, desktop switching, logoff, or other processes' USER handles.
@@ -54,7 +54,7 @@ The task allowed a restricted token with a low integrity level if PDFium's font 
 | Option | Pros | Cons |
 |---|---|---|
 | Restricted token + low integrity level | Needs no ACL change; works for any install location | Weaker: the process keeps network access and can still read what low integrity may read; no isolation of the registry. Kept as the documented fallback if a future PDFium needs something the container denies |
-| Registering an AppContainer profile (`CreateAppContainerProfile`) | The container gets its own folders and registry mapping | Writes outside our files for no benefit the engine uses; also needs deleting on uninstall. Measured not to be required |
+| Deriving the SID without registering a profile | No persistent state | Tried first: it works on a machine where the profile happens to exist and fails with "file not found" on a clean one (found by the CI runner) |
 | Chromium's sandbox library | Mature, many mitigations | Heavy C++ integration for a solo project (ADR-0004); would own the process launch |
 | Windows Sandbox / Hyper-V | Strongest | Per-document VM: far too slow and not available on Home editions |
 | A `ProcessMitigationPolicy` set (CFG, ACG, image-load policies) on top | Cheap extra hardening | Not part of this task; see follow-ups |
@@ -62,9 +62,9 @@ The task allowed a restricted token with a low integrity level if PDFium's font 
 ## Consequences
 
 - Positive: a compromised engine cannot read the user's files, reach the network, or start programs, and no instruction of it runs outside the job.
-- Positive: nothing persists outside the two ACL entries; uninstalling deletes the files and with them the entries.
+- Negative: state outside our files: the registered profile (the `HKCU` mapping and `%LOCALAPPDATA%\Packages\Vellora.Engine`). An uninstaller should call `DeleteAppContainerProfile` (M1 task 23). The two ACL entries go with the files.
 - Negative: the container needs read access to the engine and the PDFium library. An installer must put them where `ALL APPLICATION PACKAGES` can read them (the default under `Program Files`); a per-user install relies on the launcher's file-level grant.
-- Negative: about 13 ms more per engine start (not per tile).
+- Negative: about 13 ms more per engine start (not per tile), and about 16 ms more for the first start of a process, which registers the profile.
 - Negative: creating a socket is still possible (see above).
 - Follow-ups (`docs/backlog.md`): process mitigation policies (win32k lockdown has not been tried with PDFium's font mapping), a Low-integrity-level token on top of the container's, and the Linux and macOS counterparts (M1 task 5, M6).
 
