@@ -65,6 +65,10 @@ anyhow = "1"
 # generates its header and glue.
 cxx = "1"
 cxx-build = "1"
+# `vellora-cli`: argument parsing (derive, no colour or suggestions), the JSON report, and snapshot tests of it.
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+serde_json = "1"
+insta = { version = "1", default-features = false }
 # Reads and writes the golden images of the render tests (dev-dependency of `vellora-render`).
 png = "0.18"
 

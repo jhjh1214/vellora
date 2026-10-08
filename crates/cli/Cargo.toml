@@ -14,6 +14,13 @@ name = "vellora"
 path = "src/main.rs"
 
 [dependencies]
+vellora-inspect.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

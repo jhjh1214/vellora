@@ -516,13 +516,18 @@ pub(crate) struct WriteBase {
     pub version: (u8, u8),
 }
 
-/// The version in the `%PDF-M.m` header at `base`.
-fn header_version(data: &[u8], base: usize) -> (u8, u8) {
-    let digits = data.get(base + 5..base + 8).unwrap_or_default();
+/// The version in the `%PDF-M.m` header at `base`, `None` if it cannot be read.
+fn parse_header_version(data: &[u8], base: usize) -> Option<(u8, u8)> {
+    let digits = data.get(base.checked_add(5)?..base.checked_add(8)?)?;
     match digits {
-        [major @ b'0'..=b'9', b'.', minor @ b'0'..=b'9'] => (major - b'0', minor - b'0'),
-        _ => (1, 7),
+        [major @ b'0'..=b'9', b'.', minor @ b'0'..=b'9'] => Some((major - b'0', minor - b'0')),
+        _ => None,
     }
+}
+
+/// The version in the `%PDF-M.m` header at `base`, `(1, 7)` if it cannot be read.
+fn header_version(data: &[u8], base: usize) -> (u8, u8) {
+    parse_header_version(data, base).unwrap_or((1, 7))
 }
 
 /// A PDF file's objects, parsed lazily. See the [module documentation](self).
@@ -796,6 +801,28 @@ impl<'a> ObjectStore<'a> {
             .trailer()
             .map(|trailer| trailer.clone().into_owned())
             .unwrap_or_default()
+    }
+
+    /// The `(major, minor)` version of the `%PDF-M.m` header; `None` if the header is missing or
+    /// has no single-digit `M.m` version.
+    #[must_use]
+    pub fn header_version(&self) -> Option<(u8, u8)> {
+        let base = self.lock().xref.base;
+        parse_header_version(self.data, base)
+    }
+
+    /// How many revisions the file has: cross-reference sections in the `/Prev` chain (§7.5.6),
+    /// or 1 if the cross-reference was rebuilt.
+    #[must_use]
+    pub fn revision_count(&self) -> usize {
+        self.lock().xref.revisions.len()
+    }
+
+    /// How many objects the cross-reference lists as in use (compressed ones included). The
+    /// entries are not checked against the file.
+    #[must_use]
+    pub fn object_count(&self) -> usize {
+        self.lock().xref.in_use_count()
     }
 
     /// The facts about the newest revision that the writers build on.

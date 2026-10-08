@@ -114,6 +114,34 @@ fn opening_reads_no_objects() {
 }
 
 #[test]
+fn document_facts_come_from_the_header_and_the_cross_reference() {
+    let mut data = doc(&[(2, "<< /Type /Pages /Kids [] >>")]);
+    let store = open(&data);
+    assert_eq!(store.header_version(), Some((1, 7)));
+    assert_eq!(store.revision_count(), 1);
+    assert_eq!(store.object_count(), 2);
+
+    // A second revision that adds object 3; the header is unchanged.
+    let first = data.windows(6).rposition(|w| w == b"\nxref\n").unwrap() + 1;
+    let new_obj = data.len();
+    data.extend(b"3 0 obj\n(x)\nendobj\n");
+    let section = data.len();
+    data.extend(format!("xref\n3 1\n{new_obj:010} 00000 n \n").bytes());
+    data.extend(
+        format!("trailer\n<< /Size 4 /Root 1 0 R /Prev {first} >>\nstartxref\n{section}\n%%EOF\n")
+            .bytes(),
+    );
+    let store = open(&data);
+    assert_eq!(store.revision_count(), 2);
+    assert_eq!(store.object_count(), 3);
+
+    // No readable version in the header: unknown, not a guess.
+    let mut odd = doc(&[(2, "<< /Type /Pages /Kids [] >>")]);
+    odd[5..8].copy_from_slice(b"x.y");
+    assert_eq!(open(&odd).header_version(), None);
+}
+
+#[test]
 fn resolves_objects_and_missing_ones_are_null() {
     let data = doc(&[(2, "<< /A 42 >>"), (4, "(text)")]);
     let store = open(&data);
