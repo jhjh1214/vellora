@@ -26,7 +26,8 @@ use vellora_shm::SlotGeometry;
 /// How long one file may take from open to its first tile.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// M0 criterion: the share of documents the engine must open.
+/// M0 criterion: the share of documents the engine must open. Password-protected documents are
+/// excluded from the denominator and must be refused with the typed "password required" error.
 const REQUIRED_OPEN_SHARE: f64 = 0.95;
 
 #[derive(Debug, PartialEq)]
@@ -37,6 +38,9 @@ enum Outcome {
     RenderFailed(String),
     /// Refused with a typed error (`RequestFailed` or `Failed`).
     Rejected(String),
+    /// Refused because the document is encrypted and no password was given (a typed, expected
+    /// answer: the engine has no password path in M0).
+    PasswordRequired,
     /// The engine process ended unasked.
     Crashed(String),
     /// No answer within the patience.
@@ -64,6 +68,14 @@ fn malformed_ids() -> Vec<String> {
         }
     }
     ids
+}
+
+fn classify_refusal(message: String) -> Outcome {
+    if message.contains("password required") {
+        Outcome::PasswordRequired
+    } else {
+        Outcome::Rejected(message)
+    }
 }
 
 fn run_one(path: &Path) -> Outcome {
@@ -129,13 +141,13 @@ fn run_one(path: &Path) -> Outcome {
                     done = Some(if request.is_some() && request == requested {
                         Outcome::RenderFailed(message)
                     } else {
-                        Outcome::Rejected(message)
+                        classify_refusal(message)
                     });
                 }
                 Event::EngineCrashed { crash, .. } => {
                     done = Some(Outcome::Crashed(format!("{crash:?}")));
                 }
-                Event::Failed { reason } => done = Some(Outcome::Rejected(reason)),
+                Event::Failed { reason } => done = Some(classify_refusal(reason)),
                 _ => {}
             }
             if done.is_some() {
@@ -163,7 +175,8 @@ fn corpus_opens_without_crashing() {
     assert!(!files.is_empty(), "no PDFs in {}", dir.display());
     let malformed = malformed_ids();
 
-    let (mut rendered, mut opened, mut malformed_total, mut malformed_bad) = (0, 0, 0, 0);
+    let (mut rendered, mut opened, mut locked, mut malformed_total, mut malformed_bad) =
+        (0, 0, 0, 0, 0);
     let mut problems = Vec::new();
     for path in &files {
         let id = path.file_stem().unwrap().to_string_lossy().into_owned();
@@ -181,6 +194,7 @@ fn corpus_opens_without_crashing() {
                 opened += 1;
             }
             Outcome::RenderFailed(_) => opened += 1,
+            Outcome::PasswordRequired => locked += 1,
             Outcome::Rejected(_) => {}
             Outcome::Crashed(_) | Outcome::Hung => problems.push(format!("{id}: {outcome:?}")),
         }
@@ -194,9 +208,9 @@ fn corpus_opens_without_crashing() {
 
     let total = files.len();
     #[allow(clippy::cast_precision_loss)]
-    let share = f64::from(opened) / total as f64;
+    let share = f64::from(opened) / (f64::from(i32::try_from(total).unwrap() - locked));
     println!(
-        "{total} documents: {opened} opened ({:.1}%), {rendered} rendered page 1, \
+        "{total} documents, {locked} need a password (not counted); {opened} opened ({:.1}%), {rendered} rendered page 1, \
          {malformed_total} malformed of which {malformed_bad} crashed or hung, {} crashed or hung overall",
         share * 100.0,
         problems.len()

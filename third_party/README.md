@@ -5,3 +5,17 @@
 - License texts of bundled binaries are collected into `THIRD_PARTY_LICENSES` at release time.
 
 Before 1.0 we move from prebuilt binaries to building PDFium from source in CI (supply-chain auditability).
+
+## THIRD_PARTY_LICENSES
+
+`THIRD_PARTY_LICENSES` at the repository root is generated; do not edit it by hand. Regenerate it after dependency changes (needs `cargo install --locked cargo-about --features cli`, and the PDFium build from `cargo xtask pdfium fetch` for the license texts):
+
+```sh
+cargo about generate --workspace about.hbs -o THIRD_PARTY_LICENSES
+cat third_party/NOTICES.md >> THIRD_PARTY_LICENSES
+printf '
+PDFium bundled license texts
+==============================
+' >> THIRD_PARTY_LICENSES
+for f in third_party/pdfium/win-x64/licenses/*; do printf '\n--- %s ---\n' "$(basename "$f")"; cat "$f"; done >> THIRD_PARTY_LICENSES
+```
