@@ -1,0 +1,27 @@
+---
+source: crates/cli/tests/cli.rs
+expression: text
+---
+File          <file>
+Size          607 bytes
+PDF version   1.7
+Pages         1
+Objects       4
+Revisions     1
+Repaired      no
+Encryption    none
+
+Features
+  JavaScript on open              yes
+  JavaScript actions              yes
+  Document-level JavaScript       no
+  Additional actions (/AA)        no
+  Launch actions                  no
+  URI actions                     yes
+  SubmitForm actions              no
+  GoToR actions                   no
+  Embedded files                  no
+  AcroForm                        no
+  XFA                             no
+  Optional content (layers)       no
+  Signature fields                no

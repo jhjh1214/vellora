@@ -1,0 +1,32 @@
+---
+source: crates/cli/tests/cli.rs
+expression: stdout(&out)
+---
+{
+  "file_size": 329,
+  "version": "1.7",
+  "objects": 3,
+  "revisions": 1,
+  "repaired": false,
+  "repair_reasons": [],
+  "encryption": null,
+  "locked": false,
+  "pages": 1,
+  "features": {
+    "complete": true,
+    "open_action_javascript": false,
+    "javascript_actions": false,
+    "names_javascript": false,
+    "additional_actions": false,
+    "launch_actions": false,
+    "uri_actions": false,
+    "submit_form_actions": false,
+    "goto_remote_actions": false,
+    "embedded_files": false,
+    "acroform": false,
+    "xfa": false,
+    "optional_content": false,
+    "signature_fields": false
+  },
+  "problems": []
+}

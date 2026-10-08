@@ -13,6 +13,8 @@ publish.workspace = true
 name = "vellora_inspect"
 
 [dependencies]
+vellora-cos.workspace = true
+serde.workspace = true
 
 [lints]
 workspace = true

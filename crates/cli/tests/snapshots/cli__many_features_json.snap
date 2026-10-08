@@ -1,0 +1,32 @@
+---
+source: crates/cli/tests/cli.rs
+expression: "stdout(&run_inspect(&path, &[\"--json\"]))"
+---
+{
+  "file_size": 861,
+  "version": "1.7",
+  "objects": 6,
+  "revisions": 1,
+  "repaired": false,
+  "repair_reasons": [],
+  "encryption": null,
+  "locked": false,
+  "pages": 1,
+  "features": {
+    "complete": true,
+    "open_action_javascript": true,
+    "javascript_actions": true,
+    "names_javascript": false,
+    "additional_actions": false,
+    "launch_actions": true,
+    "uri_actions": true,
+    "submit_form_actions": false,
+    "goto_remote_actions": false,
+    "embedded_files": true,
+    "acroform": true,
+    "xfa": true,
+    "optional_content": true,
+    "signature_fields": true
+  },
+  "problems": []
+}

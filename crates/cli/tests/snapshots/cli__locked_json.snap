@@ -1,0 +1,37 @@
+---
+source: crates/cli/tests/cli.rs
+expression: stdout(&out)
+---
+{
+  "file_size": 1874,
+  "version": "1.6",
+  "objects": 11,
+  "revisions": 1,
+  "repaired": false,
+  "repair_reasons": [],
+  "encryption": {
+    "handler": "Standard",
+    "version": 4,
+    "revision": 4,
+    "key_bits": 128,
+    "permissions": -1028,
+    "allowed": {
+      "print": true,
+      "modify": true,
+      "copy": true,
+      "annotate": true,
+      "fill_forms": true,
+      "accessibility": true,
+      "assemble": false,
+      "print_high_quality": true
+    },
+    "stream_method": "aes-128",
+    "string_method": "aes-128",
+    "encrypt_metadata": true,
+    "unlocked_with": null
+  },
+  "locked": true,
+  "pages": null,
+  "features": null,
+  "problems": []
+}

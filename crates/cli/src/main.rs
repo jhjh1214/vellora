@@ -9,39 +9,57 @@
 //! - Pure-Rust commands (inspect, page operations) run in-process. Commands
 //!   that need rendering spawn `vellora-engine`.
 //!
-//! **Status:** skeleton (`--version` / `--help` only). M0 task 23 adds
-//! argument parsing and `vellora inspect`.
+//! **Status:** `vellora inspect` (M0 task 23); the other commands arrive with the
+//! milestones that need them. The output formats are documented in `docs/user/cli.md`.
 
+mod inspect;
+
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "\
-Usage: vellora <COMMAND> [OPTIONS]
+use clap::{Parser, Subcommand};
 
-Commands are added during milestone M0 (first: `inspect`).
+/// Exit code for an operation that failed (unreadable file, not a PDF, wrong password).
+const EXIT_FAILED: u8 = 1;
 
-Options:
-  -h, --help       Print help
-  -V, --version    Print version
-";
+#[derive(Parser)]
+#[command(name = "vellora", version, about = "Vellora PDF command-line tools")]
+#[command(arg_required_else_help = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Show what a PDF file contains: version, pages, encryption, repairs and risky features.
+    Inspect {
+        /// The PDF file.
+        file: PathBuf,
+        /// Print the report as JSON (schema in docs/user/cli.md).
+        #[arg(long)]
+        json: bool,
+        /// Password for an encrypted file (user or owner). Visible to other users of this
+        /// machine in the process list.
+        #[arg(long, value_name = "PASSWORD")]
+        password: Option<String>,
+    },
+}
 
 fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
-        Some("--version" | "-V") => {
-            println!("vellora {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
-        Some("--help" | "-h") => {
-            print!("{USAGE}");
-            ExitCode::SUCCESS
-        }
-        Some(other) => {
-            eprintln!("vellora: unknown command '{other}'\n");
-            eprint!("{USAGE}");
-            ExitCode::from(2)
-        }
-        None => {
-            eprint!("{USAGE}");
-            ExitCode::from(2)
-        }
+    // clap exits with 0 for --help and --version and with 2 for a usage error.
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Inspect {
+            file,
+            json,
+            password,
+        } => match inspect::run(&file, json, password) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("vellora: {message}");
+                ExitCode::from(EXIT_FAILED)
+            }
+        },
     }
 }
