@@ -1,6 +1,6 @@
 // The main window: native menu bar (File, View), the scrolling canvas, and a status bar with the
-// page, the zoom and the document's state. Task 22d routes every action through the command
-// registry.
+// page, the zoom and the document's state. A bar above the canvas says when the file was repaired.
+// Task 22d routes every action through the command registry.
 #pragma once
 
 #include "bridge/EngineSession.h"
@@ -9,10 +9,13 @@
 #include "commands/CommandRegistry.h"
 
 #include <QMainWindow>
+#include <QStringList>
 
 class QLabel;
 
 namespace vellora {
+
+class RepairBar;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -29,6 +32,7 @@ public:
     CommandRegistry& commands() { return m_commands; }
     CommandPalette& palette() { return *m_palette; }
     CanvasView& canvas() { return *m_canvas; }
+    RepairBar& repairBar() { return *m_repairBar; }
     // What the status bar shows, for tests.
     QString documentStatus() const;
     QString pageStatus() const;
@@ -36,7 +40,7 @@ public:
 
 private slots:
     void chooseDocument();
-    void onOpened(quint32 pageCount, bool repaired);
+    void onOpened(quint32 pageCount, const QStringList& repairs);
     void onRequestFailed(quint64 request, const QString& message);
     void onEngineCrashed(const QString& how, bool willRestart);
     void onFailed(const QString& reason);
@@ -53,6 +57,7 @@ private:
     EngineSession m_session;
     CommandRegistry m_commands;
     CanvasView* m_canvas = nullptr;
+    RepairBar* m_repairBar = nullptr;
     CommandPalette* m_palette = nullptr;
     QLabel* m_documentStatus = nullptr;
     QLabel* m_pageStatus = nullptr;

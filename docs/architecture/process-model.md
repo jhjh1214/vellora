@@ -20,7 +20,7 @@
 
    The exact command line is defined in `vellora_engine::args` ([ADR-0015](../adr/0015-os-primitives-crate-and-engine-launch-contract.md)).
 2. The engine and client exchange a **protocol-version handshake**. A mismatch is a fatal, user-visible error.
-3. The engine parses lazily (trailer and xref only), loads the current revision into PDFium, cross-checks the page tree, and replies with page count, page sizes and repair status.
+3. The engine parses lazily (trailer and xref only), loads the current revision into PDFium, cross-checks the page tree, and replies with page count, page sizes and the reasons the file counts as repaired (a short, bounded list).
 4. The UI requests tiles for visible pages. The engine schedules them (visible > prefetch > thumbnails), renders them into shared-memory slots and replies with slot descriptors. Superseded requests are **cancelled**.
 5. **Crash or timeout:** the client detects EOF or a missed deadline, shows a recoverable error, and respawns the engine. The document reopens at the same position; pending in-memory edits are replayed from the client-side journal (from Phase 2).
 6. **Save:** the engine serialises output (an incremental section or a full rewrite) into a buffer or stream, and sends it to the UI. The UI writes to a temp file next to the target, fsyncs, and renames atomically. The engine never writes files.

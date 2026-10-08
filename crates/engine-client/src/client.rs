@@ -1,4 +1,4 @@
-﻿//! The protocol client: one document, one engine process at a time, restarted after a crash.
+//! The protocol client: one document, one engine process at a time, restarted after a crash.
 //!
 //! # Event model: a polled queue
 //!
@@ -69,7 +69,7 @@ use std::time::{Duration, Instant};
 
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
-    ErrorKind, PROTOCOL_VERSION, PageSize, Priority, Request, RequestId, Response, SlotId,
+    ErrorKind, PROTOCOL_VERSION, PageSize, Priority, Repair, Request, RequestId, Response, SlotId,
     TileRect, check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
@@ -238,8 +238,8 @@ pub enum Event {
         page_count: u32,
         /// Sizes of the first pages (the protocol sends at most 4096 at open).
         page_sizes: Vec<PageSize>,
-        /// The document needed repair.
-        repaired: bool,
+        /// Why the document needed repair; empty if it did not (at most 32 entries).
+        repairs: Vec<Repair>,
     },
     /// A tile is in its slot and may be read with [`Client::read_slot`].
     TileReady {
@@ -307,7 +307,7 @@ enum Phase {
 struct OpenedInfo {
     page_count: u32,
     page_sizes: Vec<PageSize>,
-    repaired: bool,
+    repairs: Vec<Repair>,
 }
 
 /// Bookkeeping that needs no process: which requests are in flight, and the restart budget.
@@ -359,11 +359,11 @@ impl Ledger {
             Response::Opened {
                 page_count,
                 page_sizes,
-                repaired,
+                repairs,
             } => Accepted::Event(Event::Opened {
                 page_count,
                 page_sizes,
-                repaired,
+                repairs,
             }),
             Response::TileReady { req_id, slot } => {
                 // A cancelled request may still be answered if the engine had finished it before
@@ -814,6 +814,16 @@ impl Client {
         state.opened.as_ref()?.page_sizes.get(index).copied()
     }
 
+    /// Why the engine had to repair the document; empty if it did not (or before it is open).
+    #[must_use]
+    pub fn repairs(&self) -> Vec<Repair> {
+        self.shared
+            .state()
+            .opened
+            .as_ref()
+            .map_or_else(Vec::new, |o| o.repairs.clone())
+    }
+
     /// Whether the engine had to repair the document.
     #[must_use]
     pub fn repaired(&self) -> bool {
@@ -821,7 +831,7 @@ impl Client {
             .state()
             .opened
             .as_ref()
-            .is_some_and(|o| o.repaired)
+            .is_some_and(|o| !o.repairs.is_empty())
     }
 
     /// The operating-system id of the current engine process, if one is running.
@@ -989,13 +999,13 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
                         if let Event::Opened {
                             page_count,
                             page_sizes,
-                            repaired,
+                            repairs,
                         } = &event
                         {
                             state.opened = Some(OpenedInfo {
                                 page_count: *page_count,
                                 page_sizes: page_sizes.clone(),
-                                repaired: *repaired,
+                                repairs: repairs.clone(),
                             });
                         }
                         state.settle_tile(&event);

@@ -5,13 +5,20 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Most page sizes one `Opened` may carry (the first chunk; the rest follow
 /// lazily so opening a 10,000-page file does not wait for every page).
 pub const MAX_PAGE_SIZES_PER_MESSAGE: usize = 4096;
 /// Longest `Error` message text in bytes.
 pub const MAX_ERROR_MESSAGE_BYTES: usize = 4096;
+/// Most [`Repair`] entries one `Opened` may carry. A file with more damage gets a last entry that
+/// says how many were left out.
+pub const MAX_REPAIRS: usize = 32;
+/// Longest [`Repair::code`] in bytes.
+pub const MAX_REPAIR_CODE_BYTES: usize = 48;
+/// Longest [`Repair::message`] in bytes.
+pub const MAX_REPAIR_MESSAGE_BYTES: usize = 256;
 /// Largest accepted tile scale (device pixels per point).
 pub const MAX_TILE_SCALE: f32 = 64.0;
 /// Longest accepted tile side in device pixels.
@@ -39,6 +46,16 @@ pub struct PageSize {
     pub width: f32,
     /// Height in points.
     pub height: f32,
+}
+
+/// One thing the engine had to repair, or disagreed about, to show a damaged document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repair {
+    /// Stable short identifier (kebab-case) for tests and logs, at most
+    /// [`MAX_REPAIR_CODE_BYTES`] bytes.
+    pub code: String,
+    /// One line for the user, at most [`MAX_REPAIR_MESSAGE_BYTES`] bytes.
+    pub message: String,
 }
 
 /// How urgently a tile is wanted. The engine renders queued tiles in this order (first-in,
@@ -137,9 +154,9 @@ pub enum Response {
         /// Sizes of the first pages (at most [`MAX_PAGE_SIZES_PER_MESSAGE`]
         /// and never more than `page_count`); the rest arrive in later chunks.
         page_sizes: Vec<PageSize>,
-        /// The document needed repair (damaged xref, or `cos` and PDFium
-        /// disagreed on the pages).
-        repaired: bool,
+        /// Why the document needed repair (damaged xref, or `cos` and PDFium disagreed on the
+        /// pages); empty for a document that needed none. At most [`MAX_REPAIRS`] entries.
+        repairs: Vec<Repair>,
     },
     /// A tile is in its slot and may be read.
     TileReady {
@@ -223,8 +240,17 @@ impl Validate for Response {
             Response::Opened {
                 page_count,
                 page_sizes,
-                ..
+                repairs,
             } => {
+                if repairs.len() > MAX_REPAIRS {
+                    return Err(Error::Invalid("too many repairs in one message"));
+                }
+                if repairs.iter().any(|r| {
+                    r.code.len() > MAX_REPAIR_CODE_BYTES
+                        || r.message.len() > MAX_REPAIR_MESSAGE_BYTES
+                }) {
+                    return Err(Error::Invalid("repair text too long"));
+                }
                 if page_sizes.len() > MAX_PAGE_SIZES_PER_MESSAGE {
                     return Err(Error::Invalid("too many page sizes in one message"));
                 }

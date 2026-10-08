@@ -124,10 +124,16 @@ void EngineSession::pollNow() {
 
 void EngineSession::dispatch(const EngineEvent& event) {
     switch (event.kind) {
-    case EventKind::Opened:
+    case EventKind::Opened: {
         m_pageCount = event.page_count;
-        emit opened(event.page_count, event.repaired);
+        QStringList repairs;
+        repairs.reserve(static_cast<qsizetype>(event.repairs.size()));
+        for (const RepairNote& repair : event.repairs) {
+            repairs.append(toQString(repair.message));
+        }
+        emit opened(event.page_count, repairs);
         break;
+    }
     case EventKind::TileReady:
         emit tileReady(event.request);
         break;

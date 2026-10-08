@@ -51,7 +51,7 @@ mod ffi {
     /// What an [`EngineEvent`] is about; the fields it uses are listed per kind.
     #[derive(Debug)]
     enum EventKind {
-        /// `page_count`, `repaired` (sent again after each restart).
+        /// `page_count`, `repairs` (sent again after each restart).
         Opened,
         /// `request`, `slot`.
         TileReady,
@@ -121,6 +121,15 @@ mod ffi {
         request: u64,
     }
 
+    /// One reason a document counts as repaired (the protocol's `Repair`).
+    #[derive(Clone, Debug, PartialEq)]
+    struct RepairNote {
+        /// Stable kebab-case identifier.
+        code: String,
+        /// One line for the user.
+        message: String,
+    }
+
     /// One thing that happened. A flat struct, so C++ needs no variant type.
     #[derive(Debug)]
     struct EngineEvent {
@@ -130,7 +139,8 @@ mod ffi {
         has_request: bool,
         slot: u32,
         page_count: u32,
-        repaired: bool,
+        /// `Opened`: empty unless the document needed repair.
+        repairs: Vec<RepairNote>,
         will_restart: bool,
         failure: FailureKind,
         timeout: TimeoutStage,
@@ -207,8 +217,8 @@ mod ffi {
 }
 
 pub use ffi::{
-    EngineEvent, EventKind, FailureKind, PageExtent, TilePriority, TileState, TileTicket,
-    TimeoutStage,
+    EngineEvent, EventKind, FailureKind, PageExtent, RepairNote, TilePriority, TileState,
+    TileTicket, TimeoutStage,
 };
 
 /// The client behind the bridge's opaque handle. `None` after `close`.
@@ -425,7 +435,7 @@ impl EngineEvent {
             has_request: false,
             slot: 0,
             page_count: 0,
-            repaired: false,
+            repairs: Vec::new(),
             will_restart: false,
             failure: FailureKind::None,
             timeout: TimeoutStage::None,
@@ -441,11 +451,17 @@ impl From<Event> for EngineEvent {
         match event {
             Event::Opened {
                 page_count,
-                repaired,
+                repairs,
                 ..
             } => Self {
                 page_count,
-                repaired,
+                repairs: repairs
+                    .into_iter()
+                    .map(|r| RepairNote {
+                        code: r.code,
+                        message: r.message,
+                    })
+                    .collect(),
                 ..Self::empty(EventKind::Opened)
             },
             Event::TileReady { request, slot } => Self {
@@ -502,7 +518,7 @@ impl From<Event> for EngineEvent {
 mod tests {
     use std::fs;
 
-    use vellora_ipc::{RequestId, SlotId};
+    use vellora_ipc::{Repair, RequestId, SlotId};
 
     use super::*;
     use crate::process::{Crash, Termination};
@@ -515,6 +531,7 @@ mod tests {
         for expected in [
             "namespace vellora",
             "struct EngineEvent",
+            "struct RepairNote",
             "enum class EventKind",
             "struct EngineClient final : public ::rust::Opaque",
             "::rust::Box<::vellora::EngineClient> open(::rust::Str path)",
@@ -572,9 +589,19 @@ mod tests {
         let opened = EngineEvent::from(Event::Opened {
             page_count: 10_000,
             page_sizes: Vec::new(),
-            repaired: true,
+            repairs: vec![Repair {
+                code: "xref-unreadable".into(),
+                message: "cross-reference unreadable".into(),
+            }],
         });
-        assert_eq!((opened.page_count, opened.repaired), (10_000, true));
+        assert_eq!(opened.page_count, 10_000);
+        assert_eq!(
+            opened.repairs,
+            [RepairNote {
+                code: "xref-unreadable".into(),
+                message: "cross-reference unreadable".into(),
+            }]
+        );
     }
 
     #[test]

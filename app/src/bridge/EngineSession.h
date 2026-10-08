@@ -11,6 +11,7 @@
 #include <QObject>
 #include <QSizeF>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <optional>
 
@@ -54,7 +55,8 @@ public:
     void pollNow();
 
 signals:
-    void opened(quint32 pageCount, bool repaired);
+    // `repairs`: one line each for why the engine had to repair the document (empty if it did not).
+    void opened(quint32 pageCount, const QStringList& repairs);
     void tileReady(quint64 request);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);

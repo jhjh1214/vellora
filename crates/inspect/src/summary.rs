@@ -2,7 +2,7 @@
 //! `docs/user/cli.md`: renaming a field or changing its meaning is a breaking change.
 
 use serde::Serialize;
-use vellora_cos::{CryptMethod, EncryptionInfo, PasswordRole, RepairReason};
+use vellora_cos::{CryptMethod, EncryptionInfo, PasswordRole};
 
 /// What `vellora inspect` knows about a document.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -174,26 +174,6 @@ pub struct Features {
     pub optional_content: bool,
     /// A signature field (`/FT /Sig`) in the form or on a page.
     pub signature_fields: bool,
-}
-
-/// One line for a [`RepairReason`].
-pub(crate) fn describe_repair(reason: &RepairReason) -> String {
-    match reason {
-        RepairReason::XrefUnreadable(kind) => format!("cross-reference unreadable ({kind})"),
-        RepairReason::XrefUndecodable => "cross-reference stream could not be decoded".into(),
-        RepairReason::RootEntryInvalid => "/Root missing or not pointing at an object".into(),
-        RepairReason::ObjectOffsetInvalid { number } => {
-            format!("object {number} is not where the cross-reference says")
-        }
-        RepairReason::ObjectRecovered { number, recovery } => {
-            format!("object {number} needed a repair ({recovery:?})")
-        }
-        RepairReason::TrailerSynthesized => "no usable trailer; built from the catalog".into(),
-        RepairReason::ObjectStreamNotExpanded { stream } => {
-            format!("object stream {stream} could not be decoded; its objects are missing")
-        }
-        other => format!("{other:?}"),
-    }
 }
 
 #[cfg(test)]

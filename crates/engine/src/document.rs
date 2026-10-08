@@ -1,14 +1,16 @@
 //! Opening a document: the same bytes go to `cos` and to PDFium, and the two are compared.
 //!
 //! PDFium renders; `cos` is the parser Vellora trusts to read and (later) write the file
-//! (ADR-0002). If they disagree about the file, the document is flagged `repaired` so the UI can
-//! say so, instead of silently showing what only one of them understood.
+//! (ADR-0002). If they disagree about the file, the document carries the reasons (`repairs`) so the UI
+//! can say so, instead of silently showing what only one of them understood.
 
 use std::fs::File;
 use std::sync::Arc;
 
-use vellora_cos::{ObjectStore, RepairReason};
-use vellora_ipc::{MAX_PAGE_SIZES_PER_MESSAGE, PageSize};
+use vellora_cos::ObjectStore;
+use vellora_ipc::{
+    MAX_PAGE_SIZES_PER_MESSAGE, MAX_REPAIR_MESSAGE_BYTES, MAX_REPAIRS, PageSize, Repair,
+};
 use vellora_render::{DocHandle, Renderer};
 use vellora_shm::MappedFile;
 
@@ -48,7 +50,8 @@ pub(crate) struct Document {
     pub(crate) page_count: u32,
     /// The first pages' sizes (at most [`MAX_PAGE_SIZES_PER_MESSAGE`]).
     pub(crate) page_sizes: Vec<PageSize>,
-    pub(crate) repaired: bool,
+    /// Why the document counts as repaired; empty when it does not.
+    pub(crate) repairs: Vec<Repair>,
 }
 
 impl Document {
@@ -64,8 +67,8 @@ impl Document {
         let page_count =
             u32::try_from(pdfium_pages).map_err(|_| OpenError::TooManyPages(pdfium_pages))?;
 
-        let check = cross_check(mapped.as_slice(), pdfium_pages as u64);
-        let mut repaired = check.repaired;
+        let mut check = CrossCheck::default();
+        compare(mapped.as_slice(), pdfium_pages as u64, &mut check);
 
         let first_chunk = pdfium_pages.min(MAX_PAGE_SIZES_PER_MESSAGE);
         let mut page_sizes = Vec::with_capacity(first_chunk);
@@ -77,17 +80,28 @@ impl Document {
                 other => {
                     tracing::debug!(page, ?other, "page could not be measured, using Letter");
                     page_sizes.push(FALLBACK_PAGE_SIZE);
-                    repaired = true;
+                    check.flag(
+                        "page-unmeasurable",
+                        &format!(
+                            "page {} could not be measured; Letter size is shown",
+                            page + 1
+                        ),
+                    );
                 }
             }
         }
 
-        tracing::info!(page_count, repaired, "document opened");
+        let repairs = check.finish().repairs;
+        tracing::info!(
+            page_count,
+            repaired = !repairs.is_empty(),
+            "document opened"
+        );
         Ok(Self {
             handle,
             page_count,
             page_sizes,
-            repaired,
+            repairs,
         })
     }
 }
@@ -99,68 +113,108 @@ fn sane(points: f32) -> bool {
 /// What `cos` made of a file that PDFium reports `pdfium_pages` pages for.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct CrossCheck {
-    /// The two disagree, or `cos` had to repair the file to read it.
-    pub(crate) repaired: bool,
-    /// Why, for the debug log. These can quote the document, so they are never logged above
-    /// debug level.
-    pub(crate) notes: Vec<String>,
+    /// Why the document counts as repaired; empty when it does not. `cos` had to repair the file
+    /// to read it, or the two parsers disagree. Holds at most [`MAX_REPAIRS`] entries.
+    pub(crate) repairs: Vec<Repair>,
+    /// Findings past the cap, which [`Self::finish`] reports as one last entry.
+    omitted: usize,
 }
 
-/// Reads `bytes` with `cos` and compares it with PDFium's page count.
+impl CrossCheck {
+    /// Records one finding. The text is `cos`'s and the engine's own wording, which names object
+    /// numbers and counts but never quotes the document.
+    fn flag(&mut self, code: &str, message: &str) {
+        if self.repairs.len() + 1 < MAX_REPAIRS {
+            self.repairs.push(Repair {
+                code: code.to_owned(),
+                message: truncated(message, MAX_REPAIR_MESSAGE_BYTES),
+            });
+        } else {
+            self.omitted += 1;
+        }
+    }
+
+    /// Closes the list: findings past the cap become one entry saying how many there were.
+    fn finish(mut self) -> Self {
+        if self.omitted > 0 {
+            let message = format!("{} more repairs are not listed", self.omitted);
+            self.repairs.push(Repair {
+                code: "more-repairs".to_owned(),
+                message,
+            });
+            self.omitted = 0;
+        }
+        self
+    }
+}
+
+/// `text` cut to at most `max` bytes at a character boundary.
+fn truncated(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+/// Reads `bytes` with `cos` and compares it with PDFium's page count, adding what differs to
+/// `check`.
 ///
 /// The page walk stops one page past `pdfium_pages`: a disagreement is already certain by then,
 /// and a hostile page tree cannot make the check run longer than the document it describes.
 ///
 /// PDFium is not asked for page references (the narrow binding exposes none), so only the page
 /// count is compared.
-pub(crate) fn cross_check(bytes: &[u8], pdfium_pages: u64) -> CrossCheck {
-    let mut check = CrossCheck::default();
-    let mut flag = |note: String| {
-        check.repaired = true;
-        check.notes.push(note);
-    };
-
+fn compare(bytes: &[u8], pdfium_pages: u64, check: &mut CrossCheck) {
     let store = match ObjectStore::open(bytes, vellora_cos::Limits::default()) {
         Ok(store) => store,
         Err(error) => {
-            flag(format!("cos cannot read the file: {error}"));
-            return check;
+            check.flag(
+                "cos-unreadable",
+                &format!("cos cannot read the file: {error}"),
+            );
+            return;
         }
     };
     // Rebuild a damaged cross-reference now, so that the page walk below does not depend on
     // which object happens to be read first (M0 task 13 findings).
     if let Err(error) = store.settle() {
-        flag(format!("cos cannot settle the cross-reference: {error}"));
-        return check;
+        check.flag(
+            "cos-unsettled",
+            &format!("cos cannot settle the cross-reference: {error}"),
+        );
+        return;
     }
     if store.is_locked() {
-        flag("cos cannot unlock the document with the empty password".to_owned());
-        return check;
+        check.flag(
+            "cos-locked",
+            "cos cannot unlock the document with the empty password",
+        );
+        return;
     }
 
     let mut walked = 0_u64;
     for page in store.pages() {
         match page {
             Ok(_) => walked += 1,
-            Err(error) => flag(format!("cos cannot read a page: {error}")),
+            Err(error) => check.flag(
+                "cos-page-unreadable",
+                &format!("cos cannot read a page: {error}"),
+            ),
         }
         if walked > pdfium_pages {
             break;
         }
     }
     if walked != pdfium_pages {
-        flag(format!(
-            "cos finds {walked} pages where PDFium finds {pdfium_pages}"
-        ));
+        check.flag(
+            "page-count-mismatch",
+            &format!("cos finds {walked} pages where PDFium finds {pdfium_pages}"),
+        );
     }
     for reason in store.repaired() {
-        flag(describe(&reason));
+        check.flag(reason.code(), &reason.to_string());
     }
-    check
-}
-
-fn describe(reason: &RepairReason) -> String {
-    format!("cos repaired the file: {reason:?}")
 }
 
 #[cfg(test)]
@@ -168,6 +222,12 @@ mod tests {
     use std::fmt::Write as _;
 
     use super::*;
+
+    fn cross_check(bytes: &[u8], pdfium_pages: u64) -> CrossCheck {
+        let mut check = CrossCheck::default();
+        compare(bytes, pdfium_pages, &mut check);
+        check.finish()
+    }
 
     /// A valid PDF of `pages` blank pages with a classic xref table.
     fn pdf(pages: usize) -> Vec<u8> {
@@ -203,6 +263,10 @@ mod tests {
         out.into_bytes()
     }
 
+    fn codes(check: &CrossCheck) -> Vec<&str> {
+        check.repairs.iter().map(|r| r.code.as_str()).collect()
+    }
+
     #[test]
     fn a_clean_file_that_both_parsers_agree_on_is_not_repaired() {
         for pages in [0, 1, 7] {
@@ -216,11 +280,15 @@ mod tests {
         let file = pdf(3);
         for pdfium in [2, 4, 0] {
             let check = cross_check(&file, pdfium);
-            assert!(check.repaired, "PDFium says {pdfium}");
+            assert_eq!(
+                codes(&check),
+                ["page-count-mismatch"],
+                "PDFium says {pdfium}"
+            );
             assert!(
-                check.notes.iter().any(|note| note.contains("PDFium finds")),
+                check.repairs[0].message.contains("PDFium finds"),
                 "{:?}",
-                check.notes
+                check.repairs
             );
         }
     }
@@ -228,13 +296,13 @@ mod tests {
     #[test]
     fn the_page_walk_stops_one_page_past_what_pdfium_found() {
         // 5000 pages against PDFium's 1: the check must report the mismatch without walking all
-        // of them. It cannot say how many were walked, so look at the note's count instead.
+        // of them. It cannot say how many were walked, so look at the message's count instead.
         let check = cross_check(&pdf(5000), 1);
-        assert!(check.repaired);
+        assert_eq!(codes(&check), ["page-count-mismatch"]);
         assert!(
-            check.notes.iter().any(|n| n.contains("finds 2 pages")),
+            check.repairs[0].message.contains("finds 2 pages"),
             "{:?}",
-            check.notes
+            check.repairs
         );
     }
 
@@ -247,11 +315,23 @@ mod tests {
             .expect("startxref");
         file[at..at + 9].copy_from_slice(b"startxraf");
         let check = cross_check(&file, 2);
-        assert!(check.repaired);
+        assert_ne!(check.repairs, Vec::<Repair>::new());
         assert!(
-            check.notes.iter().any(|note| note.contains("repaired")),
+            check
+                .repairs
+                .iter()
+                .all(|r| r.code != "page-count-mismatch"),
             "{:?}",
-            check.notes
+            check.repairs
+        );
+        // The reason is cos's own wording and code, not a Debug dump.
+        assert!(
+            check
+                .repairs
+                .iter()
+                .all(|r| !r.message.contains("RepairReason")),
+            "{:?}",
+            check.repairs
         );
     }
 
@@ -259,8 +339,40 @@ mod tests {
     fn a_file_cos_cannot_read_is_flagged_not_fatal() {
         for garbage in [&b""[..], b"not a pdf at all", &[0xFF; 64]] {
             let check = cross_check(garbage, 1);
-            assert!(check.repaired, "{garbage:?}");
-            assert!(check.notes.len() == 1, "{:?}", check.notes);
+            assert_eq!(check.repairs.len(), 1, "{garbage:?}: {:?}", check.repairs);
+            assert!(check.repairs[0].code.starts_with("cos-"), "{garbage:?}");
         }
+    }
+
+    #[test]
+    fn a_flood_of_findings_is_cut_to_the_cap_with_a_count() {
+        let mut check = CrossCheck::default();
+        for i in 0..100 {
+            check.flag("object-recovered", &format!("object {i} needed a repair"));
+        }
+        let check = check.finish();
+        assert_eq!(check.repairs.len(), MAX_REPAIRS);
+        let last = check.repairs.last().expect("a last entry");
+        assert_eq!(last.code, "more-repairs");
+        assert_eq!(
+            last.message,
+            format!("{} more repairs are not listed", 100 - (MAX_REPAIRS - 1))
+        );
+        // Exactly at the cap needs no summary entry.
+        let mut check = CrossCheck::default();
+        for _ in 0..MAX_REPAIRS - 1 {
+            check.flag("x", "y");
+        }
+        assert_eq!(check.finish().repairs.len(), MAX_REPAIRS - 1);
+    }
+
+    #[test]
+    fn long_text_is_cut_on_a_character_boundary() {
+        let long = "é".repeat(MAX_REPAIR_MESSAGE_BYTES);
+        let mut check = CrossCheck::default();
+        check.flag("x", &long);
+        let message = &check.finish().repairs[0].message;
+        assert!(message.len() <= MAX_REPAIR_MESSAGE_BYTES);
+        assert!(message.chars().all(|c| c == 'é'));
     }
 }

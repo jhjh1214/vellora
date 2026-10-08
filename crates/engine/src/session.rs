@@ -323,7 +323,7 @@ impl Host<'_> {
                 let response = Response::Opened {
                     page_count: document.page_count,
                     page_sizes: document.page_sizes.clone(),
-                    repaired: document.repaired,
+                    repairs: document.repairs.clone(),
                 };
                 *self.document = Some(Arc::new(document));
                 response

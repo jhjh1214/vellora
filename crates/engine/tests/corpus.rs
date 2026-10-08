@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use support::pdfium_path;
+use vellora_cos::{Limits, ObjectStore};
 use vellora_engine_client::{Client, ClientConfig, Event, TileRequest};
-use vellora_ipc::{Priority, SlotId, TileRect};
+use vellora_ipc::{Priority, Repair, SlotId, TileRect};
 use vellora_shm::SlotGeometry;
 
 /// How long one file may take from open to its first tile.
@@ -78,7 +79,14 @@ fn classify_refusal(message: String) -> Outcome {
     }
 }
 
-fn run_one(path: &Path) -> Outcome {
+/// What the engine made of one file: how it went, and what it said about repairs when it opened.
+struct Run {
+    outcome: Outcome,
+    /// `None` when the document never opened.
+    repairs: Option<Vec<Repair>>,
+}
+
+fn run_one(path: &Path) -> Run {
     let mut config = ClientConfig::new(
         env!("CARGO_BIN_EXE_vellora-engine"),
         SlotGeometry::new(2, 1 << 20).unwrap(),
@@ -90,8 +98,14 @@ fn run_one(path: &Path) -> Outcome {
     config.max_restarts = 0;
     let client = match Client::open(config, path) {
         Ok(client) => client,
-        Err(e) => return Outcome::Rejected(format!("client: {e}")),
+        Err(e) => {
+            return Run {
+                outcome: Outcome::Rejected(format!("client: {e}")),
+                repairs: None,
+            };
+        }
     };
+    let mut repairs = None;
     let deadline = Instant::now() + PATIENCE;
     let mut requested = None;
     let outcome = loop {
@@ -104,8 +118,9 @@ fn run_one(path: &Path) -> Outcome {
                 Event::Opened {
                     page_count,
                     page_sizes,
-                    ..
+                    repairs: said,
                 } => {
+                    repairs = Some(said);
                     let Some(size) = page_sizes.first().filter(|_| page_count > 0) else {
                         done = Some(Outcome::Rendered);
                         break;
@@ -159,7 +174,37 @@ fn run_one(path: &Path) -> Outcome {
         }
     };
     client.close();
-    outcome
+    Run { outcome, repairs }
+}
+
+/// Engine findings where `cos` repaired nothing: PDFium and `cos` disagree (a page count, a page
+/// PDFium cannot measure, an encrypted file PDFium opened and `cos` cannot unlock, a page `cos`
+/// cannot read). The notice is right to say so, but it is not a `cos` repair.
+const DISAGREEMENTS: [&str; 4] = [
+    "page-count-mismatch",
+    "page-unmeasurable",
+    "cos-locked",
+    "cos-page-unreadable",
+];
+
+/// Whether `cos` had to repair the file to read it all: it cannot open or settle it, or reading
+/// every page leaves repair notes. Written against `cos` directly, not against the engine's own
+/// check, so that the two can disagree. `None` for a document `cos` cannot unlock without a
+/// password, whose repairs cannot be judged before the password path (M1 task 7).
+fn cos_repairs(path: &Path) -> Option<bool> {
+    let bytes = fs::read(path).unwrap();
+    let Ok(store) = ObjectStore::open(&bytes, Limits::default()) else {
+        return Some(true);
+    };
+    if store.settle().is_err() {
+        return Some(true);
+    }
+    if store.is_locked() {
+        return None;
+    }
+    // Page errors do not matter here; reading is what finds the damage.
+    store.pages().for_each(drop);
+    Some(!store.repaired().is_empty())
 }
 
 #[test]
@@ -178,16 +223,33 @@ fn corpus_opens_without_crashing() {
     let (mut rendered, mut opened, mut locked, mut malformed_total, mut malformed_bad) =
         (0, 0, 0, 0, 0);
     let mut problems = Vec::new();
+    // M1 task 6: the repair notice appears for every file cos repairs and for no other.
+    let (mut notices, mut disagreements) = (0, 0);
+    let mut notice_mismatches = Vec::new();
     for path in &files {
         let id = path.file_stem().unwrap().to_string_lossy().into_owned();
         let is_malformed = malformed.contains(&id);
         let started = Instant::now();
-        let outcome = run_one(path);
+        let Run { outcome, repairs } = run_one(path);
         let ms = started.elapsed().as_millis();
         println!(
             "{id}: {outcome:?} ({ms} ms){}",
             if is_malformed { " [malformed]" } else { "" }
         );
+        if let Some(repairs) = &repairs {
+            let from_cos = repairs
+                .iter()
+                .filter(|r| !DISAGREEMENTS.contains(&r.code.as_str()))
+                .count();
+            let expected = cos_repairs(path);
+            notices += usize::from(from_cos > 0);
+            disagreements += usize::from(from_cos == 0 && !repairs.is_empty());
+            if expected.is_some_and(|expected| expected != (from_cos > 0)) {
+                notice_mismatches.push(format!(
+                    "{id}: cos repairs = {expected:?}, engine said {repairs:?}"
+                ));
+            }
+        }
         match &outcome {
             Outcome::Rendered => {
                 rendered += 1;
@@ -215,7 +277,14 @@ fn corpus_opens_without_crashing() {
         share * 100.0,
         problems.len()
     );
+    println!(
+        "repair notice for {notices} documents; {disagreements} more only because PDFium and cos disagree"
+    );
     assert!(problems.is_empty(), "engine crashed or hung: {problems:#?}");
+    assert!(
+        notice_mismatches.is_empty(),
+        "the repair notice differs from what cos repairs: {notice_mismatches:#?}"
+    );
     assert!(
         share >= REQUIRED_OPEN_SHARE,
         "only {:.1}% of the corpus opened",
