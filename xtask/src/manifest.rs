@@ -25,6 +25,11 @@ pub(crate) struct Doc {
     pub(crate) license: String,
     pub(crate) categories: Vec<String>,
     pub(crate) notes: String,
+    /// The password that opens an encrypted document (the user password, as the user would type
+    /// it), for the corpus gate in `crates/engine/tests/corpus.rs`. Absent for documents that
+    /// open without one.
+    #[serde(default)]
+    pub(crate) password: Option<String>,
 }
 
 impl Manifest {
@@ -82,6 +87,12 @@ impl Doc {
         if self.categories.is_empty() || self.categories.iter().any(|c| c.trim().is_empty()) {
             return Err(format!("{id}: at least one non-empty category is required").into());
         }
+        // What the protocol accepts as a password (`vellora_ipc::MAX_PASSWORD_BYTES`, no NUL).
+        if let Some(password) = &self.password
+            && (password.len() > 256 || password.contains('\0'))
+        {
+            return Err(format!("{id}: password is longer than 256 bytes or contains NUL").into());
+        }
         Ok(())
     }
 }
@@ -131,6 +142,21 @@ mod tests {
         let no_cats = entry("a", "").replace("[\"x\"]", "[]");
         assert!(Manifest::parse(&no_cats).is_err());
         assert!(Manifest::parse(&entry("a", "surprise = 1")).is_err());
+        assert!(Manifest::parse(&entry("a", "password = \"a\\u0000b\"")).is_err());
+        let long = format!("password = \"{}\"", "p".repeat(257));
+        assert!(Manifest::parse(&entry("a", &long)).is_err());
+    }
+
+    #[test]
+    fn a_password_is_optional_and_may_be_any_text() {
+        let m = Manifest::parse(&format!(
+            "{}{}",
+            entry("a", ""),
+            entry("b", "password = \"h\\u00F4tel \\u2168\"")
+        ))
+        .unwrap();
+        assert_eq!(m.doc[0].password, None);
+        assert_eq!(m.doc[1].password.as_deref(), Some("hôtel Ⅸ"));
     }
 
     /// Guards the committed manifest against drift from the M0 task 1 requirements.

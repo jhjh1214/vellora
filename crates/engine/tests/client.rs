@@ -21,7 +21,7 @@ use vellora_engine_client::{
     Client, ClientConfig, ClientError, Event, ScaleBucket, TILE_PIXELS, TileKey, TileLookup,
     TileRequest,
 };
-use vellora_ipc::{PageSize, Priority, RequestId, SlotId, TileRect};
+use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId, SlotId, TileRect};
 use vellora_shm::SlotGeometry;
 
 /// Same tolerance as the render crate's golden test.
@@ -562,4 +562,147 @@ fn finished_tiles_survive_a_crash_and_requests_in_flight_do_not() {
             other => panic!("page {page}: {other:?}"),
         }
     }
+}
+
+// ---- M1 task 7: encrypted documents ----
+
+/// A one-page document with the user password `user-pw` (qpdf-made, from the `cos` fixtures).
+fn protected_file() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("protected.pdf");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cos/tests/fixtures/encryption/r6-aes-256-user-password.pdf");
+    fs::copy(source, &path).unwrap();
+    (dir, path)
+}
+
+/// The refusal that answers an `Open` that needs a password.
+fn is_refusal(event: &Event, expected: ErrorKind) -> bool {
+    matches!(event, Event::RequestFailed { request: None, kind, .. } if *kind == expected)
+}
+
+#[test]
+fn an_encrypted_document_asks_for_its_password_and_opens_with_it() {
+    let (_dir, path) = protected_file();
+    let client = Client::open(config(0), &path).unwrap();
+
+    wait_for(&client, |e| is_refusal(e, ErrorKind::PasswordRequired));
+    assert_eq!(
+        client.page_count(),
+        None,
+        "nothing is shown before the password"
+    );
+    // Three wrong attempts in a row: each is refused and the engine stays up.
+    for _ in 0..3 {
+        client.submit_password("wrong").unwrap();
+        wait_for(&client, |e| is_refusal(e, ErrorKind::WrongPassword));
+        assert_eq!(client.page_count(), None);
+    }
+    // Text the protocol cannot carry is refused before it is sent, and changes nothing.
+    assert!(matches!(
+        client.submit_password("nul\0inside"),
+        Err(ClientError::Protocol(_))
+    ));
+    client.submit_password("user-pw").unwrap();
+    let seen = wait_for(&client, |e| matches!(e, Event::Opened { .. }));
+    assert!(matches!(
+        seen.last(),
+        Some(Event::Opened { page_count: 1, repairs, .. }) if repairs.is_empty()
+    ));
+    assert_eq!(client.page_count(), Some(1));
+    // It renders, and a second password for the open document is refused client-side.
+    let request = client
+        .request_tile(&TileRequest {
+            page: 0,
+            scale: 1.0,
+            rect: TileRect {
+                x: 0,
+                y: 0,
+                width: 50,
+                height: 50,
+            },
+            slot: SlotId(0),
+            priority: Priority::Visible,
+        })
+        .unwrap();
+    wait_for(
+        &client,
+        |e| matches!(e, Event::TileReady { request: r, .. } if *r == request),
+    );
+    assert!(matches!(
+        client.submit_password("user-pw"),
+        Err(ClientError::AlreadyOpen)
+    ));
+}
+
+#[test]
+fn an_accepted_password_is_sent_again_to_a_restarted_engine() {
+    let (_dir, path) = protected_file();
+    let client = Client::open(config(3), &path).unwrap();
+    wait_for(&client, |e| is_refusal(e, ErrorKind::PasswordRequired));
+    client.submit_password("user-pw").unwrap();
+    wait_for(&client, |e| matches!(e, Event::Opened { .. }));
+
+    kill(client.engine_id().expect("an engine is running"));
+    // The new engine opens the document by itself: no refusal comes in between.
+    let seen = wait_for(&client, |e| matches!(e, Event::Opened { .. }));
+    assert!(
+        seen.iter()
+            .all(|e| !matches!(e, Event::RequestFailed { .. })),
+        "the user must not be asked again: {seen:?}"
+    );
+    assert!(seen.iter().any(|e| matches!(e, Event::EngineRestarted)));
+    assert_eq!(client.page_count(), Some(1));
+}
+
+#[test]
+fn a_refused_password_is_not_kept_for_a_restarted_engine() {
+    let (_dir, path) = protected_file();
+    let client = Client::open(config(3), &path).unwrap();
+    wait_for(&client, |e| is_refusal(e, ErrorKind::PasswordRequired));
+    client.submit_password("wrong").unwrap();
+    wait_for(&client, |e| is_refusal(e, ErrorKind::WrongPassword));
+
+    kill(client.engine_id().expect("an engine is running"));
+    // Asked from scratch (`PasswordRequired`), not answered with the refused password again
+    // (`WrongPassword`).
+    let seen = wait_for(&client, |e| matches!(e, Event::RequestFailed { .. }));
+    assert!(
+        is_refusal(seen.last().unwrap(), ErrorKind::PasswordRequired),
+        "{seen:?}"
+    );
+    client.submit_password("user-pw").unwrap();
+    wait_for(&client, |e| matches!(e, Event::Opened { .. }));
+}
+
+#[test]
+fn the_bridge_carries_the_password_answers() {
+    let (_dir, path) = protected_file();
+    let mut handle = bridge::open_with(config(0), &path).unwrap();
+    let next = |wanted: &dyn Fn(&bridge::EngineEvent) -> bool| {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            assert!(Instant::now() < deadline, "no matching event");
+            if let Some(event) = handle.poll_events().into_iter().find(|e| wanted(e)) {
+                return event;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let failed = |kind: bridge::FailureKind| {
+        move |e: &bridge::EngineEvent| {
+            e.kind == EventKind::RequestFailed && !e.has_request && e.failure == kind
+        }
+    };
+    next(&failed(bridge::FailureKind::PasswordRequired));
+    handle.submit_password("wrong").unwrap();
+    next(&failed(bridge::FailureKind::WrongPassword));
+    handle.submit_password("user-pw").unwrap();
+    let opened = next(&|e| e.kind == EventKind::Opened);
+    assert_eq!(opened.page_count, 1);
+    handle.close();
+    assert!(matches!(
+        handle.submit_password("user-pw"),
+        Err(ClientError::Closed)
+    ));
 }

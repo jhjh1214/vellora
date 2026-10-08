@@ -8,7 +8,7 @@
 //! read-side functions are declared: no save, edit or page-generation entry point exists here
 //! (ADR-0002). `FPDF_CALLCONV` is empty in the public headers, so everything is `extern "C"`.
 
-use std::ffi::{c_int, c_ulong, c_void};
+use std::ffi::{CStr, c_int, c_ulong, c_void};
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -236,7 +236,7 @@ impl Api {
     /// Opens `pdf` through `FPDF_FILEACCESS` and returns its page count.
     pub(crate) fn page_count(&self, pdf: &[u8]) -> Result<usize, Error> {
         let source = Source::new(pdf);
-        let document = self.load_document(&source, pdf.len())?;
+        let document = self.load_document(&source, pdf.len(), None)?;
         // SAFETY: `document.handle` is a live handle returned just above.
         let count = unsafe { (self.get_page_count)(document.handle) };
         let count = usize::try_from(count).map_err(|_| Error::Open(self.last_error()));
@@ -246,12 +246,17 @@ impl Api {
     }
 
     /// Opens a document that stays open until [`Api::close`]. `bytes` is kept alive with it.
-    pub(crate) fn open(&self, bytes: DocumentBytes) -> Result<OpenDocument, Error> {
+    /// `password` is passed to PDFium as given; `None` is no password.
+    pub(crate) fn open(
+        &self,
+        bytes: DocumentBytes,
+        password: Option<&CStr>,
+    ) -> Result<OpenDocument, Error> {
         let slice: &[u8] = AsRef::<[u8]>::as_ref(&*bytes);
         // The addresses of the `Source` and of the bytes behind the `Arc` do not change when the
         // `OpenDocument` moves, so PDFium's pointers to them stay valid.
         let source = Box::new(Source::new(slice));
-        let loaded = self.load_document(&source, slice.len())?;
+        let loaded = self.load_document(&source, slice.len(), password)?;
         // SAFETY: `loaded.handle` is live.
         let count = unsafe { (self.get_page_count)(loaded.handle) };
         let Ok(page_count) = usize::try_from(count) else {
@@ -384,11 +389,16 @@ impl Api {
         })
     }
 
-    /// Calls `FPDF_LoadCustomDocument` over `source`.
+    /// Calls `FPDF_LoadCustomDocument` over `source`, with `password` or none.
     // `c_ulong` is 32 bits on Windows and 64 bits elsewhere, so widening it to `u64` is only a
     // no-op on some targets.
     #[allow(clippy::useless_conversion)]
-    fn load_document(&self, source: &Source, len: usize) -> Result<Loaded, Error> {
+    fn load_document(
+        &self,
+        source: &Source,
+        len: usize,
+        password: Option<&CStr>,
+    ) -> Result<Loaded, Error> {
         let len = c_ulong::try_from(len).map_err(|_| Error::DocumentTooLarge {
             len: len as u64,
             max: u64::from(c_ulong::MAX),
@@ -400,8 +410,14 @@ impl Api {
         });
         // SAFETY: `access` is returned with the handle, and `source` (with the bytes it views) is
         // kept by the caller until the document is closed. The callback only reads through
-        // `param`. A null password means none.
-        let handle = unsafe { (self.load_custom_document)(&raw mut *access, ptr::null()) };
+        // `param`. The password is a NUL-terminated string that the caller keeps alive for the
+        // call; a null password means none.
+        let handle = unsafe {
+            (self.load_custom_document)(
+                &raw mut *access,
+                password.map_or(ptr::null(), CStr::as_ptr),
+            )
+        };
         if handle.is_null() {
             return Err(Error::Open(self.last_error()));
         }

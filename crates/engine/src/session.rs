@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use vellora_ipc::{
-    ErrorKind, MAX_ERROR_MESSAGE_BYTES, PROTOCOL_VERSION, Priority, Request, RequestId, Response,
-    SlotId, check_version, read_frame, write_frame,
+    ErrorKind, MAX_ERROR_MESSAGE_BYTES, PROTOCOL_VERSION, Password, Priority, Request, RequestId,
+    Response, SlotId, check_version, read_frame, write_frame,
 };
 use vellora_render::{self as render, Renderer, TileRect, TileRequest};
 use vellora_shm::{HandleToken, TileRegion};
@@ -281,7 +281,13 @@ impl Host<'_> {
                 )),
                 Flow::Continue,
             ),
-            Request::Open { handle_token } => (Some(self.open(handle_token)), Flow::Continue),
+            Request::Open {
+                handle_token,
+                ref password,
+            } => (
+                Some(self.open(handle_token, password.as_ref())),
+                Flow::Continue,
+            ),
             Request::RenderTile {
                 req_id,
                 page,
@@ -303,7 +309,7 @@ impl Host<'_> {
         }
     }
 
-    fn open(&mut self, handle_token: u64) -> Response {
+    fn open(&mut self, handle_token: u64, password: Option<&Password>) -> Response {
         if self.document.is_some() {
             return error_response(
                 None,
@@ -318,7 +324,7 @@ impl Host<'_> {
                 &"the handle token does not name the document this engine was started with",
             );
         }
-        match Document::open(self.renderer, self.file, self.max_document_bytes) {
+        match Document::open(self.renderer, self.file, self.max_document_bytes, password) {
             Ok(document) => {
                 let response = Response::Opened {
                     page_count: document.page_count,
@@ -328,8 +334,8 @@ impl Host<'_> {
                 *self.document = Some(Arc::new(document));
                 response
             }
-            // The file stays available, so the UI may try again (for example after a fix).
-            Err(error) => error_response(None, ErrorKind::OpenFailed, &error),
+            // The file stays available, so the UI may try again: with a password, or after a fix.
+            Err(error) => error_response(None, error.kind(), &error),
         }
     }
 

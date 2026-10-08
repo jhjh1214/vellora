@@ -40,6 +40,21 @@ QString EngineSession::open(const QString& path) {
     return {};
 }
 
+QString EngineSession::submitPassword(const QString& password) {
+    if (!m_client) {
+        return tr("No document is open.");
+    }
+    QByteArray utf8 = password.toUtf8();
+    QString error;
+    try {
+        (*m_client)->submit_password(rust::Str(utf8.constData(), static_cast<size_t>(utf8.size())));
+    } catch (const std::exception& failure) {
+        error = QString::fromUtf8(failure.what());
+    }
+    utf8.fill('\0');
+    return error;
+}
+
 void EngineSession::close() {
     m_timer.stop();
     if (m_client) {
@@ -138,6 +153,11 @@ void EngineSession::dispatch(const EngineEvent& event) {
         emit tileReady(event.request);
         break;
     case EventKind::RequestFailed:
+        if (!event.has_request && (event.failure == FailureKind::PasswordRequired ||
+                                   event.failure == FailureKind::WrongPassword)) {
+            emit passwordRequested(event.failure == FailureKind::WrongPassword);
+            break;
+        }
         emit requestFailed(event.has_request ? event.request : 0, toQString(event.message));
         break;
     case EventKind::EngineCrashed: {

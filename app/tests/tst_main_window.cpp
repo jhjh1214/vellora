@@ -1,12 +1,14 @@
 // The main window opens a document through the engine and shows its page count, and says when the
 // file had to be repaired.
 #include "MainWindow.h"
+#include "PasswordDialog.h"
 #include "RepairBar.h"
 #include "SyntheticPdf.h"
 
 #include <QDialog>
 #include <QFile>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -14,6 +16,17 @@
 #include <QTest>
 
 namespace {
+
+// Everything Qt logs (at any level) while a test runs, to prove that a password is not in it.
+QStringList g_logged;
+QtMessageHandler g_previousHandler = nullptr;
+
+void recordMessage(QtMsgType type, const QMessageLogContext& context, const QString& message) {
+    g_logged.append(message);
+    if (g_previousHandler) {
+        g_previousHandler(type, context, message);
+    }
+}
 
 // A valid file whose `startxref` keyword is spoilt, so that the engine rebuilds the table by
 // scanning; PDFium and `cos` both manage, and the engine reports the repair.
@@ -113,6 +126,139 @@ private slots:
         for (const auto* label : window.findChildren<QLabel*>()) {
             QCOMPARE(label->textFormat(), Qt::PlainText);
         }
+    }
+
+    void asksForThePasswordOfAnEncryptedFileAndOpensIt() {
+        g_logged.clear();
+        g_previousHandler = qInstallMessageHandler(recordMessage);
+        vellora::MainWindow window;
+        window.show();
+        struct Ask {
+            QString fileName;
+            int attempt;
+            int maxAttempts;
+            bool wrong;
+        };
+        QList<Ask> asked;
+        const QStringList answers = {QStringLiteral("hunter2-WRONG"), QStringLiteral("user-pw")};
+        window.setPasswordProvider([&](const QString& fileName, int attempt, int maxAttempts,
+                                       bool wrong) -> std::optional<QString> {
+            asked.append({fileName, attempt, maxAttempts, wrong});
+            return answers.value(asked.size() - 1);
+        });
+        QSignalSpy opened(&window.session(), &vellora::EngineSession::opened);
+
+        QVERIFY2(window.openDocument(QStringLiteral(VELLORA_PROTECTED_PDF)),
+                 qPrintable(window.documentStatus()));
+        QVERIFY(opened.wait(60'000));
+        qInstallMessageHandler(g_previousHandler);
+
+        QCOMPARE(asked.size(), 2);
+        QCOMPARE(asked.at(0).fileName, QStringLiteral("r6-aes-256-user-password.pdf"));
+        QCOMPARE(asked.at(0).attempt, 1);
+        QCOMPARE(asked.at(0).maxAttempts, 3);
+        QVERIFY(!asked.at(0).wrong);
+        QCOMPARE(asked.at(1).attempt, 2);
+        QVERIFY(asked.at(1).wrong);
+        QVERIFY2(window.documentStatus().contains(QStringLiteral("1 page")),
+                 qPrintable(window.documentStatus()));
+        QVERIFY(window.windowTitle().contains(QStringLiteral("r6-aes-256")));
+        // Neither password reached a log line.
+        for (const QString& line : std::as_const(g_logged)) {
+            QVERIFY2(!line.contains(QStringLiteral("hunter2")) &&
+                         !line.contains(QStringLiteral("user-pw")),
+                     qPrintable(line));
+        }
+    }
+
+    void givesUpAfterThreeWrongPasswords() {
+        vellora::MainWindow window;
+        window.show();
+        int asks = 0;
+        window.setPasswordProvider([&](const QString&, int, int, bool) -> std::optional<QString> {
+            ++asks;
+            return QStringLiteral("wrong");
+        });
+        QSignalSpy opened(&window.session(), &vellora::EngineSession::opened);
+        QVERIFY(window.openDocument(QStringLiteral(VELLORA_PROTECTED_PDF)));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.session().isOpen(), 60'000);
+        QCOMPARE(asks, vellora::MainWindow::kMaxPasswordAttempts);
+        QCOMPARE(opened.size(), 0);
+        QVERIFY2(window.documentStatus().startsWith(QStringLiteral("Cannot open")),
+                 qPrintable(window.documentStatus()));
+        QCOMPARE(window.session().pageCount(), 0U);
+        QCOMPARE(window.windowTitle(), QStringLiteral("Vellora"));
+    }
+
+    void cancellingThePromptClosesTheDocument() {
+        vellora::MainWindow window;
+        window.show();
+        int asks = 0;
+        window.setPasswordProvider([&](const QString&, int, int, bool) -> std::optional<QString> {
+            ++asks;
+            return std::nullopt;
+        });
+        QVERIFY(window.openDocument(QStringLiteral(VELLORA_PROTECTED_PDF)));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.session().isOpen(), 60'000);
+        QCOMPARE(asks, 1);
+        QVERIFY2(window.documentStatus().contains(QStringLiteral("password is required")),
+                 qPrintable(window.documentStatus()));
+    }
+
+    void neverAsksForADocumentThatNeedsNoPassword() {
+        vellora::MainWindow window;
+        window.show();
+        int asks = 0;
+        window.setPasswordProvider([&](const QString&, int, int, bool) -> std::optional<QString> {
+            ++asks;
+            return QStringLiteral("unused");
+        });
+        QSignalSpy opened(&window.session(), &vellora::EngineSession::opened);
+        QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
+        QVERIFY(opened.wait(60'000));
+        QCOMPARE(asks, 0);
+    }
+
+    void aPromptForAnOldDocumentDoesNotAskAboutTheNewOne() {
+        vellora::MainWindow window;
+        window.show();
+        int asks = 0;
+        window.setPasswordProvider([&](const QString&, int, int, bool) -> std::optional<QString> {
+            ++asks;
+            return QStringLiteral("user-pw");
+        });
+        QSignalSpy opened(&window.session(), &vellora::EngineSession::opened);
+        // The window queues its question when the engine asks. The user opens another file from
+        // the very next slot of the same signal, i.e. before the question can be shown.
+        bool reopened = false;
+        connect(&window.session(), &vellora::EngineSession::passwordRequested, &window, [&] {
+            if (!reopened) {
+                reopened = true;
+                QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
+            }
+        });
+        QVERIFY(window.openDocument(QStringLiteral(VELLORA_PROTECTED_PDF)));
+        QVERIFY(opened.wait(60'000));
+        QVERIFY(reopened);
+        QCOMPARE(opened.first().at(0).toUInt(), 3U);
+        QCOMPARE(asks, 0);
+    }
+
+    void thePasswordFieldHidesWhatIsTypedAndForgetsIt() {
+        vellora::PasswordDialog dialog(QStringLiteral("<b>a.pdf</b>"), 2, 3, true);
+        QCOMPARE(dialog.field()->echoMode(), QLineEdit::Password);
+        QVERIFY(dialog.field()->inputMethodHints().testFlag(Qt::ImhSensitiveData));
+        // The file name is untrusted: shown as text, never as markup.
+        QCOMPARE(dialog.message()->textFormat(), Qt::PlainText);
+        QVERIFY(dialog.message()->text().contains(QStringLiteral("<b>a.pdf</b>")));
+        QVERIFY(dialog.message()->text().contains(QStringLiteral("attempt 2 of 3")));
+        dialog.field()->setText(QStringLiteral("secret"));
+        QCOMPARE(dialog.takePassword(), QStringLiteral("secret"));
+        QVERIFY(dialog.field()->text().isEmpty());
+        QVERIFY(dialog.takePassword().isEmpty());
+
+        vellora::PasswordDialog first(QStringLiteral("a.pdf"), 1, 3, false);
+        QVERIFY(!first.message()->text().contains(QStringLiteral("not correct")));
     }
 
     void reportsAFileThatCannotBeOpened() {

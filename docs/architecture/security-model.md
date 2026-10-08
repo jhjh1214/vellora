@@ -29,6 +29,7 @@
 | Redaction leaks | Mandatory full rewrite + GC. Scrub metadata, outline, structure tree (Alt/ActualText), form values, thumbnails, OCR layers and attachments. Post-apply verification with independent extractors. |
 | Differential parsing (`cos` vs PDFium disagree) | Open-time cross-check → *Repaired* mode forces a normalised rewrite. Signatures are validated only through `cos`. |
 | Supply chain | `cargo-deny` (licenses, advisories, sources), reviewed dependency additions, PDFium pinned by SHA-256, CycloneDX SBOM per release, signed releases, reproducible builds as a goal |
+| Document passwords | The password goes from the UI's prompt to the engine in `Open` (UTF-8, at most 256 bytes) and nowhere else. It is never logged at any level (`Debug` is redacted; `crates/engine/tests/password.rs` runs the engine at `trace` and searches its log), never written to disk and never put in a setting or recent-files list. Every buffer the code controls is wiped when dropped (`zeroize`): the message, the frame buffers, the forms the engine tries (as typed, SASLprep, Latin-1). The client keeps an accepted password in memory only so that a crashed engine can reopen the document without asking again; a refused one is dropped at once. Not covered: copies the OS keeps (pipe buffers, swap) and PDFium's own copy inside the engine. |
 | Future plugins | Out-of-process only, same sandbox, broker-mediated capabilities. No in-process native plugins. |
 
 ## Privacy

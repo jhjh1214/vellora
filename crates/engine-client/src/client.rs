@@ -69,8 +69,8 @@ use std::time::{Duration, Instant};
 
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
-    ErrorKind, PROTOCOL_VERSION, PageSize, Priority, Repair, Request, RequestId, Response, SlotId,
-    TileRect, check_version, read_frame, write_frame,
+    ErrorKind, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request, RequestId,
+    Response, SlotId, TileRect, check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
 
@@ -189,6 +189,9 @@ pub enum ClientError {
     /// The client was closed.
     #[error("the client is closed")]
     Closed,
+    /// A password was given for a document that is already open.
+    #[error("the document is already open")]
+    AlreadyOpen,
     /// The tile cannot exist: a slot of the region is smaller than a tile.
     #[error("invalid tile")]
     InvalidTile,
@@ -411,6 +414,10 @@ struct State {
     ledger: Ledger,
     process: Option<EngineProcess>,
     opened: Option<OpenedInfo>,
+    /// The password the user gave, while the engine is taking it or has accepted it. Kept so that
+    /// an engine that is restarted after a crash can open the document again without asking; it is
+    /// dropped (and so wiped) when the engine refuses it, and with the client. Never logged.
+    password: Option<Password>,
     cache: TileCache,
     /// The cache entry each in-flight cached request is for.
     tile_keys: HashMap<RequestId, TileKey>,
@@ -580,6 +587,7 @@ impl Client {
                 ledger: Ledger::new(config.max_restarts),
                 process: None,
                 opened: None,
+                password: None,
                 cache: TileCache::new(config.geometry, config.cache_budget_bytes),
                 tile_keys: HashMap::new(),
                 startup: None,
@@ -606,6 +614,59 @@ impl Client {
             .spawn(move || watch(&watched))
             .map_err(ClientError::Thread)?;
         Ok(client)
+    }
+
+    /// Opens an encrypted document with `password`, after the engine answered `Open` with
+    /// [`ErrorKind::PasswordRequired`] or [`ErrorKind::WrongPassword`] (both arrive as
+    /// [`Event::RequestFailed`] with no request). The answer is [`Event::Opened`], or the same
+    /// failure again for a wrong password; the engine stays up between attempts.
+    ///
+    /// The client keeps the password in memory while the engine holds the document, so that an
+    /// engine restarted after a crash opens it without asking the user again. It is wiped when the
+    /// engine refuses it and when the client is dropped, and never written anywhere.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::AlreadyOpen`] if the document is open, [`ClientError::Protocol`] if the
+    /// password is not acceptable on the wire (it contains NUL, or is over 256 bytes),
+    /// [`ClientError::EngineUnavailable`] while the engine is down, [`ClientError::Closed`].
+    pub fn submit_password(&self, password: &str) -> Result<(), ClientError> {
+        let request;
+        {
+            let mut state = self.shared.state();
+            Self::check_running(&state)?;
+            if state.opened.is_some() {
+                return Err(ClientError::AlreadyOpen);
+            }
+            let Some(process) = state.process.as_ref() else {
+                return Err(ClientError::EngineUnavailable);
+            };
+            request = Request::Open {
+                handle_token: process.document_token().get(),
+                password: Some(Password::new(password)),
+            };
+            // The watchdog times the answer like any other `Open`.
+            state.startup = Some((
+                Stage::Open,
+                Instant::now() + self.shared.config.open_timeout,
+            ));
+            state.password = match &request {
+                Request::Open { password, .. } => password.clone(),
+                _ => None,
+            };
+        }
+        self.shared.watch.notify_all();
+        let sent = match self.shared.sink().0.as_mut() {
+            Some(writer) => write_frame(writer, &request).map_err(ClientError::from),
+            None => Err(ClientError::EngineUnavailable),
+        };
+        if sent.is_err() {
+            let mut state = self.shared.state();
+            state.password = None;
+            // Nothing was asked, so there is nothing to time.
+            state.startup = None;
+        }
+        sent
     }
 
     /// Asks for a tile. Returns the id its answer will carry.
@@ -909,10 +970,13 @@ fn launch(shared: &Shared) -> Result<Launched, ClientError> {
             protocol_version: PROTOCOL_VERSION,
         },
     )?;
+    // A restarted engine gets the password the user gave, if one was accepted before the crash.
+    let password = shared.state().password.clone();
     write_frame(
         &mut writer,
         &Request::Open {
             handle_token: process.document_token().get(),
+            password,
         },
     )?;
     Ok(Launched {
@@ -995,6 +1059,15 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
                             Event::Opened { .. } | Event::RequestFailed { request: None, .. }
                         ) {
                             state.startup = None;
+                        }
+                        if let Event::RequestFailed {
+                            request: None,
+                            kind: ErrorKind::PasswordRequired | ErrorKind::WrongPassword,
+                            ..
+                        } = &event
+                        {
+                            // Refused: nothing to keep for a restart.
+                            state.password = None;
                         }
                         if let Event::Opened {
                             page_count,

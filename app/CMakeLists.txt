@@ -54,6 +54,8 @@ corrosion_set_env_vars(vellora_engine_client "VELLORA_CXXBRIDGE_DIR=${VELLORA_CX
 add_library(vellora_shell STATIC
   src/MainWindow.cpp
   src/MainWindow.h
+  src/PasswordDialog.cpp
+  src/PasswordDialog.h
   src/RepairBar.cpp
   src/RepairBar.h
   src/canvas/CanvasController.cpp

@@ -4,7 +4,9 @@ function(vellora_add_test name source)
   qt_add_executable(${name} ${source})
   target_link_libraries(${name} PRIVATE vellora_shell Qt6::Test)
   target_compile_definitions(${name} PRIVATE
-    VELLORA_GOLDEN_PDF="${VELLORA_ROOT}/crates/engine/tests/fixtures/golden.pdf")
+    VELLORA_GOLDEN_PDF="${VELLORA_ROOT}/crates/engine/tests/fixtures/golden.pdf"
+    # One page, user password `user-pw` (made by crates/cos/tests/fixtures/encryption/generate.py).
+    VELLORA_PROTECTED_PDF="${VELLORA_ROOT}/crates/cos/tests/fixtures/encryption/r6-aes-256-user-password.pdf")
   vellora_stage_runtime(${name})
   add_test(NAME ${name} COMMAND ${name})
   # QTEST_FUNCTION_TIMEOUT makes Qt name the test function that hangs, before CTest's timeout kills
