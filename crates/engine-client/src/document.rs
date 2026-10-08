@@ -57,18 +57,30 @@ mod os {
     }
 }
 
-/// What identifies a version of a file: its length and modification time.
+/// What identifies a version of a file: its length, its modification time and, where the platform
+/// offers it, which file it is. The identity catches a replacement by a file of the same length
+/// written within the same clock tick, which the other two cannot tell apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Fingerprint {
     len: u64,
     modified: Option<SystemTime>,
+    /// Device and inode (Unix). Windows needs none: the sharing mode forbids replacing the file.
+    identity: Option<(u64, u64)>,
 }
 
 impl Fingerprint {
     fn of(meta: &fs::Metadata) -> Self {
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            Some((meta.dev(), meta.ino()))
+        };
+        #[cfg(not(unix))]
+        let identity = None;
         Self {
             len: meta.len(),
             modified: meta.modified().ok(),
+            identity,
         }
     }
 }
@@ -134,6 +146,7 @@ mod tests {
         Fingerprint {
             len,
             modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+            identity: None,
         }
     }
 
@@ -200,6 +213,19 @@ mod tests {
 
         drop(document);
         assert!(exclusive(&writer), "the lock outlived the document");
+    }
+
+    #[test]
+    fn a_replacement_with_the_same_length_and_time_is_still_a_different_file() {
+        let a = Fingerprint {
+            identity: Some((1, 100)),
+            ..fp(10, 5)
+        };
+        let b = Fingerprint {
+            identity: Some((1, 101)),
+            ..a
+        };
+        assert_eq!(seen(a).compare(Some(a), Some(b)), Some(Change::Replaced));
     }
 
     #[test]
