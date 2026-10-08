@@ -153,29 +153,6 @@ jobs:
       - run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
-      # TEMPORARY (M1 task 1): is the macOS canvas hang the runner or our present path? Runs the
-      # drawing test five times; a run still alive after 5 minutes is sampled (stack of every thread).
-      - name: TEMP macOS canvas hang probe
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        shell: bash
-        run: |
-          export QTEST_FUNCTION_TIMEOUT=900000
-          cd build/tests
-          for i in 1 2 3 4 5; do
-            ./tst_canvas_render -o "out-$i.txt,txt" &
-            pid=$!
-            for t in $(seq 1 150); do sleep 2; kill -0 $pid 2>/dev/null || break; done
-            if kill -0 $pid 2>/dev/null; then
-              echo "=== run $i: HUNG, sampling"
-              sample $pid 5 -file "sample-$i.txt" || true
-              head -200 "sample-$i.txt" || true
-              kill -9 $pid
-            else
-              echo "=== run $i: finished"
-            fi
-            tail -25 "out-$i.txt" || true
-          done
 
   deny:
     name: cargo-deny (licenses, advisories, sources)

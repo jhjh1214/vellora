@@ -21,8 +21,18 @@ app/
 │  │  ├─ CanvasWidget.*         # QRhiWidget: draws the controller's frame (shaders/ -> qsb)
 │  │  └─ CanvasView.*           # scroll area + wheel/keys around the widget
 │  ├─ commands/                 # CommandRegistry (every action), CommandPalette (Ctrl+Shift+P)
-│  └─ diagnostics/UiWatchdog.*  # logs UI event-loop stalls over 16 ms (debug builds)
+│  └─ diagnostics/             # Application (times event delivery), UiWatchdog (8 ms frame budget), DiagnosticsScript
 └─ tests/             # Qt Test suites; they run the real engine (cargo xtask pdfium fetch first)
 ```
 
 Build and test: see [`docs/dev/setup.md`](../docs/dev/setup.md).
+
+## Frame budget and the diagnostics script
+
+Our code gets 8 ms of every 16.7 ms frame. `diagnostics/UiWatchdog` counts what goes over it, in two measurements: the time `vellora::Application::notify` spends delivering one event (so handlers, timers, queued slots; paint and update requests are left out because they contain the window's vsynced present, which is not ours) and the time of every `CanvasWidget::render()`. Debug builds log every violation (`vellora.watchdog`); `VELLORA_UI_WATCHDOG=1|0` forces it. A test that wants the timing uses `VELLORA_TEST_MAIN` (`tests/VelloraTestMain.h`) instead of `QTEST_MAIN`.
+
+`DiagnosticsScript` scrolls one page per step and zooms in and out on the way (default: 2,000 pages, 20 zooms). `tst_canvas_render` runs it over a 10,000-page document and asserts zero over-budget samples. The app runs the same script with the hidden flag `vellora --diagnostics-script scroll-zoom <file.pdf>`, prints the report and exits 0.
+
+## macOS and the canvas test
+
+`tst_canvas_render` stays disabled on the macOS CI runner (set `VELLORA_TEST_GPU=1` to run it). Finding (M1 task 1, PR run with a temporary probe, five runs on `macos-15`): it is not a deadlock of the event loop. Stack samples of the four runs still going after 5 minutes show the UI thread busy, inside Qt's Metal present (`QRhiMetal::endOffscreenFrame` waiting for the command buffer), copying into GPU buffers and releasing them through Apple's paravirtualised GPU driver. The first run finished in 305 s (Windows, local: 62 s): 2,000 frames, 17 over 8 ms, worst `render()` 32.9 ms, worst handler 22.6 ms (Windows D3D11: worst 4.6 and 2.9 ms). So the earlier intermittent "hangs" are timeouts of a very slow virtual GPU, and the frame-time check cannot pass there. macOS frame times are measured on real hardware for M6.

@@ -5,6 +5,7 @@ Known gaps and ideas that are **not scheduled** in a milestone. Each entry links
 | Item | Found in | Notes |
 |---|---|---|
 | Rebuilding the xref of a damaged *encrypted* file that uses object streams loses those objects (`ObjectStreamNotExpanded`) | M0 task 11 | Needs a decrypt hook in `recovery::rebuild`; no corpus file hits it yet |
+| An incremental update of a damaged *encrypted* file (V2/R3 Standard handler) does not reopen: Encryption { kind: UnsupportedHandler }, found by the `write_roundtrip` fuzz smoke (uzz/fuzz_targets/write_roundtrip.rs:52) | M1 task 1 (PR CI, run 37775143833) | Unrelated to the UI work. Crash input: artifact `fuzz-artifacts-write_roundtrip` of that run (1,142 bytes, expires after the retention period); add it as a regression fixture when fixing |
 | Linearised output (fast web view) | M0 task 12 | Post-1.0 optimisation phase |
 | Render PDFium tiles straight into shared memory instead of one memcpy | M0 task 15 | Only if profiling shows the copy |
 | Tile region backed by a pagefile section on Windows / `shm_open` on macOS instead of an anonymous temp file | ADR-0015 | Linux `memfd` is M1 task 5 |
