@@ -11,6 +11,7 @@ members = [
     "crates/cli",
     "xtask",
     "tests/invariants",
+    "bench",
 ]
 
 [workspace.package]
