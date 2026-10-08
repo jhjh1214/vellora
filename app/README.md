@@ -6,7 +6,7 @@ Created in **M0 task 22b** ([`docs/milestones/M0.md`](../docs/milestones/M0.md))
 - **Never parses PDF data.** It talks to the engine only through the `engine-client` cxx bridge (ADR-0003, ADR-0004).
 - Every user action is a registered command (menus, toolbars, shortcuts and the command palette derive from the registry).
 
-Layout (items marked *later* arrive in the sub-tasks of M0 task 22):
+Layout:
 
 ```
 app/
@@ -20,7 +20,8 @@ app/
 │  │  ├─ CanvasController.*     # what is on screen, which tiles to ask for / cancel, zoom anchoring
 │  │  ├─ CanvasWidget.*         # QRhiWidget: draws the controller's frame (shaders/ -> qsb)
 │  │  └─ CanvasView.*           # scroll area + wheel/keys around the widget
-│  └─ commands/                 # later (22d): command registry, palette, keymap
+│  ├─ commands/                 # CommandRegistry (every action), CommandPalette (Ctrl+Shift+P)
+│  └─ diagnostics/UiWatchdog.*  # logs UI event-loop stalls over 16 ms (debug builds)
 └─ tests/             # Qt Test suites; they run the real engine (cargo xtask pdfium fetch first)
 ```
 

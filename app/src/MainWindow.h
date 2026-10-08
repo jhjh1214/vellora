@@ -5,6 +5,8 @@
 
 #include "bridge/EngineSession.h"
 #include "canvas/CanvasView.h"
+#include "commands/CommandPalette.h"
+#include "commands/CommandRegistry.h"
 
 #include <QMainWindow>
 
@@ -24,6 +26,8 @@ public:
     bool openDocument(const QString& path);
 
     EngineSession& session() { return m_session; }
+    CommandRegistry& commands() { return m_commands; }
+    CommandPalette& palette() { return *m_palette; }
     CanvasView& canvas() { return *m_canvas; }
     // What the status bar shows, for tests.
     QString documentStatus() const;
@@ -40,11 +44,14 @@ private slots:
     void onZoomChanged(double zoom);
 
 private:
+    void registerCommands();
     void setDocumentStatus(const QString& text);
 
     // The canvas uses the session, so the destructor deletes the canvas before this member goes.
     EngineSession m_session;
+    CommandRegistry m_commands;
     CanvasView* m_canvas = nullptr;
+    CommandPalette* m_palette = nullptr;
     QLabel* m_documentStatus = nullptr;
     QLabel* m_pageStatus = nullptr;
     QLabel* m_zoomStatus = nullptr;

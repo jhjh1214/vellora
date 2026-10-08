@@ -319,6 +319,11 @@ fn the_bridge_entry_points_drive_the_engine() {
     );
     assert_eq!(handle.page_size(99).width, 0.0);
 
+    assert_ne!(handle.engine_id(), 0, "an engine is running");
+    assert_eq!(
+        handle.engine_id(),
+        handle.client().unwrap().engine_id().unwrap()
+    );
     assert_eq!(bridge::tile_pixels(), 512);
     assert_eq!(bridge::bucket_scale(1.0), 1.0);
     assert_eq!(bridge::bucket_scale(0.0), 0.0);

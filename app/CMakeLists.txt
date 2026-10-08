@@ -62,6 +62,12 @@ add_library(vellora_shell STATIC
   src/canvas/CanvasWidget.h
   src/canvas/PageLayout.cpp
   src/canvas/PageLayout.h
+  src/commands/CommandPalette.cpp
+  src/commands/CommandPalette.h
+  src/commands/CommandRegistry.cpp
+  src/commands/CommandRegistry.h
+  src/diagnostics/UiWatchdog.cpp
+  src/diagnostics/UiWatchdog.h
   src/bridge/EngineSession.cpp
   src/bridge/EngineSession.h)
 target_include_directories(vellora_shell PUBLIC src "${VELLORA_CXXBRIDGE_DIR}/include")
