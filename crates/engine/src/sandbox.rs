@@ -81,8 +81,8 @@ impl Report {
 }
 
 /// Applies the file-system rules and the system-call filter to the calling thread and to every
-/// thread it creates afterwards. lso_readable are directories read access is granted on in
-/// addition to [READABLE] (the directory of the PDFium library, which the renderer thread loads
+/// thread it creates afterwards. `also_readable` are directories read access is granted on in
+/// addition to `READABLE` (the directory of the PDFium library, which the renderer thread loads
 /// after this call). Never fails: each part reports its own outcome.
 #[must_use]
 pub fn apply(also_readable: &[&Path]) -> Report {
