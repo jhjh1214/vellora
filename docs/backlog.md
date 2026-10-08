@@ -9,6 +9,7 @@ Known gaps and ideas that are **not scheduled** in a milestone. Each entry links
 | Linearised output (fast web view) | M0 task 12 | Post-1.0 optimisation phase |
 | Render PDFium tiles straight into shared memory instead of one memcpy | M0 task 15 | Only if profiling shows the copy |
 | Tile region backed by a pagefile section on Windows / `shm_open` on macOS instead of an anonymous temp file | ADR-0015 | Linux `memfd` is M1 task 5 |
+| Saving over the open file: on Windows the document is held with `FILE_SHARE_READ` only (no rename or delete), so M2's atomic save must close or hand over the handle (or the engine must be stopped) before the rename | M1 task 2 | Decide in M2 task 0 together with ADR-0009 (ChangeSets) |
 | Measure documents with very deep/wide page trees and thousands of annotations | ADR-0016 | Fold into the M2 or M3 benchmarks if one of them regresses |
 | `/Version` in the catalog overriding the header version in `vellora inspect` | M0 task 23 | Small; good first issue |
 | OSS-Fuzz integration | PLAN §I | Apply once the project is public and stable (M11 task 4) |

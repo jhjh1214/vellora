@@ -25,6 +25,9 @@ cxx = { workspace = true }
 [build-dependencies]
 cxx-build = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 

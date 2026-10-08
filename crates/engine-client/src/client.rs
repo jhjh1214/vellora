@@ -35,11 +35,28 @@
 //! the engine may still write it for a live request. Do not mix this with [`Client::request_tile`]
 //! on the same client: that call lets the caller pick slots the cache knows nothing about.
 //!
-//! # Not done
+//! # The client's own deadlines
 //!
-//! No deadline covers the handshake and `Open` (a hung start-up waits for the user to close the
-//! document), and the UI cannot yet ask for a stuck tile to be killed from its side; the engine's
-//! own hard deadline aborts it (task 19).
+//! The engine aborts itself when a tile passes its hard deadline, but a wedged process may never
+//! get there, and nothing inside the engine covers start-up. A watchdog thread therefore
+//! enforces three deadlines from the outside (all reported as [`Event::EngineTimeout`]):
+//!
+//! - [`Stage::Hello`]: the engine must say `Hello` within [`ClientConfig::hello_timeout`] of being
+//!   started.
+//! - [`Stage::Open`]: it must answer `Open` within [`ClientConfig::open_timeout`] of its `Hello`.
+//!   Both are final: the engine is killed and the client [`Event::Failed`]s without a restart,
+//!   because a start-up that hangs once will hang again on the same document.
+//! - [`Stage::Tile`]: while requests are in flight, *some* answer must arrive within twice the
+//!   engine's hard tile deadline. Otherwise the engine is killed, which the client handles like
+//!   any crash (the requests are listed as lost and the engine restarts within its budget). The
+//!   clock runs from the last answer, not from each request, because a request can wait in the
+//!   engine's queue behind others for longer than any one tile may take.
+//!
+//! # Changes to the file
+//!
+//! The document is opened so that other processes cannot write to it where the OS allows
+//! (see [`crate::document`]). At each engine restart the client also compares the file and its
+//! path with what it last saw and reports [`Event::DocumentChanged`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
@@ -59,6 +76,7 @@ use vellora_ipc::{
 use vellora_shm::{SlotGeometry, TileRegion};
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ReserveError, TileCache, TileKey};
+use crate::document::{self, Change, Seen};
 use crate::limits::ResourceLimits;
 use crate::process::{Crash, EngineProcess, SpawnConfig, SpawnError};
 
@@ -73,6 +91,16 @@ pub const TILE_PIXELS: u32 = 512;
 
 /// Bytes of one cached tile.
 const TILE_BYTES: u64 = TILE_PIXELS as u64 * TILE_PIXELS as u64 * 4;
+
+/// Default time from starting an engine to its `Hello`.
+pub const DEFAULT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default time from the engine's `Hello` to its answer to `Open`.
+pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many times the engine's hard tile deadline the client waits for any answer before it kills
+/// an engine that has requests in flight.
+const STALL_FACTOR: u32 = 2;
 
 /// How long a reader waits for a process whose pipe closed to finish exiting before killing it.
 const CRASH_GRACE: Duration = Duration::from_secs(2);
@@ -100,6 +128,11 @@ pub struct ClientConfig {
     pub max_restarts: u32,
     /// Bytes of finished and pending tiles the cache may hold.
     pub cache_budget_bytes: u64,
+    /// How long a new engine may take to say `Hello` before it is killed ([`Stage::Hello`]).
+    pub hello_timeout: Duration,
+    /// How long the engine may take to answer `Open` after its `Hello` before it is killed
+    /// ([`Stage::Open`]).
+    pub open_timeout: Duration,
 }
 
 impl ClientConfig {
@@ -115,8 +148,22 @@ impl ClientConfig {
             env: Vec::new(),
             max_restarts: DEFAULT_MAX_RESTARTS,
             cache_budget_bytes: DEFAULT_BUDGET_BYTES,
+            hello_timeout: DEFAULT_HELLO_TIMEOUT,
+            open_timeout: DEFAULT_OPEN_TIMEOUT,
         }
     }
+}
+
+/// What the engine failed to do in time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Stage {
+    /// Say `Hello` after being started.
+    Hello,
+    /// Answer `Open`.
+    Open,
+    /// Answer any of the requests in flight.
+    Tile,
 }
 
 /// Why a client call failed.
@@ -222,6 +269,23 @@ pub enum Event {
     },
     /// A new engine process is running; [`Event::Opened`] follows once it has the document.
     EngineRestarted,
+    /// The engine did not answer in time and was killed. For [`Stage::Hello`] and [`Stage::Open`]
+    /// the client gives up and no [`Event::Failed`] follows (this is the only report). For
+    /// [`Stage::Tile`] an [`Event::EngineCrashed`] follows at once, and the engine restarts if its
+    /// budget allows.
+    EngineTimeout {
+        /// What it failed to do.
+        stage: Stage,
+        /// How long the client waited: the configured timeout for `Hello` and `Open`, the time
+        /// since the last answer for `Tile`.
+        waited: Duration,
+    },
+    /// The file on disk is not what was opened. Reported when the engine restarts; the new engine
+    /// maps whatever is there now, so the page count and the pages may differ from before.
+    DocumentChanged {
+        /// How it differs.
+        change: Change,
+    },
     /// The client cannot continue (protocol mismatch, or the engine cannot be started again).
     /// Every later request fails.
     Failed {
@@ -351,9 +415,66 @@ struct State {
     cache: TileCache,
     /// The cache entry each in-flight cached request is for.
     tile_keys: HashMap<RequestId, TileKey>,
+    /// While the current engine is starting: what it owes us next and when that is overdue.
+    startup: Option<(Stage, Instant)>,
+    /// When the current engine last answered, or got its first request in flight after being idle.
+    activity: Instant,
+    /// The watchdog has killed the current engine; its reader is about to report the crash.
+    timed_out: bool,
+    /// The file as last reported to the user.
+    seen: Seen,
+}
+
+/// What the watchdog should do now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// The client is finished; the watchdog ends.
+    Done,
+    /// Nothing is overdue; look again at the given time, or when woken if there is none.
+    Wait(Option<Instant>),
+    /// The engine owes an answer it has not given.
+    Overdue(Stage),
 }
 
 impl State {
+    /// Registers a new request. The stall clock starts when the engine goes from idle to busy.
+    fn begin_request(&mut self, now: Instant) -> RequestId {
+        if self.ledger.pending.is_empty() {
+            self.activity = now;
+        }
+        self.ledger.begin()
+    }
+
+    /// Decides what the watchdog does at `now`; `hard` is the engine's hard tile deadline.
+    fn verdict(&self, hard: Duration, now: Instant) -> Verdict {
+        match self.phase {
+            Phase::Failed | Phase::Closed => return Verdict::Done,
+            // A new engine will start the clocks; a killed one is being replaced.
+            Phase::Restarting => return Verdict::Wait(None),
+            Phase::Running if self.timed_out => return Verdict::Wait(None),
+            Phase::Running => {}
+        }
+        if let Some((stage, deadline)) = self.startup {
+            // Tiles asked for during start-up wait for `Open`, which has its own deadline.
+            return if now >= deadline {
+                Verdict::Overdue(stage)
+            } else {
+                Verdict::Wait(Some(deadline))
+            };
+        }
+        if self.ledger.pending.is_empty() {
+            return Verdict::Wait(None);
+        }
+        // An absurd deadline (the tests' "never") overflows `Instant`: no limit then.
+        let limit = hard
+            .checked_mul(STALL_FACTOR)
+            .and_then(|stall| self.activity.checked_add(stall));
+        match limit {
+            Some(limit) if now >= limit => Verdict::Overdue(Stage::Tile),
+            limit => Verdict::Wait(limit),
+        }
+    }
+
     /// Updates the cache for what the engine just said about a request.
     fn settle_tile(&mut self, event: &Event) {
         match event {
@@ -384,12 +505,16 @@ struct Sink(Option<BufWriter<ChildStdin>>);
 #[derive(Debug)]
 struct Shared {
     config: ClientConfig,
+    path: PathBuf,
     document: File,
     region_file: File,
     region: TileRegion,
     state: Mutex<State>,
     sink: Mutex<Sink>,
+    /// Signals events to [`Client::wait_events`].
     wake: Condvar,
+    /// Signals the watchdog that a deadline may have changed.
+    watch: Condvar,
 }
 
 impl Shared {
@@ -406,6 +531,8 @@ impl Shared {
     fn push(&self, state: &mut State, event: Event) {
         state.events.push_back(event);
         self.wake.notify_all();
+        // Most events change what the watchdog waits for (a phase, an answer, a restart).
+        self.watch.notify_all();
     }
 }
 
@@ -443,7 +570,8 @@ impl Client {
     /// [`ClientError`] if the file cannot be opened, the region cannot be created or the engine
     /// cannot be started.
     pub fn open(config: ClientConfig, path: &Path) -> Result<Self, ClientError> {
-        let document = File::open(path).map_err(ClientError::Document)?;
+        let document = document::open_read_only(path).map_err(ClientError::Document)?;
+        let seen = Seen::new(&document, path).map_err(ClientError::Document)?;
         let (region, region_file) = TileRegion::create(config.geometry)?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
@@ -455,17 +583,30 @@ impl Client {
                 opened: None,
                 cache: TileCache::new(config.geometry, config.cache_budget_bytes),
                 tile_keys: HashMap::new(),
+                startup: None,
+                activity: Instant::now(),
+                timed_out: false,
+                seen,
             }),
             sink: Mutex::new(Sink(None)),
             wake: Condvar::new(),
+            watch: Condvar::new(),
             config,
+            path: path.to_owned(),
             document,
             region_file,
             region,
         });
         let launched = launch(&shared)?;
         install(&shared, launched, false)?;
-        Ok(Self { shared })
+        // From here on dropping the client closes it, which also ends the watchdog.
+        let client = Self { shared };
+        let watched = Arc::clone(&client.shared);
+        thread::Builder::new()
+            .name("vellora-engine-watchdog".into())
+            .spawn(move || watch(&watched))
+            .map_err(ClientError::Thread)?;
+        Ok(client)
     }
 
     /// Asks for a tile. Returns the id its answer will carry.
@@ -479,8 +620,9 @@ impl Client {
         let id = {
             let mut state = self.shared.state();
             Self::check_running(&state)?;
-            state.ledger.begin()
+            state.begin_request(Instant::now())
         };
+        self.shared.watch.notify_all();
         let request = Request::RenderTile {
             req_id: id,
             page: tile.page,
@@ -530,10 +672,11 @@ impl Client {
                 Err(ReserveError::Full) => return Ok(TileLookup::Full),
                 Err(error) => return Err(error.into()),
             };
-            let id = state.ledger.begin();
+            let id = state.begin_request(Instant::now());
             state.tile_keys.insert(id, key);
             (id, slot)
         };
+        self.shared.watch.notify_all();
         let request = Request::RenderTile {
             req_id: id,
             page: key.page,
@@ -710,6 +853,7 @@ impl Client {
             let _ = process.wait_timeout(CLOSE_GRACE);
         }
         self.shared.wake.notify_all();
+        self.shared.watch.notify_all();
     }
 
     fn check_running(state: &State) -> Result<(), ClientError> {
@@ -792,10 +936,15 @@ fn install(shared: &Arc<Shared>, launched: Launched, restarted: bool) -> Result<
         .map_err(ClientError::Thread)?;
     state.process = Some(process);
     state.phase = Phase::Running;
+    let now = Instant::now();
+    state.startup = Some((Stage::Hello, now + shared.config.hello_timeout));
+    state.activity = now;
+    state.timed_out = false;
     shared.sink().0 = Some(writer);
     if restarted {
         shared.push(&mut state, Event::EngineRestarted);
     }
+    shared.watch.notify_all();
     Ok(())
 }
 
@@ -809,6 +958,13 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: ChildStdout) {
                 fail(shared, generation, &error.to_string());
                 return;
             }
+            let mut state = shared.state();
+            if state.generation != generation || state.phase != Phase::Running {
+                return;
+            }
+            let now = Instant::now();
+            state.startup = Some((Stage::Open, now + shared.config.open_timeout));
+            state.activity = now;
         }
         Ok(None) | Err(vellora_ipc::Error::Io(_)) => return ended(shared, generation, End::Eof),
         Ok(Some(_)) | Err(_) => return ended(shared, generation, End::Violation),
@@ -821,8 +977,16 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: ChildStdout) {
                 if state.generation != generation || state.phase != Phase::Running {
                     return;
                 }
+                state.activity = Instant::now();
                 match state.ledger.accept(response) {
                     Accepted::Event(event) => {
+                        // `Open` is answered, if only with a refusal.
+                        if matches!(
+                            event,
+                            Event::Opened { .. } | Event::RequestFailed { request: None, .. }
+                        ) {
+                            state.startup = None;
+                        }
                         if let Event::Opened {
                             page_count,
                             page_sizes,
@@ -894,6 +1058,7 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
     if !will_restart {
         return;
     }
+    report_document_change(shared);
     let restarted = launch(shared).and_then(|launched| install(shared, launched, true));
     match restarted {
         Ok(()) | Err(ClientError::Closed) => {}
@@ -929,6 +1094,83 @@ fn give_up(shared: &Shared, reason: &str) {
             reason: reason.to_owned(),
         },
     );
+}
+
+/// Tells the caller if the file is not what it was when it was last looked at. Runs before an
+/// engine is restarted, because the new engine maps whatever is on disk.
+fn report_document_change(shared: &Shared) {
+    let mut state = shared.state();
+    if state.phase == Phase::Closed {
+        return;
+    }
+    if let Some(change) = state.seen.check(&shared.document, &shared.path) {
+        shared.push(&mut state, Event::DocumentChanged { change });
+    }
+}
+
+/// The watchdog thread: kills an engine that has not met a deadline (see the module
+/// documentation). It sleeps until the next deadline or until a state change wakes it.
+fn watch(shared: &Shared) {
+    let hard = shared.config.deadlines.hard;
+    let mut state = shared.state();
+    loop {
+        let now = Instant::now();
+        state = match state.verdict(hard, now) {
+            Verdict::Done => return,
+            Verdict::Wait(Some(until)) => {
+                shared
+                    .watch
+                    .wait_timeout(state, until.saturating_duration_since(now))
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            }
+            Verdict::Wait(None) => shared
+                .watch
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner),
+            Verdict::Overdue(Stage::Tile) => {
+                state.timed_out = true;
+                let waited = now.saturating_duration_since(state.activity);
+                shared.push(
+                    &mut state,
+                    Event::EngineTimeout {
+                        stage: Stage::Tile,
+                        waited,
+                    },
+                );
+                // Killed under the lock so the reader cannot start a restart in between. Its pipe
+                // then closes and `ended` reports the crash and restarts within the budget.
+                if let Some(process) = state.process.as_mut() {
+                    process.kill();
+                }
+                state
+            }
+            Verdict::Overdue(late) => {
+                let waited = if late == Stage::Hello {
+                    shared.config.hello_timeout
+                } else {
+                    shared.config.open_timeout
+                };
+                state.phase = Phase::Failed;
+                let process = state.process.take();
+                state.startup = None;
+                shared.push(
+                    &mut state,
+                    Event::EngineTimeout {
+                        stage: late,
+                        waited,
+                    },
+                );
+                drop(state);
+                if let Some(mut process) = process {
+                    process.kill();
+                }
+                // Dropped after the kill: a write blocked on the dead engine's pipe fails then.
+                shared.sink().0 = None;
+                return;
+            }
+        };
+    }
 }
 
 #[cfg(test)]

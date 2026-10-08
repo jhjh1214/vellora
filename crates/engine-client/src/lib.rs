@@ -17,18 +17,25 @@
 //! **Status:** M0 task 19 added process start-up under OS resource limits ([`process`],
 //! [`limits`]); task 20 added the protocol client with restart after a crash ([`client`]) and the
 //! `cxx` bridge ([`bridge`]); task 21 added the tile cache ([`cache`]); task 22a wired it into the
-//! client and bridge (`docs/milestones/M0.md`).
+//! client and bridge (`docs/milestones/M0.md`). M1 task 2 added the client's own deadlines (engine
+//! start-up and stalled tiles) and the write-deny open of the document ([`document`]).
 //!
 //! **`unsafe`:** denied crate-wide. Only the bridge module allows it, for the glue the `cxx` macro
-//! generates; it contains no hand-written `unsafe` (CLAUDE.md invariant 6).
+//! generates, and the small OS modules in [`limits`] and [`document`] (every block has a
+//! `// SAFETY:` comment; CLAUDE.md invariant 6).
 
 pub mod bridge;
 pub mod cache;
 pub mod client;
+mod document;
 pub mod limits;
 pub mod process;
 
 pub use cache::{ReserveError, ScaleBucket, TileCache, TileKey};
-pub use client::{Client, ClientConfig, ClientError, Event, TILE_PIXELS, TileLookup, TileRequest};
+pub use client::{
+    Client, ClientConfig, ClientError, DEFAULT_HELLO_TIMEOUT, DEFAULT_OPEN_TIMEOUT, Event, Stage,
+    TILE_PIXELS, TileLookup, TileRequest,
+};
+pub use document::Change;
 pub use limits::ResourceLimits;
 pub use process::{Crash, EngineProcess, SpawnConfig, SpawnError, Termination};

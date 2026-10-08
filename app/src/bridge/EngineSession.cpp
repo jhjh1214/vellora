@@ -149,6 +149,12 @@ void EngineSession::dispatch(const EngineEvent& event) {
     case EventKind::Failed:
         emit failed(toQString(event.message));
         break;
+    case EventKind::EngineTimeout:
+        emit engineTimedOut(event.timeout, toQString(event.message));
+        break;
+    case EventKind::DocumentChanged:
+        emit documentChanged(event.file_replaced);
+        break;
     }
 }
 
