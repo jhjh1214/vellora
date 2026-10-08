@@ -1,0 +1,23 @@
+[package]
+name = "vellora-bench"
+description = "Synthetic large documents and the M0 performance harness (`cargo xtask bench`)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "vellora-bench"
+path = "src/main.rs"
+
+[dependencies]
+vellora-cos = { workspace = true }
+vellora-engine-client = { workspace = true }
+vellora-ipc = { workspace = true }
+vellora-shm = { workspace = true }
+
+[lints]
+workspace = true

@@ -954,6 +954,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
+name = "vellora-bench"
+version = "0.0.0"
+dependencies = [
+ "vellora-cos",
+ "vellora-engine-client",
+ "vellora-ipc",
+ "vellora-shm",
+]
+
+[[package]]
 name = "vellora-cli"
 version = "0.0.0"
 dependencies = [

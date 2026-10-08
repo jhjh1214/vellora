@@ -8,6 +8,10 @@
 //!   pinned in `third_party/pdfium.lock`, verify their SHA-256 and extract them into
 //!   `third_party/pdfium/<platform>/` (git-ignored).
 //!
+//! - `bench [generate|run] [args...]`: build the engine and the benchmark harness in release mode
+//!   and run `vellora-bench` (default command `run`; see `bench/src/main.rs` for its flags).
+//!   Documents are generated into `bench/data/` (git-ignored) on first use.
+//!
 //! Exit codes: 0 success, 1 a command failed, 2 usage error.
 //!
 //! This is dev tooling, not a library: it uses a boxed error instead of `thiserror`, and it
@@ -19,13 +23,14 @@ mod pdfium;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const USAGE: &str = "usage:
   cargo xtask corpus fetch [--manifest <file>] [--dir <dir>]
-  cargo xtask pdfium fetch [--lock <file>] [--dir <dir>] [--platform <key>]";
+  cargo xtask pdfium fetch [--lock <file>] [--dir <dir>] [--platform <key>]
+  cargo xtask bench [generate|run] [--dir <dir>] [--only <name>] [--runs <n>]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,7 +38,44 @@ fn main() -> ExitCode {
     match args.as_slice() {
         ["corpus", "fetch", rest @ ..] => run_corpus_fetch(rest),
         ["pdfium", "fetch", rest @ ..] => run_pdfium_fetch(rest),
+        ["bench", rest @ ..] => run_bench(rest),
         _ => usage(),
+    }
+}
+
+/// Builds the engine and the harness in release mode (they must sit side by side in
+/// `target/release`) and runs the harness with the remaining arguments.
+fn run_bench(rest: &[&str]) -> ExitCode {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let build = Command::new(&cargo)
+        .args([
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "vellora-engine",
+            "-p",
+            "vellora-bench",
+        ])
+        .current_dir(workspace_root())
+        .status();
+    if !build.is_ok_and(|status| status.success()) {
+        eprintln!("error: the release build failed");
+        return ExitCode::from(1);
+    }
+    let (command, flags) = match rest {
+        [first, tail @ ..] if !first.starts_with("--") => (*first, tail),
+        _ => ("run", rest),
+    };
+    let exe = workspace_root()
+        .join("target/release")
+        .join(format!("vellora-bench{}", std::env::consts::EXE_SUFFIX));
+    match Command::new(exe).arg(command).args(flags).status() {
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(e) => {
+            eprintln!("error: cannot run the harness: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 
