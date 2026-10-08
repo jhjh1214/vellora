@@ -30,6 +30,9 @@ pub mod client;
 mod document;
 pub mod limits;
 pub mod process;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod sandbox;
 
 pub use cache::{ReserveError, ScaleBucket, TileCache, TileKey};
 pub use client::{
@@ -38,4 +41,6 @@ pub use client::{
 };
 pub use document::Change;
 pub use limits::ResourceLimits;
-pub use process::{Crash, EngineProcess, SpawnConfig, SpawnError, Termination};
+pub use process::{
+    Crash, EngineProcess, PDFIUM_ENV, PDFIUM_LIBRARY_WINDOWS, SpawnConfig, SpawnError, Termination,
+};

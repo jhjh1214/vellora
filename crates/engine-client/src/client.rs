@@ -63,7 +63,6 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, ChildStdout};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -500,7 +499,7 @@ impl State {
 /// The write side of the current engine's pipe. Locked separately from [`State`]: a write can
 /// block on a full pipe, and the reader needs `State` to drain the engine's answers.
 #[derive(Debug)]
-struct Sink(Option<BufWriter<ChildStdin>>);
+struct Sink(Option<BufWriter<File>>);
 
 #[derive(Debug)]
 struct Shared {
@@ -548,8 +547,8 @@ enum End {
 /// A freshly started engine, not yet installed.
 struct Launched {
     process: EngineProcess,
-    writer: BufWriter<ChildStdin>,
-    stdout: ChildStdout,
+    writer: BufWriter<File>,
+    stdout: File,
 }
 
 /// A handle on one open document and the engine rendering it.
@@ -949,7 +948,7 @@ fn install(shared: &Arc<Shared>, launched: Launched, restarted: bool) -> Result<
 }
 
 /// The reader thread of one engine process.
-fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: ChildStdout) {
+fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
     let mut input = BufReader::new(stdout);
 
     match read_frame::<_, Response>(&mut input) {

@@ -10,9 +10,11 @@
 //! | macOS | **not enforced** (the kernel ignores `RLIMIT_AS` and `RLIMIT_DATA`) | `RLIMIT_CPU` | not enforced yet | engine exits at end of input |
 //!
 //! The unenforced cells are listed in the security model's tracker; the per-OS sandbox of the
-//! later phases is what closes them.
+//! later phases is what closes them. On Windows the job is assigned to the engine while it is still
+//! suspended (`sandbox.rs`, ADR-0017), so no instruction of it runs outside the job.
 
 use std::io;
+#[cfg(unix)]
 use std::process::{Child, Command};
 
 /// Address space or committed memory the engine gets on top of the document and the tile region.
@@ -56,6 +58,7 @@ pub(crate) struct Guard {
     _job: os::Job,
 }
 
+#[cfg(unix)]
 /// Prepares `command` so that the child starts under `limits` where they can be set before it
 /// runs (Unix). Call [`confine`] with the spawned child afterwards for what needs its handle.
 pub(crate) fn prepare(command: &mut Command, limits: ResourceLimits) {
@@ -64,8 +67,18 @@ pub(crate) fn prepare(command: &mut Command, limits: ResourceLimits) {
 
 /// Applies the limits that need the running child (the Windows job) and returns what keeps them
 /// alive.
+#[cfg(unix)]
 pub(crate) fn confine(child: &Child, limits: ResourceLimits) -> io::Result<Guard> {
     os::confine(child, limits)
+}
+
+/// Puts the process under the job. The sandbox calls it on a process that is still suspended.
+#[cfg(windows)]
+pub(crate) fn confine(
+    process: &impl std::os::windows::io::AsRawHandle,
+    limits: ResourceLimits,
+) -> io::Result<Guard> {
+    os::confine(process.as_raw_handle(), limits)
 }
 
 #[cfg(unix)]
@@ -123,16 +136,19 @@ mod os {
 #[allow(unsafe_code)]
 mod os {
     use std::io;
-    use std::os::windows::io::AsRawHandle;
-    use std::process::{Child, Command};
+    use std::os::windows::io::RawHandle;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
         JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME, JOB_OBJECT_UILIMIT_DESKTOP,
+        JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+        JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+        JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
+        JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicUIRestrictions,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
 
     use super::{Guard, ResourceLimits};
@@ -154,9 +170,7 @@ mod os {
         }
     }
 
-    pub(super) fn prepare(_command: &mut Command, _limits: ResourceLimits) {}
-
-    pub(super) fn confine(child: &Child, limits: ResourceLimits) -> io::Result<Guard> {
+    pub(super) fn confine(process: RawHandle, limits: ResourceLimits) -> io::Result<Guard> {
         // SAFETY: both arguments are optional and null selects the defaults.
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if handle.is_null() {
@@ -198,11 +212,38 @@ mod os {
         if set == 0 {
             return Err(io::Error::last_os_error());
         }
-        // The engine runs for a moment before it is in the job, but it reads nothing untrusted
-        // until the UI sends `Open`, which is after this returns.
-        // SAFETY: both handles are valid: the job is owned above and the process handle is owned
-        // by `child`, which the caller keeps alive.
-        let assigned = unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) };
+
+        // The engine draws into memory and has no window: it may not touch the clipboard, the
+        // display settings, global atoms, other processes' windows or the session (logoff).
+        let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+            UIRestrictionsClass: JOB_OBJECT_UILIMIT_DESKTOP
+                | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+                | JOB_OBJECT_UILIMIT_EXITWINDOWS
+                | JOB_OBJECT_UILIMIT_GLOBALATOMS
+                | JOB_OBJECT_UILIMIT_HANDLES
+                | JOB_OBJECT_UILIMIT_READCLIPBOARD
+                | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+                | JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+        };
+        let ui_size = u32::try_from(size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>())
+            .map_err(|_| io::Error::other("job UI structure too large"))?;
+        // SAFETY: `ui` is a valid structure of the class and size given, and outlives the call.
+        let set = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectBasicUIRestrictions,
+                (&raw const ui).cast(),
+                ui_size,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // The sandbox calls this on a suspended process, so no instruction of the engine has run
+        // outside the job.
+        // SAFETY: both handles are valid: the job is owned above and the process handle is kept
+        // alive by the caller.
+        let assigned = unsafe { AssignProcessToJobObject(job.0, process) };
         if assigned == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -273,8 +314,8 @@ mod tests {
 
     /// A process that lives long enough for the test to act on it.
     #[cfg(windows)]
-    fn sleeper() -> Child {
-        Command::new("ping")
+    fn sleeper() -> std::process::Child {
+        std::process::Command::new("ping")
             .args(["-n", "60", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
@@ -304,7 +345,7 @@ mod tests {
         // Without the job this line takes two seconds and exits 0 (checked by hand). With it the
         // shell cannot start `ping` or the second `cmd`, and the exit status says so. The shell
         // starts several milliseconds after `spawn` returns, long after the job is in place.
-        let mut child = Command::new("cmd")
+        let mut child = std::process::Command::new("cmd")
             .args([
                 "/V:ON",
                 "/C",
