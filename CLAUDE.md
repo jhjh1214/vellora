@@ -17,9 +17,9 @@ Each implementation session does **exactly one milestone task**, then ends. The 
 
 **Start (keep reading minimal):**
 1. `git switch main && git pull --ff-only`, then `git status`. The tree must be clean. If not, stop and report.
-2. Open **`docs/milestones/M0.md`**. Read the header, then find the **first unchecked task** whose dependencies are all checked. Read that task and the `Note:` lines under the tasks it depends on.
+2. Open **`docs/milestones/README.md`**: it names the **current milestone** and holds the milestone rules. Open that milestone file. Read its header, then find the **first unchecked task** whose dependencies are all checked. Read that task and the `Note:` lines under the tasks it depends on. Don't read finished milestone files (e.g. `M0.md`) unless a task points to them.
 3. Read only the docs and ADRs that task links to, plus the source files it touches. Don't read the whole `docs/` tree or `docs/PLAN.md` unless the task requires it.
-4. Create the task branch: `git switch -c m0/task-NN-short-name` (e.g. `m0/task-06-classic-xref`).
+4. Create the task branch: `git switch -c mN/task-NN-short-name` (e.g. `m1/task-07-password-path`).
 
 **Work:**
 
@@ -28,8 +28,8 @@ Each implementation session does **exactly one milestone task**, then ends. The 
 
 **Finish:**
 
-7. Tick the task (`- [x]`) in the milestone file. Under it, add `Note:` lines with anything the next session needs: decisions made, deviations, gotchas, commands that differ from the plan. Keep each note to a single line.
-8. Commit with sign-off (`git commit -s`; task code + milestone tick together), Conventional Commits, e.g. `feat(cos): parse classic xref tables (M0 task 6)`.
+7. Tick the task (`- [x]`) in the milestone file. Under it, add `Note:` lines with anything the next session needs: decisions made, deviations, gotchas, commands that differ from the plan. Follow the note limits in the [milestone rules](docs/milestones/README.md#rules-for-every-milestone): at most 5 notes, each at most two lines. Longer findings go into an ADR, an architecture doc or `docs/backlog.md`.
+8. Commit with sign-off (`git commit -s`; task code + milestone tick together), Conventional Commits, e.g. `feat(engine): open encrypted documents with a password (M1 task 7)`.
 9. Push the branch and open the PR:
    - `gh pr create --title "<same Conventional Commit subject>" --body "<what/why, how verified, save-fidelity impact>"`
    - The PR title becomes the squash commit subject on `main`, so it must be a valid Conventional Commit.
@@ -41,7 +41,8 @@ Each implementation session does **exactly one milestone task**, then ends. The 
 
 **Stop and ask instead of continuing** if:
 - the task is ambiguous or contradicts an ADR
-- it needs a decision the task doesn't make
+- it needs a decision the task doesn't make (add it under *Decisions needed* in `docs/milestones/README.md`)
+- an acceptance criterion can't be met (never reword a criterion to fit the result)
 - it turns out much bigger than described (propose a split into e.g. 7a/7b in the milestone file)
 - CI is red for reasons outside your task
 
