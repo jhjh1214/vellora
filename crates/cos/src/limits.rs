@@ -7,6 +7,8 @@
 //! The corpus file `pdfjs-bomb_giant` (123 KB input) is the regression target: an unlimited
 //! decoder needed about 9.5 GB for it (ADR-0013).
 
+use std::cell::Cell;
+
 use crate::error::{Error, Result};
 
 /// Which limit was hit.
@@ -35,6 +37,8 @@ pub enum LimitKind {
     Revisions,
     /// Length of a chain of indirect references followed to reach a value.
     ReferenceDepth,
+    /// Bytes searched for `endstream` while recovering stream lengths ([`ScanBudget`]).
+    ScanBytes,
 }
 
 impl LimitKind {
@@ -53,6 +57,7 @@ impl LimitKind {
             Self::DictEntries => "dictionary entry count",
             Self::Revisions => "revision count",
             Self::ReferenceDepth => "reference chain length",
+            Self::ScanBytes => "stream recovery scan budget",
         }
     }
 }
@@ -96,6 +101,12 @@ pub struct Limits {
     /// larger than this is never cached, so it is decoded (and charged to the
     /// [`DecodeBudget`]) on every access. Default 64 MiB.
     pub max_cache_bytes: u64,
+    /// Floor of the per-document `endstream` search budget ([`ScanBudget`]), in bytes. Default
+    /// 64 MiB.
+    pub min_scan_bytes: u64,
+    /// The per-document `endstream` search budget is this many times the file size, if that is
+    /// more than [`min_scan_bytes`](Self::min_scan_bytes). Default 4.
+    pub scan_bytes_per_file_byte: u64,
 }
 
 impl Default for Limits {
@@ -113,6 +124,8 @@ impl Default for Limits {
             max_revisions: 8192,
             max_reference_depth: 32,
             max_cache_bytes: 64 * 1024 * 1024,
+            min_scan_bytes: 64 * 1024 * 1024,
+            scan_bytes_per_file_byte: 4,
         }
     }
 }
@@ -120,7 +133,8 @@ impl Default for Limits {
 impl Limits {
     /// The configured maximum for a count- or size-style limit.
     ///
-    /// [`LimitKind::DecompressionRatio`] returns the maximum ratio.
+    /// [`LimitKind::DecompressionRatio`] returns the maximum ratio, and [`LimitKind::ScanBytes`]
+    /// the floor of the budget (the real one also depends on the file size, see [`ScanBudget`]).
     #[must_use]
     pub fn max(&self, kind: LimitKind) -> u64 {
         match kind {
@@ -135,6 +149,7 @@ impl Limits {
             LimitKind::DictEntries => self.max_dict_entries,
             LimitKind::Revisions => self.max_revisions,
             LimitKind::ReferenceDepth => u64::from(self.max_reference_depth),
+            LimitKind::ScanBytes => self.min_scan_bytes,
         }
     }
 
@@ -224,11 +239,67 @@ impl DecodeBudget {
     }
 }
 
+/// Bytes a document may spend searching for `endstream` after a wrong or missing `/Length`.
+///
+/// Each search is bounded by `max_decoded_stream_bytes`, but a file with thousands of broken
+/// lengths and no `endstream` near them would still cost one long scan per stream. The budget is
+/// the larger of [`Limits::min_scan_bytes`] and [`Limits::scan_bytes_per_file_byte`] times the
+/// file size, shared by every search in a document. A search that cannot finish inside what is
+/// left fails with [`LimitKind::ScanBytes`] for that object only. It uses interior mutability so a
+/// parser can charge it through a shared reference.
+#[derive(Debug, Clone)]
+pub struct ScanBudget {
+    max: u64,
+    used: Cell<u64>,
+}
+
+impl ScanBudget {
+    /// A fresh budget for a file of `file_len` bytes.
+    #[must_use]
+    pub fn new(limits: &Limits, file_len: u64) -> Self {
+        Self {
+            max: limits
+                .min_scan_bytes
+                .max(file_len.saturating_mul(limits.scan_bytes_per_file_byte)),
+            used: Cell::new(0),
+        }
+    }
+
+    /// Bytes charged so far.
+    #[must_use]
+    pub fn used(&self) -> u64 {
+        self.used.get()
+    }
+
+    /// Bytes that can still be charged.
+    #[must_use]
+    pub fn remaining(&self) -> u64 {
+        self.max - self.used.get()
+    }
+
+    /// Charges `bytes`, at most what is left.
+    pub fn spend(&self, bytes: u64) {
+        self.used
+            .set(self.used.get().saturating_add(bytes).min(self.max));
+    }
+
+    /// The error for a search that ran out of budget at `offset`.
+    #[must_use]
+    pub fn exhausted(&self, offset: Option<u64>) -> Error {
+        Error::LimitExceeded {
+            limit: LimitKind::ScanBytes,
+            max: self.max,
+            value: self.max.saturating_add(1),
+            offset,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ALL: [LimitKind; 11] = [
+    const ALL: [LimitKind; 12] = [
         LimitKind::DecodedStreamBytes,
         LimitKind::TotalDecodeBytes,
         LimitKind::DecompressionRatio,
@@ -240,6 +311,7 @@ mod tests {
         LimitKind::DictEntries,
         LimitKind::Revisions,
         LimitKind::ReferenceDepth,
+        LimitKind::ScanBytes,
     ];
 
     #[test]
@@ -257,6 +329,39 @@ mod tests {
         assert_eq!(l.max_revisions, 8192);
         assert_eq!(l.max_reference_depth, 32);
         assert_eq!(l.max_cache_bytes, 64 * 1024 * 1024);
+        assert_eq!(l.min_scan_bytes, 64 * 1024 * 1024);
+        assert_eq!(l.scan_bytes_per_file_byte, 4);
+    }
+
+    #[test]
+    fn scan_budget_is_the_larger_of_the_floor_and_a_multiple_of_the_file() {
+        let limits = Limits::default();
+        assert_eq!(ScanBudget::new(&limits, 1000).remaining(), 64 * 1024 * 1024);
+        let big = 100 * 1024 * 1024;
+        assert_eq!(ScanBudget::new(&limits, big).remaining(), 4 * big);
+        assert_eq!(ScanBudget::new(&limits, u64::MAX).remaining(), u64::MAX);
+    }
+
+    #[test]
+    fn scan_budget_never_overspends() {
+        let limits = Limits {
+            min_scan_bytes: 10,
+            ..Limits::default()
+        };
+        let budget = ScanBudget::new(&limits, 0);
+        budget.spend(6);
+        assert_eq!((budget.used(), budget.remaining()), (6, 4));
+        budget.spend(u64::MAX);
+        assert_eq!((budget.used(), budget.remaining()), (10, 0));
+        assert!(matches!(
+            budget.exhausted(Some(7)),
+            Error::LimitExceeded {
+                limit: LimitKind::ScanBytes,
+                max: 10,
+                value: 11,
+                offset: Some(7),
+            }
+        ));
     }
 
     #[test]

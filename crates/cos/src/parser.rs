@@ -11,7 +11,9 @@
 //! Recovery (reported through [`Recovery`], never silent):
 //! - A wrong or missing `/Length` makes the parser search for `endstream`; the search is bounded
 //!   by `max_decoded_stream_bytes`. If the first `endstream` is inside binary data the stream
-//!   comes out short; a later layer can notice through other checks.
+//!   comes out short; a later layer can notice through other checks. With a [`ScanBudget`]
+//!   (`with_scan_budget`) the search is also charged to a per-document budget; a search that
+//!   cannot finish inside it fails with [`LimitKind::ScanBytes`] and the parser stays usable.
 //! - A missing `endobj` is accepted, and the next token is left unread.
 //!
 //! Not recovered, because the document layer decides how to repair: syntax errors inside a
@@ -21,7 +23,7 @@
 
 use crate::error::{Error, Result, SyntaxKind};
 use crate::lexer::{Lexer, StreamEol, Token, TokenKind};
-use crate::limits::{LimitKind, Limits};
+use crate::limits::{LimitKind, Limits, ScanBudget};
 use crate::object::{
     Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream,
 };
@@ -34,6 +36,7 @@ pub struct Parser<'a, 'l> {
     lexer: Lexer<'a, 'l>,
     limits: &'l Limits,
     resolver: Option<LengthResolver<'l>>,
+    scan_budget: Option<&'l ScanBudget>,
 }
 
 impl<'a, 'l> Parser<'a, 'l> {
@@ -50,6 +53,7 @@ impl<'a, 'l> Parser<'a, 'l> {
             lexer: Lexer::at(data, pos, limits),
             limits,
             resolver: None,
+            scan_budget: None,
         }
     }
 
@@ -57,6 +61,13 @@ impl<'a, 'l> Parser<'a, 'l> {
     #[must_use]
     pub fn with_length_resolver(mut self, resolver: LengthResolver<'l>) -> Self {
         self.resolver = Some(resolver);
+        self
+    }
+
+    /// Charges every `endstream` search to `budget`.
+    #[must_use]
+    pub fn with_scan_budget(mut self, budget: &'l ScanBudget) -> Self {
+        self.scan_budget = Some(budget);
         self
     }
 
@@ -196,9 +207,29 @@ impl<'a, 'l> Parser<'a, 'l> {
             .ok()
             .and_then(|max| data_start.checked_add(max))
             .map_or(data.len(), |end| end.min(data.len()));
-        let found = find_endstream(data.get(data_start..window_end).unwrap_or_default())
-            .map(|i| data_start + i)
-            .ok_or_else(|| syntax(SyntaxKind::MissingEndstream, keyword_offset))?;
+        let mut window = data.get(data_start..window_end).unwrap_or_default();
+        let mut cut_by_budget = false;
+        if let Some(budget) = self.scan_budget {
+            let left = usize::try_from(budget.remaining()).unwrap_or(usize::MAX);
+            if window.len() > left {
+                window = window.get(..left).unwrap_or_default();
+                cut_by_budget = true;
+            }
+        }
+        let hit = find_endstream(window);
+        if let Some(budget) = self.scan_budget {
+            let scanned = hit.map_or(window.len(), |i| i + b"endstream".len());
+            budget.spend(scanned as u64);
+        }
+        let found = match hit {
+            Some(i) => data_start + i,
+            None => {
+                return Err(match self.scan_budget {
+                    Some(budget) if cut_by_budget => budget.exhausted(Some(keyword_offset as u64)),
+                    _ => syntax(SyntaxKind::MissingEndstream, keyword_offset),
+                });
+            }
+        };
         let data_end = trim_eol_before(data, data_start, found);
         let after = found + b"endstream".len();
         self.lexer.seek(after);
@@ -886,6 +917,44 @@ mod tests {
         assert!(stream_of(&indirect(&input)).data.is_empty());
     }
 
+    #[test]
+    fn endstream_search_is_charged_to_the_scan_budget() {
+        let mut limits = Limits {
+            min_scan_bytes: 20,
+            ..Limits::default()
+        };
+        let input = stream_object("100", b"HELLO", b"\nendstream\nendobj\n");
+        // Room for the search: it finds the stream and is charged what it read.
+        let budget = ScanBudget::new(&limits, 0);
+        Parser::new(&input, &limits)
+            .with_scan_budget(&budget)
+            .parse_indirect_object()
+            .unwrap();
+        assert_eq!(budget.used(), 5 + 1 + b"endstream".len() as u64);
+        // A budget that ends before `endstream` is a limit error, not a missing keyword, and
+        // the parser can be used again.
+        limits.min_scan_bytes = 8;
+        let budget = ScanBudget::new(&limits, 0);
+        let mut parser = Parser::new(&input, &limits).with_scan_budget(&budget);
+        let err = parser.parse_indirect_object().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::LimitExceeded {
+                limit: LimitKind::ScanBytes,
+                max: 8,
+                ..
+            }
+        ));
+        assert_eq!(budget.remaining(), 0);
+        parser.seek(0);
+        assert!(matches!(
+            parser.parse_indirect_object().unwrap_err(),
+            Error::LimitExceeded {
+                limit: LimitKind::ScanBytes,
+                ..
+            }
+        ));
+    }
     #[test]
     fn missing_endstream_is_an_error() {
         let limits = Limits::default();
