@@ -87,15 +87,16 @@ impl SlotGeometry {
 /// The backing file is anonymous (unlinked, or deleted when the last handle closes), so the
 /// region has no name another process could open.
 ///
-/// # Known gap: a compromised engine can crash the UI
+/// # Known gap on macOS: a compromised engine can crash the UI
 ///
 /// The engine maps the region writable, which needs a handle that also allows resizing the
-/// file. On Linux and macOS a compromised engine can shrink the file; the UI's next read of a
-/// lost page then raises SIGBUS and ends the UI process. (On Windows a mapped file cannot be
-/// shortened.) The UI's data is not exposed and no memory is corrupted, but the engine is
-/// meant to be untrusted, so this is tracked in the security model and closes with a sealed
-/// anonymous region (`memfd` with `F_SEAL_SHRINK` on Linux; the other backings in ADR-0015) or
-/// a UI that reads slots through a handler for the fault. Until then the UI must read slots
+/// file. On macOS a compromised engine can shrink the file; the UI's next read of a lost page
+/// then raises SIGBUS and ends the UI process. (On Windows a mapped file cannot be shortened, and
+/// on Linux the region is a `memfd` sealed with `F_SEAL_SHRINK`, `F_SEAL_GROW` and `F_SEAL_SEAL`,
+/// falling back to a temporary file only if the kernel refuses.) The UI's data is not exposed and
+/// no memory is corrupted, but the engine is meant to be untrusted, so the macOS gap is tracked
+/// in the security model and closes with `shm_open` (ADR-0015) or a UI that reads slots through a
+/// handler for the fault. Until then the UI must read slots
 /// only after the matching `TileReady`, and a crashed UI loses at most the open view: the
 /// document and its journal are the UI's, not the engine's.
 #[derive(Debug)]
@@ -117,10 +118,22 @@ impl TileRegion {
     ///
     /// [`Error::Io`] if the file cannot be created, sized or mapped.
     pub fn create(geometry: SlotGeometry) -> Result<(Self, File), Error> {
-        let file = tempfile::tempfile()
-            .map_err(|source| Error::io("cannot create the tile region file", source))?;
-        file.set_len(geometry.total_bytes())
-            .map_err(|source| Error::io("cannot size the tile region file", source))?;
+        // Linux: an anonymous in-memory file whose size is sealed, so the engine cannot shrink it.
+        // If the kernel refuses (too old, or a filter forbids `memfd_create`), fall back to a
+        // temporary file with the known gap.
+        #[cfg(target_os = "linux")]
+        let sealed = sealed_memfd(geometry.total_bytes());
+        #[cfg(not(target_os = "linux"))]
+        let sealed: Option<File> = None;
+        let file = if let Some(file) = sealed {
+            file
+        } else {
+            let file = tempfile::tempfile()
+                .map_err(|source| Error::io("cannot create the tile region file", source))?;
+            file.set_len(geometry.total_bytes())
+                .map_err(|source| Error::io("cannot size the tile region file", source))?;
+            file
+        };
         let region = Self::from_file(&file, geometry)?;
         Ok((region, file))
     }
@@ -203,9 +216,54 @@ impl TileRegion {
     }
 }
 
+/// A `memfd` of `bytes` bytes sealed against shrinking and growing (and against further seals).
+/// `None` if any step fails.
+#[cfg(target_os = "linux")]
+fn sealed_memfd(bytes: u64) -> Option<File> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    // SAFETY: the name is a NUL-terminated literal; the call returns a new descriptor or -1.
+    let raw = unsafe {
+        libc::memfd_create(
+            c"vellora-tiles".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if raw < 0 {
+        return None;
+    }
+    // SAFETY: `raw` is a fresh descriptor that nothing else owns.
+    let file = File::from(unsafe { OwnedFd::from_raw_fd(raw) });
+    file.set_len(bytes).ok()?;
+    // SAFETY: `F_ADD_SEALS` takes an integer and only changes the seals of this descriptor.
+    let sealed = unsafe {
+        libc::fcntl(
+            raw,
+            libc::F_ADD_SEALS,
+            libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL,
+        )
+    };
+    (sealed == 0).then_some(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine holds a writable handle to the same file; it must not be able to shrink it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_region_is_sealed_against_resizing_on_linux() {
+        let (_region, file) = TileRegion::create(SlotGeometry::new(2, 4096).unwrap()).unwrap();
+        assert!(file.set_len(0).is_err(), "shrinking must be refused");
+        assert!(file.set_len(1 << 20).is_err(), "growing must be refused");
+        assert_eq!(file.metadata().unwrap().len(), 8192);
+        // SAFETY: `F_GET_SEALS` only reads the seals of a descriptor this test owns.
+        let seals =
+            unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&file), libc::F_GET_SEALS) };
+        let wanted = libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL;
+        assert_eq!(seals & wanted, wanted);
+    }
 
     #[test]
     fn geometry_is_validated() {

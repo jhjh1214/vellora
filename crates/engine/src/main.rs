@@ -72,6 +72,10 @@ fn start(launch: &LaunchArgs) -> anyhow::Result<Engine> {
     let region = TileRegion::from_file(&region_file, launch.geometry)
         .context("cannot map the tile region")?;
     let library = Pdfium::locate().context("cannot find PDFium")?;
+    // After the library is loaded and before the PDFium thread exists: the sandbox binds the
+    // threads created from here on.
+    #[cfg(target_os = "linux")]
+    log_sandbox(&vellora_engine::sandbox::apply());
     let renderer = Renderer::start(library).context("cannot start PDFium")?;
     let mut engine = Engine::new(
         renderer,
@@ -92,6 +96,27 @@ fn start(launch: &LaunchArgs) -> anyhow::Result<Engine> {
         std::process::abort();
     });
     Ok(engine)
+}
+
+/// Says what the Linux sandbox could not do (a kernel without Landlock, say). Never fatal.
+#[cfg(target_os = "linux")]
+fn log_sandbox(report: &vellora_engine::sandbox::Report) {
+    use vellora_engine::sandbox::Landlock;
+    match &report.landlock {
+        Ok(Landlock::Full) => {}
+        Ok(Landlock::Partial) => {
+            tracing::warn!("the kernel enforces only part of the file-system sandbox");
+        }
+        Ok(Landlock::Unavailable) => {
+            tracing::warn!(
+                "this kernel has no Landlock: the engine runs without file-system rules"
+            );
+        }
+        Err(reason) => tracing::warn!(%reason, "the file-system sandbox could not be set up"),
+    }
+    if let Err(reason) = &report.seccomp {
+        tracing::warn!(%reason, "the system-call filter could not be set up");
+    }
 }
 
 /// Best effort: if the pipe is already gone there is nobody to tell.

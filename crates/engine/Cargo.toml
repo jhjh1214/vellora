@@ -26,6 +26,12 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The sandbox (ADR-0018). Both crates expose safe APIs, so this crate stays free of `unsafe`.
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+libc = { workspace = true }
+
 [dev-dependencies]
 # Starts the engine under resource limits (`tests/limits.rs`). A dev-dependency cycle: the client
 # depends on this crate's library for `LaunchArgs`, and the binary under test lives here.
