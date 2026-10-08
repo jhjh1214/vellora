@@ -18,7 +18,6 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use vellora_cos::{Limits, ObjectStore};
@@ -188,7 +187,7 @@ const fn vellora_render_env() -> &'static str {
 #[cfg(windows)]
 fn peak_memory(pid: u32) -> Option<Peak> {
     let script = format!("(Get-Process -Id {pid}).PeakWorkingSet64");
-    let out = Command::new("powershell")
+    let out = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .ok()?;
@@ -219,7 +218,7 @@ fn peak_memory(pid: u32) -> Option<Peak> {
 #[cfg(not(any(windows, target_os = "linux")))]
 fn peak_memory(pid: u32) -> Option<Peak> {
     // No peak counter without platform calls (`unsafe` is forbidden here): sample the current RSS.
-    let out = Command::new("ps")
+    let out = std::process::Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
         .ok()?;
