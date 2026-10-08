@@ -2,8 +2,8 @@
 
 **A fast, faithful, local-first PDF workstation.** Open source. No account, no cloud, no telemetry.
 
-> **Status: pre-alpha (Milestone M0, "walking skeleton").** Nothing here is usable yet.
-> The architecture and the roadmap are public and stable; see [`docs/PLAN.md`](docs/PLAN.md).
+> **Status: pre-alpha.** The walking skeleton (M0) is done: our own PDF parser and writer, a sandboxed rendering engine, and a Qt shell that opens and scrolls documents. Work is now on **M1, the viewer (v0.1)**. Not ready for everyday use yet.
+> The architecture and the roadmap are public; see [`docs/PLAN.md`](docs/PLAN.md) and [`docs/roadmap.md`](docs/roadmap.md).
 
 Vellora aims to replace the majority of serious Adobe Acrobat Pro workflows: viewing, page management, direct editing, annotation and review, PDF comparison, forms, digital signatures, real redaction, OCR, inspection, preflight and automation. It is *not* an Acrobat clone. It is built around three properties no existing open-source tool combines:
 
@@ -26,18 +26,18 @@ Qt 6 desktop shell (C++)  ──cxx──  engine-client (Rust)
 - [Architecture overview](docs/architecture/overview.md)
 - [Architecture decision records](docs/adr/)
 - [Roadmap](docs/roadmap.md)
-- [Current milestone: M0](docs/milestones/M0.md)
+- [Milestones and current status](docs/milestones/README.md)
 
 ## Building
 
-See [`docs/dev/setup.md`](docs/dev/setup.md). Short version, for the Rust workspace:
+See [`docs/dev/setup.md`](docs/dev/setup.md) for toolchains (Rust, Qt 6.8, CMake, PDFium). Short version:
 
 ```sh
+cargo xtask pdfium fetch         # pinned, checksum-verified PDFium
 cargo build --workspace
 cargo test --workspace
+cmake -S app -B build -G Ninja -DCMAKE_PREFIX_PATH=<Qt 6.8 dir> && cmake --build build
 ```
-
-The Qt desktop app (`app/`) arrives during M0.
 
 ## Contributing
 

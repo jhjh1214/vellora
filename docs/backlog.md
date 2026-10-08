@@ -1,0 +1,15 @@
+# Backlog
+
+Known gaps and ideas that are **not scheduled** in a milestone. Each entry links to where it was found. When a milestone picks one up, move the line into that milestone's task and delete it here.
+
+| Item | Found in | Notes |
+|---|---|---|
+| Rebuilding the xref of a damaged *encrypted* file that uses object streams loses those objects (`ObjectStreamNotExpanded`) | M0 task 11 | Needs a decrypt hook in `recovery::rebuild`; no corpus file hits it yet |
+| Linearised output (fast web view) | M0 task 12 | Post-1.0 optimisation phase |
+| Render PDFium tiles straight into shared memory instead of one memcpy | M0 task 15 | Only if profiling shows the copy |
+| Tile region backed by a pagefile section on Windows / `shm_open` on macOS instead of an anonymous temp file | ADR-0015 | Linux `memfd` is M1 task 5 |
+| Measure documents with very deep/wide page trees and thousands of annotations | ADR-0016 | Fold into the M2 or M3 benchmarks if one of them regresses |
+| `/Version` in the catalog overriding the header version in `vellora inspect` | M0 task 23 | Small; good first issue |
+| OSS-Fuzz integration | PLAN §I | Apply once the project is public and stable (M11 task 4) |
+| Portfolios (PDF collections), read-only view | PLAN §C | Post-1.0 |
+| PDF → Word/Excel export | PLAN §C | Out of scope until a mature permissive engine exists |
