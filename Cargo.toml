@@ -57,6 +57,9 @@ libloading = "0.9"
 memmap2 = "0.9"
 tempfile = "3"
 libc = "0.2"
+# `vellora-engine` on Linux only (ADR-0018): Landlock file-system rules and the seccomp-bpf filter.
+landlock = "0.4"
+seccompiler = "0.5"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 # Engine host: logging (stderr only; nothing is ever sent anywhere) and error context in `main`.
 tracing = { version = "0.1", default-features = false, features = ["std"] }

@@ -10,8 +10,9 @@
 //!   shared tile region (`vellora-shm`)
 //! - a priority queue for tiles with cancellation, and soft/hard deadlines per tile ([`Deadlines`])
 //! - the executable aborts itself when a tile passes its hard deadline (`main.rs`); the parent
-//!   applies the OS limits at spawn (`vellora-engine-client`) and, later, the per-OS sandbox
-//!   (ADR-0004)
+//!   applies the OS limits at spawn (`vellora-engine-client`) and, on Windows, starts it in an
+//!   `AppContainer` (ADR-0017); on Linux the engine sandboxes itself with Landlock and seccomp
+//!   after loading PDFium ([sandbox], ADR-0018)
 //!
 //! **Boundaries:** no filesystem access beyond the handles passed by the parent, no network,
 //! never executes document content, never writes a file. This crate contains no `unsafe`; the
@@ -29,6 +30,8 @@
 
 pub mod args;
 mod document;
+#[cfg(target_os = "linux")]
+pub mod sandbox;
 mod scheduler;
 mod session;
 

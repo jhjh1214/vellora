@@ -8,8 +8,9 @@ Known gaps and ideas that are **not scheduled** in a milestone. Each entry links
 | An incremental update of a damaged *encrypted* file (V2/R3 Standard handler) does not reopen: Encryption { kind: UnsupportedHandler }, found by the `write_roundtrip` fuzz smoke (uzz/fuzz_targets/write_roundtrip.rs:52) | M1 task 1 (PR CI, run 37775143833) | Unrelated to the UI work. Crash input: artifact `fuzz-artifacts-write_roundtrip` of that run (1,142 bytes, expires after the retention period); add it as a regression fixture when fixing |
 | Linearised output (fast web view) | M0 task 12 | Post-1.0 optimisation phase |
 | Render PDFium tiles straight into shared memory instead of one memcpy | M0 task 15 | Only if profiling shows the copy |
-| Tile region backed by a pagefile section on Windows / `shm_open` on macOS instead of an anonymous temp file | ADR-0015 | Linux `memfd` is M1 task 5 |
+| Tile region backed by a pagefile section on Windows / `shm_open` on macOS instead of an anonymous temp file | ADR-0015 | Linux has a sealed `memfd` since M1 task 5 |
 | Saving over the open file: on Windows the document is held with `FILE_SHARE_READ` only (no rename or delete), so M2's atomic save must close or hand over the handle (or the engine must be stopped) before the rename | M1 task 2 | Decide in M2 task 0 together with ADR-0009 (ChangeSets) |
+| Linux sandbox: turn the seccomp deny list into an allow list from traced sessions; run the corpus gate and a font-rendering comparison on Linux in nightly; test the `kill`/`tgkill` rules | M1 task 5 (ADR-0018) | Needs a Linux machine or a CI job that runs `strace -c` over the corpus |
 | Windows engine hardening beyond the AppContainer: process mitigation policies (ACG, CFG, win32k lockdown, which need testing against PDFium's GDI font mapping) and a low-integrity token | M1 task 4 (ADR-0017) | Only if the security review (M11) asks for it |
 | Measure documents with very deep/wide page trees and thousands of annotations | ADR-0016 | Fold into the M2 or M3 benchmarks if one of them regresses |
 | `/Version` in the catalog overriding the header version in `vellora inspect` | M0 task 23 | Small; good first issue |
