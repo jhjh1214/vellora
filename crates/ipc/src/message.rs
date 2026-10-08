@@ -1,11 +1,18 @@
 //! The messages of the protocol and their validation.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
+/// revision 6 password and 32 of an older one, so this is generous.
+pub const MAX_PASSWORD_BYTES: usize = 256;
 
 /// Most page sizes one `Opened` may carry (the first chunk; the rest follow
 /// lazily so opening a 10,000-page file does not wait for every page).
@@ -58,6 +65,43 @@ pub struct Repair {
     pub message: String,
 }
 
+/// A document password as the user typed it (UTF-8 text).
+///
+/// The text is overwritten with zeros when the value is dropped, and `Debug` never shows it, so a
+/// log line that formats a request cannot leak it. The framing layer wipes the buffers it
+/// encodes into and decodes from; copies the operating system keeps (pipe buffers, swap) are out
+/// of reach.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Password(String);
+
+impl Password {
+    /// Wraps `text`. Whether it is acceptable on the wire is [`Validate`]'s business, so that a
+    /// message from the peer is held to the same rules as one built here.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    /// The password text. Do not log it, and do not keep copies longer than the call needs.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Password {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Password(<redacted>)")
+    }
+}
+
+impl Drop for Password {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// How urgently a tile is wanted. The engine renders queued tiles in this order (first-in,
 /// first-out within one priority), so the UI can keep prefetching cheap to abandon.
 ///
@@ -98,6 +142,11 @@ pub enum ErrorKind {
     RenderFailed,
     /// A bug or resource failure inside the engine.
     Internal,
+    /// The document is encrypted and needs a password; none was sent. Answers `Open`, which may
+    /// be sent again with a password.
+    PasswordRequired,
+    /// The password sent with `Open` does not open the document. `Open` may be sent again.
+    WrongPassword,
 }
 
 /// Messages from the UI to the engine.
@@ -108,10 +157,14 @@ pub enum Request {
         /// The sender's [`PROTOCOL_VERSION`].
         protocol_version: u32,
     },
-    /// Open the document behind a handle passed at spawn time.
+    /// Open the document behind a handle passed at spawn time. If the engine refuses with
+    /// [`ErrorKind::PasswordRequired`] or [`ErrorKind::WrongPassword`] the document stays
+    /// unopened and the UI may send `Open` again with a password.
     Open {
         /// Opaque token naming the file handle the engine was given.
         handle_token: u64,
+        /// The password to try, if the user gave one. Documents that need none ignore it.
+        password: Option<Password>,
     },
     /// Render one tile into a shared-memory slot.
     RenderTile {
@@ -223,6 +276,19 @@ impl Validate for Request {
                 }
                 if rect.x > MAX_TILE_ORIGIN || rect.y > MAX_TILE_ORIGIN {
                     return Err(Error::Invalid("tile origin exceeds 2^24 pixels"));
+                }
+                Ok(())
+            }
+            Request::Open {
+                password: Some(password),
+                ..
+            } => {
+                if password.expose().len() > MAX_PASSWORD_BYTES {
+                    return Err(Error::Invalid("password too long"));
+                }
+                // PDFium takes the password as a C string.
+                if password.expose().contains('\0') {
+                    return Err(Error::Invalid("password contains a NUL character"));
                 }
                 Ok(())
             }

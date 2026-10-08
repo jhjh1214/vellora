@@ -27,6 +27,10 @@ public:
     // Starts an engine over `path`. Returns an empty string on success (`opened` follows), else
     // the error text; a session that failed to open stays closed.
     QString open(const QString& path);
+    // Sends the password for a document that asked for one (`passwordRequested`). Returns an empty
+    // string if it was sent (`opened` or `passwordRequested(true)` follows), else the error text.
+    // The text is not logged or stored here, and the UTF-8 copy made for the call is wiped.
+    QString submitPassword(const QString& password);
     void close();
     bool isOpen() const { return m_client.has_value(); }
 
@@ -57,6 +61,10 @@ public:
 signals:
     // `repairs`: one line each for why the engine had to repair the document (empty if it did not).
     void opened(quint32 pageCount, const QStringList& repairs);
+    // The document is encrypted and needs a password; `wrong` says the one just sent was refused.
+    // The engine stays up and `submitPassword` may be called again. Replaces `requestFailed` for
+    // these two answers.
+    void passwordRequested(bool wrong);
     void tileReady(quint64 request);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);

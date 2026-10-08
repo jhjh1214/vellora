@@ -10,6 +10,9 @@
 
 #include <QMainWindow>
 #include <QStringList>
+#include <functional>
+#include <optional>
+#include <utility>
 
 class QLabel;
 
@@ -28,6 +31,17 @@ public:
     // the status bar and returns false if the engine cannot be started.
     bool openDocument(const QString& path);
 
+    // How many wrong passwords end the attempt to open an encrypted document.
+    static constexpr int kMaxPasswordAttempts = 3;
+    // What the window asks when a document needs a password: the file name, the attempt (from 1),
+    // the number of attempts and whether the previous password was refused. An empty optional is
+    // "cancel". The default shows a modal `PasswordDialog`; tests replace it.
+    using PasswordProvider = std::function<std::optional<QString>(
+        const QString& fileName, int attempt, int maxAttempts, bool wrong)>;
+    void setPasswordProvider(PasswordProvider provider) {
+        m_passwordProvider = std::move(provider);
+    }
+
     EngineSession& session() { return m_session; }
     CommandRegistry& commands() { return m_commands; }
     CommandPalette& palette() { return *m_palette; }
@@ -42,6 +56,7 @@ private slots:
     void chooseDocument();
     void onOpened(quint32 pageCount, const QStringList& repairs);
     void onRequestFailed(quint64 request, const QString& message);
+    void onPasswordRequested(bool wrong);
     void onEngineCrashed(const QString& how, bool willRestart);
     void onFailed(const QString& reason);
     void onEngineTimedOut(TimeoutStage stage, const QString& message);
@@ -52,6 +67,8 @@ private slots:
 private:
     void registerCommands();
     void setDocumentStatus(const QString& text);
+    void askForPassword(bool wrong, quint64 generation);
+    void giveUpOnDocument(const QString& status);
 
     // The canvas uses the session, so the destructor deletes the canvas before this member goes.
     EngineSession m_session;
@@ -65,6 +82,12 @@ private:
     QString m_fileName;
     // The file changed on disk since it was opened; shown next to the page count.
     bool m_fileChanged = false;
+    PasswordProvider m_passwordProvider;
+    // Wrong passwords for the document being opened; never more than `kMaxPasswordAttempts`.
+    int m_wrongPasswords = 0;
+    // Counts `openDocument` calls, so that a prompt queued for one document is not shown for the
+    // next.
+    quint64 m_openGeneration = 0;
 };
 
 } // namespace vellora

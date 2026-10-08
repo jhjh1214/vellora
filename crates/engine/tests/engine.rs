@@ -195,6 +195,7 @@ fn requests_that_do_not_make_sense_are_refused_and_the_session_survives() {
     // The wrong handle token.
     engine.send(&Request::Open {
         handle_token: engine.file_token.get() + 1,
+        password: None,
     });
     let (_, kind, _) = expect_error(engine.recv());
     assert_eq!(kind, ErrorKind::InvalidRequest);
@@ -211,6 +212,7 @@ fn requests_that_do_not_make_sense_are_refused_and_the_session_survives() {
     // Opening twice.
     engine.send(&Request::Open {
         handle_token: engine.file_token.get(),
+        password: None,
     });
     let (_, kind, message) = expect_error(engine.recv());
     assert_eq!(kind, ErrorKind::InvalidRequest);

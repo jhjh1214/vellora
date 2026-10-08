@@ -15,6 +15,7 @@ name = "vellora_render"
 [dependencies]
 libloading = { workspace = true }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 png = { workspace = true }

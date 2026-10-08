@@ -9,11 +9,14 @@
 //! `unsafe`: the caller's `&mut [u8]` never crosses a thread boundary.
 
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+
+use zeroize::Zeroizing;
 
 use crate::ffi::{self, DocumentBytes, Matrix, OpenDocument};
 use crate::{Error, Pdfium};
@@ -114,6 +117,8 @@ impl TileRequest {
 enum Command {
     Open {
         bytes: DocumentBytes,
+        /// The password with its terminating NUL, wiped when the command is dropped.
+        password: Option<Zeroizing<Vec<u8>>>,
         reply: Sender<Result<(u64, usize), Error>>,
     },
     PageSize {
@@ -184,17 +189,49 @@ impl Renderer {
     ///
     /// # Errors
     ///
-    /// [`Error::Open`] if PDFium cannot open the document (including a wrong or missing
-    /// password: encrypted documents are not supported here yet), [`Error::DocumentTooLarge`],
-    /// [`Error::Closed`].
+    /// [`Error::Open`] if PDFium cannot open the document ([`crate::LastError::Password`] when it is
+    /// encrypted and needs a password: see [`open_with_password`](Self::open_with_password)),
+    /// [`Error::DocumentTooLarge`], [`Error::Closed`].
     pub fn open(
         &self,
         bytes: impl AsRef<[u8]> + Send + Sync + 'static,
+    ) -> Result<DocHandle, Error> {
+        self.open_inner(bytes, None)
+    }
+
+    /// [`open`](Self::open) with a password, which PDFium tries as the user and as the owner
+    /// password. `password` is passed as the bytes given, so the caller decides the encoding
+    /// (UTF-8 for the newest handler, Latin-1 for the old ones); the copy made here is wiped
+    /// once PDFium has been called.
+    ///
+    /// # Errors
+    ///
+    /// As [`open`](Self::open); a wrong password is [`crate::LastError::Password`].
+    /// [`Error::InvalidRequest`] if the password contains a NUL byte, which PDFium cannot be given.
+    pub fn open_with_password(
+        &self,
+        bytes: impl AsRef<[u8]> + Send + Sync + 'static,
+        password: &[u8],
+    ) -> Result<DocHandle, Error> {
+        if password.contains(&0) {
+            return Err(Error::InvalidRequest("a password cannot contain NUL"));
+        }
+        let mut terminated = Zeroizing::new(Vec::with_capacity(password.len() + 1));
+        terminated.extend_from_slice(password);
+        terminated.push(0);
+        self.open_inner(bytes, Some(terminated))
+    }
+
+    fn open_inner(
+        &self,
+        bytes: impl AsRef<[u8]> + Send + Sync + 'static,
+        password: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<DocHandle, Error> {
         let (reply, answer) = mpsc::channel();
         self.commands
             .send(Command::Open {
                 bytes: Arc::new(bytes),
+                password,
                 reply,
             })
             .map_err(|_| Error::Closed)?;
@@ -307,9 +344,22 @@ fn serve(pdfium: &Pdfium, inbox: &Receiver<Command>) {
     // Replies are best effort: a caller that gave up has dropped its end.
     while let Ok(command) = inbox.recv() {
         match command {
-            Command::Open { bytes, reply } => {
+            Command::Open {
+                bytes,
+                password,
+                reply,
+            } => {
                 let result = guarded(|| {
-                    let document = api.open(bytes)?;
+                    // The password was built with its NUL; a command that arrives without one
+                    // (not possible through `Renderer`) is refused instead of trusted.
+                    let password = match password.as_deref() {
+                        Some(raw) => Some(
+                            CStr::from_bytes_with_nul(raw)
+                                .map_err(|_| Error::InvalidRequest("malformed password"))?,
+                        ),
+                        None => None,
+                    };
+                    let document = api.open(bytes, password)?;
                     let page_count = document.page_count();
                     next_id += 1;
                     documents.insert(next_id, document);

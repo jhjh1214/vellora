@@ -187,6 +187,7 @@ impl Client {
         });
         self.send(&Request::Open {
             handle_token: self.process.document_token().get(),
+            password: None,
         });
         assert!(
             matches!(self.recv(), Some(Response::Opened { page_count, .. }) if page_count == pages),

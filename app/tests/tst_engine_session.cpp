@@ -79,6 +79,45 @@ private slots:
         session.close();
         QVERIFY(!session.isOpen());
     }
+
+    void anEncryptedDocumentAsksForItsPasswordThenOpens() {
+        vellora::EngineSession session;
+        QSignalSpy opened(&session, &vellora::EngineSession::opened);
+        QSignalSpy asked(&session, &vellora::EngineSession::passwordRequested);
+        QSignalSpy failed(&session, &vellora::EngineSession::requestFailed);
+
+        QCOMPARE(session.open(QStringLiteral(VELLORA_PROTECTED_PDF)), QString());
+        QVERIFY(asked.wait(kWaitMs));
+        QCOMPARE(asked.size(), 1);
+        QVERIFY(!asked.at(0).at(0).toBool()); // required, not "wrong"
+        QCOMPARE(opened.size(), 0);
+        QCOMPARE(session.pageCount(), 0U);
+
+        // Wrong passwords are refused as many times as they are sent; the engine stays up.
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            asked.clear();
+            QCOMPARE(session.submitPassword(QStringLiteral("wrong")), QString());
+            QVERIFY(asked.wait(kWaitMs));
+            QVERIFY(asked.at(0).at(0).toBool());
+            QCOMPARE(opened.size(), 0);
+        }
+        // A password the protocol cannot carry is refused at once and changes nothing.
+        QVERIFY(!session.submitPassword(QString::fromUtf8("nul\0inside", 10)).isEmpty());
+
+        QCOMPARE(session.submitPassword(QStringLiteral("user-pw")), QString());
+        QVERIFY(opened.wait(kWaitMs));
+        QCOMPARE(opened.first().at(0).toUInt(), 1U);
+        QCOMPARE(session.pageCount(), 1U);
+        // Neither answer was reported as an ordinary failure.
+        QCOMPARE(failed.size(), 0);
+        // The document is open now: a password is no longer accepted.
+        QVERIFY(!session.submitPassword(QStringLiteral("user-pw")).isEmpty());
+    }
+
+    void submittingAPasswordToAClosedSessionIsAnError() {
+        vellora::EngineSession session;
+        QVERIFY(!session.submitPassword(QStringLiteral("x")).isEmpty());
+    }
 };
 
 QTEST_MAIN(TstEngineSession)

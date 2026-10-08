@@ -90,6 +90,62 @@ fn a_document_that_is_not_a_pdf_is_a_typed_error_and_the_renderer_survives() {
     });
 }
 
+/// Made by `crates/cos/tests/fixtures/encryption/generate.py`: one page, a user password
+/// (`user-pw`) and an owner password (`owner-pw`), for the oldest and the newest handler.
+const RC4_PROTECTED: &[u8] =
+    include_bytes!("../../cos/tests/fixtures/encryption/r3-rc4-128-user-password.pdf");
+const AES256_PROTECTED: &[u8] =
+    include_bytes!("../../cos/tests/fixtures/encryption/r6-aes-256-user-password.pdf");
+
+#[test]
+fn an_encrypted_document_needs_its_password_and_a_wrong_one_is_refused() {
+    with_renderer(|renderer| {
+        for pdf in [RC4_PROTECTED, AES256_PROTECTED] {
+            let err = renderer.open(pdf.to_vec()).err().unwrap();
+            assert!(matches!(err, Error::Open(LastError::Password)), "{err:?}");
+            for wrong in [&b"wrong"[..], b"", b"user-p", b"user-pw "] {
+                let err = renderer
+                    .open_with_password(pdf.to_vec(), wrong)
+                    .err()
+                    .unwrap();
+                assert!(
+                    matches!(err, Error::Open(LastError::Password)),
+                    "{wrong:?}: {err:?}"
+                );
+            }
+            // The user and the owner password both open it, and the page renders.
+            for right in [&b"user-pw"[..], b"owner-pw"] {
+                let doc = renderer.open_with_password(pdf.to_vec(), right).unwrap();
+                assert_eq!(doc.page_count(), 1, "{right:?}");
+                assert!(doc.page_size(0).is_ok());
+            }
+        }
+        // The renderer is as usable as before.
+        assert_eq!(renderer.open(sample_pdf()).unwrap().page_count(), 3);
+    });
+}
+
+#[test]
+fn a_password_for_a_document_without_one_is_ignored() {
+    with_renderer(|renderer| {
+        let doc = renderer
+            .open_with_password(sample_pdf(), b"not needed")
+            .unwrap();
+        assert_eq!(doc.page_count(), 3);
+    });
+}
+
+#[test]
+fn a_password_with_a_nul_is_refused_before_it_reaches_pdfium() {
+    with_renderer(|renderer| {
+        let err = renderer
+            .open_with_password(RC4_PROTECTED.to_vec(), b"user\0-pw")
+            .err()
+            .unwrap();
+        assert!(matches!(err, Error::InvalidRequest(_)), "{err:?}");
+    });
+}
+
 #[test]
 fn renders_the_page_through_scale_and_tile_origin() {
     with_renderer(|renderer| {

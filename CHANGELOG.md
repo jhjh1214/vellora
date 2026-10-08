@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- Encrypted documents: the engine opens them with a password (user or owner, any revision of the Standard Security Handler). A document that needs one is refused with a typed `PasswordRequired`, a wrong password with `WrongPassword`; the shell asks in a modal prompt with three attempts and never logs or stores the password. Revision 6 passwords are SASLprep-normalised, older ones are also tried as Latin-1 (protocol v3).
 - Repository foundation: governance documents, architecture documentation and ADRs, Rust workspace skeleton, CI.
 - `cargo xtask pdfium fetch`: downloads the PDFium build pinned in `third_party/pdfium.lock`, verifies its SHA-256 and extracts it.
 - `vellora-render`: thin bindings to PDFium, loaded at run time (ADR-0014).

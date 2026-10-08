@@ -66,6 +66,7 @@ sha256 = "cbbead7185d9cd46daecaf60165a9aa7b9f2daceb3623218c328cb015ae862d5"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "1234"
 
 [[doc]]
 id = "pdfium-encrypted_hello_world_r3"
@@ -74,6 +75,7 @@ sha256 = "cdbfd4f6728786dc70c7514bd5c669a38b03bba38be3e91ec46ccb02168b9ad3"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "h\u00F4tel"
 
 [[doc]]
 id = "pdfa20-pdf-2-0-via-incremental-save"
@@ -162,3 +164,4 @@ sha256 = "d7fd95e016b7d43bc9eed1041b0cdd6ee00e3dd902e50d0307b0a428782c543c"
 license = "Apache-2.0"
 categories = ["encrypted"]
 notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+password = "abc"

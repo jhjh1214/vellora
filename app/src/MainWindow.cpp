@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "PasswordDialog.h"
 #include "RepairBar.h"
 
 #include <QAction>
@@ -7,6 +8,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMetaObject>
 #include <QScreen>
 #include <QStatusBar>
 #include <QStyle>
@@ -29,6 +31,13 @@ QLabel* plainLabel(QWidget* parent) {
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(tr("Vellora"));
+    m_passwordProvider = [this](const QString& fileName, int attempt, int maxAttempts, bool wrong) {
+        PasswordDialog dialog(fileName, attempt, maxAttempts, wrong, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return std::optional<QString>();
+        }
+        return std::optional<QString>(dialog.takePassword());
+    };
     // 1000 x 800, but never more than 80% of the screen.
     const QSize available = screen() ? screen()->availableSize() : QSize(1250, 1000);
     resize(QSize(1000, 800).boundedTo(available * 0.8));
@@ -74,6 +83,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(&m_session, &EngineSession::opened, this, &MainWindow::onOpened);
     connect(&m_session, &EngineSession::requestFailed, this, &MainWindow::onRequestFailed);
+    connect(&m_session, &EngineSession::passwordRequested, this, &MainWindow::onPasswordRequested);
     connect(&m_session, &EngineSession::engineCrashed, this,
             [this](const QString& how, bool willRestart, const QList<quint64>&) {
                 onEngineCrashed(how, willRestart);
@@ -145,6 +155,8 @@ bool MainWindow::openDocument(const QString& path) {
     m_canvas->reset();
     m_pageStatus->clear();
     m_fileChanged = false;
+    m_wrongPasswords = 0;
+    ++m_openGeneration;
     m_repairBar->setReasons({});
     m_documentStatus->setToolTip(QString());
     const QString error = m_session.open(path);
@@ -160,6 +172,7 @@ bool MainWindow::openDocument(const QString& path) {
 
 void MainWindow::onOpened(quint32 pageCount, const QStringList& repairs) {
     // Also the answer of a restarted engine: it has the document again, so tiles are on their way.
+    m_wrongPasswords = 0;
     m_canvas->hideBanner();
     statusBar()->clearMessage();
     QString text = tr("%n page(s)", nullptr, static_cast<int>(pageCount));
@@ -182,6 +195,53 @@ void MainWindow::onRequestFailed(quint64 request, const QString& message) {
     if (request == 0) {
         setDocumentStatus(tr("Cannot open: %1").arg(message));
     }
+}
+
+void MainWindow::onPasswordRequested(bool wrong) {
+    setDocumentStatus(tr("Password required"));
+    // The prompt is modal and runs its own event loop, which must not happen inside the session's
+    // event dispatch: it is shown from the event loop instead, for the document that asked.
+    const quint64 generation = m_openGeneration;
+    QMetaObject::invokeMethod(
+        this, [this, wrong, generation] { askForPassword(wrong, generation); },
+        Qt::QueuedConnection);
+}
+
+void MainWindow::askForPassword(bool wrong, quint64 generation) {
+    if (generation != m_openGeneration || !m_session.isOpen()) {
+        return;
+    }
+    if (wrong) {
+        ++m_wrongPasswords;
+    }
+    if (m_wrongPasswords >= kMaxPasswordAttempts) {
+        giveUpOnDocument(
+            tr("Cannot open: the password was wrong %n time(s)", nullptr, m_wrongPasswords));
+        return;
+    }
+    const std::optional<QString> password = m_passwordProvider(
+        m_fileName, m_wrongPasswords + 1, kMaxPasswordAttempts, m_wrongPasswords > 0);
+    // The prompt ran its own event loop: the document may have been replaced meanwhile.
+    if (generation != m_openGeneration || !m_session.isOpen()) {
+        return;
+    }
+    if (!password) {
+        giveUpOnDocument(tr("Cannot open: a password is required"));
+        return;
+    }
+    const QString error = m_session.submitPassword(*password);
+    if (!error.isEmpty()) {
+        giveUpOnDocument(tr("Cannot open: %1").arg(error));
+        return;
+    }
+    setDocumentStatus(tr("Opening…"));
+}
+
+void MainWindow::giveUpOnDocument(const QString& status) {
+    m_session.close();
+    m_fileName.clear();
+    setWindowTitle(tr("Vellora"));
+    setDocumentStatus(status);
 }
 
 void MainWindow::onEngineCrashed(const QString& how, bool willRestart) {

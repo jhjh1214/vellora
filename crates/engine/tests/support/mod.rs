@@ -23,7 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 use vellora_engine::LaunchArgs;
-use vellora_ipc::{PROTOCOL_VERSION, Request, Response, read_frame, write_frame};
+use vellora_ipc::{PROTOCOL_VERSION, Password, Request, Response, read_frame, write_frame};
 use vellora_shm::{HandleToken, SlotGeometry, TileRegion, share_with_child, stop_sharing};
 
 /// How long a test waits for the engine before calling it hung.
@@ -89,6 +89,18 @@ impl Session {
 
     /// Starts an engine with an explicit tile region and, optionally, a document size limit.
     pub fn start_with(pdf: &[u8], geometry: SlotGeometry, max_document_bytes: Option<u64>) -> Self {
+        Self::start_logged(pdf, geometry, max_document_bytes, Stdio::inherit(), None)
+    }
+
+    /// Starts an engine whose standard error goes to `stderr` and, if `log_level` is given, which
+    /// logs at that level (`VELLORA_LOG`).
+    pub fn start_logged(
+        pdf: &[u8],
+        geometry: SlotGeometry,
+        max_document_bytes: Option<u64>,
+        stderr: Stdio,
+        log_level: Option<&str>,
+    ) -> Self {
         let mut document = tempfile::tempfile().unwrap();
         document.write_all(pdf).unwrap();
         let (region, region_file) = TileRegion::create(geometry).unwrap();
@@ -103,11 +115,15 @@ impl Session {
                 .unwrap_or(vellora_engine::DEFAULT_MAX_DOCUMENT_BYTES),
             deadlines: vellora_engine::Deadlines::default(),
         };
-        let child = engine_command()
+        let mut command = engine_command();
+        if let Some(level) = log_level {
+            command.env("VELLORA_LOG", level);
+        }
+        let child = command
             .args(launch.to_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(stderr)
             .spawn()
             .unwrap();
         // Later children must not inherit the files.
@@ -189,8 +205,14 @@ impl Session {
 
     /// `Open` with the right token; returns the engine's answer.
     pub fn open(&mut self) -> Response {
+        self.open_with_password(None)
+    }
+
+    /// `Open` with the right token and a password; returns the engine's answer.
+    pub fn open_with_password(&mut self, password: Option<&str>) -> Response {
         self.send(&Request::Open {
             handle_token: self.file_token.get(),
+            password: password.map(Password::new),
         });
         self.recv()
     }

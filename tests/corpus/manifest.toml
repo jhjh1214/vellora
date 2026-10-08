@@ -593,6 +593,7 @@ sha256 = "d7fd95e016b7d43bc9eed1041b0cdd6ee00e3dd902e50d0307b0a428782c543c"
 license = "Apache-2.0"
 categories = ["encrypted"]
 notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+password = "abc"
 
 [[doc]]
 id = "pdfjs-secHandler"
@@ -609,6 +610,7 @@ sha256 = "e570bea23d5e1b8a796ffc3701920f04fc114543b4b25e8f03bd913ca47f1da9"
 license = "Apache-2.0"
 categories = ["encrypted"]
 notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+password = "S\u00AASL\u00ADprep"
 
 [[doc]]
 id = "pdfjs-bug1020226"
@@ -1201,6 +1203,7 @@ sha256 = "cbbead7185d9cd46daecaf60165a9aa7b9f2daceb3623218c328cb015ae862d5"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "1234"
 
 [[doc]]
 id = "pdfium-encrypted_hello_world_r2"
@@ -1209,6 +1212,7 @@ sha256 = "267945749086981b8727c4931cfc8a24973c3aa5819ea8a392fa8bd0d637ee84"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "h\u00F4tel"
 
 [[doc]]
 id = "pdfium-encrypted_hello_world_r3"
@@ -1217,6 +1221,7 @@ sha256 = "cdbfd4f6728786dc70c7514bd5c669a38b03bba38be3e91ec46ccb02168b9ad3"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "h\u00F4tel"
 
 [[doc]]
 id = "pdfium-encrypted_hello_world_r5"
@@ -1225,6 +1230,7 @@ sha256 = "9f2bdfbbd675fcaa40e89240f4f66be81621afa33114d24e8f568fb727ad37d9"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "h\u00F4tel"
 
 [[doc]]
 id = "pdfium-encrypted_hello_world_r6"
@@ -1233,6 +1239,7 @@ sha256 = "a5bcee67d2731547d8e6956cbb0d41eddeef4ca80c378c9dba8bc97961ece064"
 license = "BSD-3-Clause"
 categories = ["encrypted"]
 notes = "pdfium testing/resources"
+password = "h\u00F4tel"
 
 [[doc]]
 id = "pdfium-two_signatures"
@@ -1513,6 +1520,7 @@ sha256 = "74e83bda1575454b51213d7bb4c16a73d91b8fbe21807bbc36a14fccdb8e7c3b"
 license = "BSD-3-Clause"
 categories = ["regression"]
 notes = "PDFium bug regression file; not necessarily corrupt"
+password = "test"
 
 [[doc]]
 id = "pdfium-bug_1139"

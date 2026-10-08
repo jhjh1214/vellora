@@ -45,6 +45,13 @@ serde = { version = "1", features = ["derive"] }
 # Wire format of the UI/engine protocol (ADR-0005). `use-std` only (no heapless, no alloc-only extras); it still pulls in `cobs` and `embedded-io`.
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 sha2 = "0.10"
+# Wipes document passwords from memory when they are dropped (`vellora-ipc`, `vellora-render`,
+# `vellora-engine`, `vellora-engine-client`).
+zeroize = "1"
+# `vellora-engine` only: SASLprep (RFC 4013), which ISO 32000-2 §7.6.4.3.3 requires for the passwords
+# of encryption revision 6. MIT/Apache-2.0, with unicode-normalization, unicode-bidi and
+# unicode-properties (MIT/Apache-2.0) and tinyvec (Zlib/Apache-2.0/MIT).
+stringprep = "0.1"
 # Standard Security Handler (RustCrypto, one release line: digest 0.10 / cipher 0.4).
 md-5 = "0.10"
 aes = "0.8"

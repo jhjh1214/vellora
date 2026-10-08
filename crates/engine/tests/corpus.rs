@@ -5,6 +5,11 @@
 //! with `cargo test -p vellora-engine --test corpus -- --ignored --nocapture`. It fails, never
 //! skips, without the corpus. `VELLORA_CORPUS_DIR` overrides the corpus directory.
 //!
+//! Protected documents are opened the way the UI does it: refused with the typed "password
+//! required" answer, refused again for a wrong password, then opened with the password from the
+//! corpus manifest (`password` field). A protected document without a password there is a failure of
+//! the gate, unless it is tagged `malformed` (the two `*_bad_okey` files, which no password opens).
+//!
 //! "Never crashes" is checked on both sides: the engine process must not end unasked (a crash is
 //! reported per file and fails the test), and the client, which stands in for the UI process,
 //! must always return a typed event within the patience below instead of panicking or hanging.
@@ -21,15 +26,19 @@ use std::time::{Duration, Instant};
 use support::pdfium_path;
 use vellora_cos::{Limits, ObjectStore};
 use vellora_engine_client::{Client, ClientConfig, Event, TileRequest};
-use vellora_ipc::{Priority, Repair, SlotId, TileRect};
+use vellora_ipc::{ErrorKind, Priority, Repair, SlotId, TileRect};
 use vellora_shm::SlotGeometry;
 
 /// How long one file may take from open to its first tile.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// M0 criterion: the share of documents the engine must open. Password-protected documents are
-/// excluded from the denominator and must be refused with the typed "password required" error.
+/// The share of documents the engine must open, password-protected ones included (their
+/// passwords come from the manifest). M1 acceptance asks for 98%; the 8 documents PDFium refuses
+/// as not-a-PDF keep this corpus below that, see the note under M1 task 7.
 const REQUIRED_OPEN_SHARE: f64 = 0.95;
+
+/// A password no document in the corpus has.
+const WRONG_PASSWORD: &str = "definitely-not-the-password-\u{20AC}";
 
 #[derive(Debug, PartialEq)]
 enum Outcome {
@@ -39,8 +48,7 @@ enum Outcome {
     RenderFailed(String),
     /// Refused with a typed error (`RequestFailed` or `Failed`).
     Rejected(String),
-    /// Refused because the document is encrypted and no password was given (a typed, expected
-    /// answer: the engine has no password path in M0).
+    /// Refused for want of a password the manifest does not have.
     PasswordRequired,
     /// The engine process ended unasked.
     Crashed(String),
@@ -55,38 +63,175 @@ fn corpus_dir() -> PathBuf {
     )
 }
 
-/// Ids tagged `malformed` in the manifest (a line-based read: the manifest layout is fixed).
-fn malformed_ids() -> Vec<String> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/manifest.toml");
-    let text = fs::read_to_string(manifest).unwrap();
-    let mut ids = Vec::new();
-    let mut current = String::new();
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("id = \"") {
-            rest.trim_end_matches('"').clone_into(&mut current);
-        } else if line.starts_with("categories") && line.contains("\"malformed\"") {
-            ids.push(current.clone());
-        }
-    }
-    ids
+/// The corpus manifest, parsed.
+fn manifest() -> Vec<toml::Table> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/manifest.toml");
+    let table: toml::Table = fs::read_to_string(path).unwrap().parse().unwrap();
+    table["doc"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|doc| doc.as_table().unwrap().clone())
+        .collect()
 }
 
-fn classify_refusal(message: String) -> Outcome {
-    if message.contains("password required") {
+/// Ids tagged `malformed` in the manifest.
+fn malformed_ids(docs: &[toml::Table]) -> Vec<String> {
+    docs.iter()
+        .filter(|doc| {
+            doc["categories"]
+                .as_array()
+                .is_some_and(|c| c.iter().any(|c| c.as_str() == Some("malformed")))
+        })
+        .map(|doc| doc["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The `password` of a manifest entry, if it has one.
+fn password_of(docs: &[toml::Table], id: &str) -> Option<String> {
+    docs.iter()
+        .find(|doc| doc["id"].as_str() == Some(id))
+        .and_then(|doc| doc.get("password"))
+        .and_then(|password| password.as_str().map(str::to_owned))
+}
+
+fn classify_refusal(kind: ErrorKind, message: String) -> Outcome {
+    if kind == ErrorKind::PasswordRequired {
         Outcome::PasswordRequired
     } else {
         Outcome::Rejected(message)
     }
 }
 
+/// How a protected document answered the password steps of the gate.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PasswordSteps {
+    /// Opening without a password was refused with `PasswordRequired`.
+    asked: bool,
+    /// A wrong password was refused with `WrongPassword` and the engine kept serving.
+    wrong_refused: bool,
+    /// The manifest's password was refused.
+    right_refused: bool,
+}
+
 /// What the engine made of one file: how it went, and what it said about repairs when it opened.
 struct Run {
     outcome: Outcome,
+    password: PasswordSteps,
     /// `None` when the document never opened.
     repairs: Option<Vec<Repair>>,
 }
 
-fn run_one(path: &Path) -> Run {
+/// One document being walked through the gate: the client that stands in for the UI, and what has
+/// happened so far.
+struct Walk<'a> {
+    client: &'a Client,
+    /// The manifest's password, if the document has one.
+    password: Option<&'a str>,
+    repairs: Option<Vec<Repair>>,
+    steps: PasswordSteps,
+    /// The tile of page 1 that was asked for once the document opened.
+    requested: Option<vellora_ipc::RequestId>,
+}
+
+impl Walk<'_> {
+    /// Reacts to one event; `Some` ends the walk.
+    fn on_event(&mut self, event: Event) -> Option<Outcome> {
+        match event {
+            Event::Opened {
+                page_count,
+                page_sizes,
+                repairs,
+            } => {
+                self.repairs = Some(repairs);
+                let Some(size) = page_sizes.first().filter(|_| page_count > 0) else {
+                    return Some(Outcome::Rendered);
+                };
+                self.request_first_tile(size.width, size.height)
+            }
+            Event::TileReady { request, .. } if Some(request) == self.requested => {
+                Some(Outcome::Rendered)
+            }
+            // The two password answers drive the gate: first a wrong password, which must be
+            // refused without ending the session, then the manifest's.
+            Event::RequestFailed {
+                request: None,
+                kind: ErrorKind::PasswordRequired,
+                message,
+            } if self.password.is_some() && !self.steps.asked => {
+                self.steps.asked = true;
+                assert!(message.contains("password required"), "{message}");
+                self.submit(WRONG_PASSWORD)
+            }
+            Event::RequestFailed {
+                request: None,
+                kind: ErrorKind::WrongPassword,
+                ..
+            } if self.steps.asked && !self.steps.wrong_refused => {
+                self.steps.wrong_refused = true;
+                self.submit(self.password.unwrap_or_default())
+            }
+            Event::RequestFailed {
+                request: None,
+                kind: ErrorKind::WrongPassword,
+                ..
+            } if self.steps.wrong_refused => {
+                self.steps.right_refused = true;
+                Some(Outcome::Rejected(
+                    "the manifest's password was refused".to_owned(),
+                ))
+            }
+            Event::RequestFailed {
+                request,
+                kind,
+                message,
+            } => Some(if request.is_some() && request == self.requested {
+                Outcome::RenderFailed(message)
+            } else {
+                classify_refusal(kind, message)
+            }),
+            Event::EngineCrashed { crash, .. } => Some(Outcome::Crashed(format!("{crash:?}"))),
+            Event::Failed { reason } => Some(classify_refusal(ErrorKind::Internal, reason)),
+            _ => None,
+        }
+    }
+
+    fn submit(&self, password: &str) -> Option<Outcome> {
+        let sent = self.client.submit_password(password);
+        sent.err()
+            .map(|e| Outcome::Rejected(format!("submit_password: {e}")))
+    }
+
+    /// Asks for page 1 (at most 256 x 256 pixels) of the document that has just opened.
+    fn request_first_tile(&mut self, width: f32, height: f32) -> Option<Outcome> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (width, height) = (
+            (width.ceil() as u32).clamp(1, 256),
+            (height.ceil() as u32).clamp(1, 256),
+        );
+        let request = self.client.request_tile(&TileRequest {
+            page: 0,
+            scale: 1.0,
+            rect: TileRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            slot: SlotId(0),
+            priority: Priority::Visible,
+        });
+        match request {
+            Ok(id) => {
+                self.requested = Some(id);
+                None
+            }
+            Err(e) => Some(Outcome::RenderFailed(e.to_string())),
+        }
+    }
+}
+
+fn run_one(path: &Path, password: Option<&str>) -> Run {
     let mut config = ClientConfig::new(
         env!("CARGO_BIN_EXE_vellora-engine"),
         SlotGeometry::new(2, 1 << 20).unwrap(),
@@ -101,80 +246,38 @@ fn run_one(path: &Path) -> Run {
         Err(e) => {
             return Run {
                 outcome: Outcome::Rejected(format!("client: {e}")),
+                password: PasswordSteps::default(),
                 repairs: None,
             };
         }
     };
-    let mut repairs = None;
+    let mut walk = Walk {
+        client: &client,
+        password,
+        repairs: None,
+        steps: PasswordSteps::default(),
+        requested: None,
+    };
     let deadline = Instant::now() + PATIENCE;
-    let mut requested = None;
     let outcome = loop {
         let Some(left) = deadline.checked_duration_since(Instant::now()) else {
             break Outcome::Hung;
         };
-        let mut done = None;
-        for event in client.wait_events(left) {
-            match event {
-                Event::Opened {
-                    page_count,
-                    page_sizes,
-                    repairs: said,
-                } => {
-                    repairs = Some(said);
-                    let Some(size) = page_sizes.first().filter(|_| page_count > 0) else {
-                        done = Some(Outcome::Rendered);
-                        break;
-                    };
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let (width, height) = (
-                        (size.width.ceil() as u32).clamp(1, 256),
-                        (size.height.ceil() as u32).clamp(1, 256),
-                    );
-                    let request = client.request_tile(&TileRequest {
-                        page: 0,
-                        scale: 1.0,
-                        rect: TileRect {
-                            x: 0,
-                            y: 0,
-                            width,
-                            height,
-                        },
-                        slot: SlotId(0),
-                        priority: Priority::Visible,
-                    });
-                    match request {
-                        Ok(id) => requested = Some(id),
-                        Err(e) => done = Some(Outcome::RenderFailed(e.to_string())),
-                    }
-                }
-                Event::TileReady { request, .. } if Some(request) == requested => {
-                    done = Some(Outcome::Rendered);
-                }
-                Event::RequestFailed {
-                    request, message, ..
-                } => {
-                    done = Some(if request.is_some() && request == requested {
-                        Outcome::RenderFailed(message)
-                    } else {
-                        classify_refusal(message)
-                    });
-                }
-                Event::EngineCrashed { crash, .. } => {
-                    done = Some(Outcome::Crashed(format!("{crash:?}")));
-                }
-                Event::Failed { reason } => done = Some(classify_refusal(reason)),
-                _ => {}
-            }
-            if done.is_some() {
-                break;
-            }
-        }
-        if let Some(outcome) = done {
+        if let Some(outcome) = client
+            .wait_events(left)
+            .into_iter()
+            .find_map(|event| walk.on_event(event))
+        {
             break outcome;
         }
     };
+    let Walk { repairs, steps, .. } = walk;
     client.close();
-    Run { outcome, repairs }
+    Run {
+        outcome,
+        password: steps,
+        repairs,
+    }
 }
 
 /// Engine findings where `cos` repaired nothing: PDFium and `cos` disagree (a page count, a page
@@ -187,11 +290,28 @@ const DISAGREEMENTS: [&str; 4] = [
     "cos-page-unreadable",
 ];
 
+/// The forms of a typed password that `cos` can be given: as typed, SASLprep-normalised (encryption
+/// revision 6) and as Latin-1 (revisions 2 to 4), as the engine tries them.
+fn password_forms(password: &str) -> Vec<Vec<u8>> {
+    let mut forms = vec![password.as_bytes().to_vec()];
+    if let Ok(prepared) = stringprep::saslprep(password) {
+        forms.push(prepared.as_bytes().to_vec());
+    }
+    if let Some(latin1) = password
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).ok())
+        .collect::<Option<Vec<u8>>>()
+    {
+        forms.push(latin1);
+    }
+    forms
+}
+
 /// Whether `cos` had to repair the file to read it all: it cannot open or settle it, or reading
 /// every page leaves repair notes. Written against `cos` directly, not against the engine's own
-/// check, so that the two can disagree. `None` for a document `cos` cannot unlock without a
-/// password, whose repairs cannot be judged before the password path (M1 task 7).
-fn cos_repairs(path: &Path) -> Option<bool> {
+/// check, so that the two can disagree. A protected document is unlocked with `password` first;
+/// `None` if `cos` cannot unlock it, whose repairs cannot be judged.
+fn cos_repairs(path: &Path, password: Option<&str>) -> Option<bool> {
     let bytes = fs::read(path).unwrap();
     let Ok(store) = ObjectStore::open(&bytes, Limits::default()) else {
         return Some(true);
@@ -200,11 +320,43 @@ fn cos_repairs(path: &Path) -> Option<bool> {
         return Some(true);
     }
     if store.is_locked() {
-        return None;
+        let forms = password.map(password_forms).unwrap_or_default();
+        if !forms.iter().any(|form| store.authenticate(form).is_ok()) {
+            return None;
+        }
     }
     // Page errors do not matter here; reading is what finds the damage.
     store.pages().for_each(drop);
     Some(!store.repaired().is_empty())
+}
+
+/// M1 task 7: what is wrong with how `id` went through the password steps, if anything. A
+/// protected document asks for its password, refuses a wrong one and opens with the manifest's; a
+/// document the manifest gives no password for must not be asked about.
+fn password_problem(id: &str, password: Option<&str>, steps: &PasswordSteps) -> Option<String> {
+    match (password, steps.asked) {
+        (Some(_), true) if !steps.wrong_refused || steps.right_refused => {
+            Some(format!("{id}: password steps went wrong: {steps:?}"))
+        }
+        (Some(_), false) => Some(format!(
+            "{id}: the manifest has a password but the engine never asked for it"
+        )),
+        _ => None,
+    }
+}
+
+/// Why `outcome` fails the gate, if it does: a crash or a hang, or a refusal for want of a password
+/// the manifest does not have. The two `*_bad_okey` files (tagged `malformed`) have a broken `/O`
+/// entry, which PDFium answers with "password" whatever is sent and `cos` refuses outright, so no
+/// password opens them: a malformed document may be refused, a sound one must open.
+fn outcome_problem(id: &str, outcome: &Outcome, is_malformed: bool) -> Option<String> {
+    match outcome {
+        Outcome::PasswordRequired if !is_malformed => {
+            Some(format!("{id}: needs a password the manifest does not have"))
+        }
+        Outcome::Crashed(_) | Outcome::Hung => Some(format!("{id}: {outcome:?}")),
+        _ => None,
+    }
 }
 
 #[test]
@@ -218,9 +370,10 @@ fn corpus_opens_without_crashing() {
         .collect();
     files.sort();
     assert!(!files.is_empty(), "no PDFs in {}", dir.display());
-    let malformed = malformed_ids();
+    let docs = manifest();
+    let malformed = malformed_ids(&docs);
 
-    let (mut rendered, mut opened, mut locked, mut malformed_total, mut malformed_bad) =
+    let (mut rendered, mut opened, mut protected, mut malformed_total, mut malformed_bad) =
         (0, 0, 0, 0, 0);
     let mut problems = Vec::new();
     // M1 task 6: the repair notice appears for every file cos repairs and for no other.
@@ -229,19 +382,25 @@ fn corpus_opens_without_crashing() {
     for path in &files {
         let id = path.file_stem().unwrap().to_string_lossy().into_owned();
         let is_malformed = malformed.contains(&id);
+        let password = password_of(&docs, &id);
         let started = Instant::now();
-        let Run { outcome, repairs } = run_one(path);
+        let Run {
+            outcome,
+            password: steps,
+            repairs,
+        } = run_one(path, password.as_deref());
         let ms = started.elapsed().as_millis();
         println!(
-            "{id}: {outcome:?} ({ms} ms){}",
-            if is_malformed { " [malformed]" } else { "" }
+            "{id}: {outcome:?} ({ms} ms){}{}",
+            if is_malformed { " [malformed]" } else { "" },
+            if steps.asked { " [password]" } else { "" },
         );
         if let Some(repairs) = &repairs {
             let from_cos = repairs
                 .iter()
                 .filter(|r| !DISAGREEMENTS.contains(&r.code.as_str()))
                 .count();
-            let expected = cos_repairs(path);
+            let expected = cos_repairs(path, password.as_deref());
             notices += usize::from(from_cos > 0);
             disagreements += usize::from(from_cos == 0 && !repairs.is_empty());
             if expected.is_some_and(|expected| expected != (from_cos > 0)) {
@@ -250,15 +409,16 @@ fn corpus_opens_without_crashing() {
                 ));
             }
         }
+        protected += usize::from(password.is_some() && steps.asked);
+        problems.extend(password_problem(&id, password.as_deref(), &steps));
+        problems.extend(outcome_problem(&id, &outcome, is_malformed));
         match &outcome {
             Outcome::Rendered => {
                 rendered += 1;
                 opened += 1;
             }
             Outcome::RenderFailed(_) => opened += 1,
-            Outcome::PasswordRequired => locked += 1,
-            Outcome::Rejected(_) => {}
-            Outcome::Crashed(_) | Outcome::Hung => problems.push(format!("{id}: {outcome:?}")),
+            _ => {}
         }
         if is_malformed {
             malformed_total += 1;
@@ -270,17 +430,20 @@ fn corpus_opens_without_crashing() {
 
     let total = files.len();
     #[allow(clippy::cast_precision_loss)]
-    let share = f64::from(opened) / (f64::from(i32::try_from(total).unwrap() - locked));
+    let share = f64::from(opened) / (total as f64);
     println!(
-        "{total} documents, {locked} need a password (not counted); {opened} opened ({:.1}%), {rendered} rendered page 1, \
-         {malformed_total} malformed of which {malformed_bad} crashed or hung, {} crashed or hung overall",
+        "{total} documents, {protected} protected (opened with their manifest passwords); {opened} opened ({:.1}%), {rendered} rendered page 1, \
+         {malformed_total} malformed of which {malformed_bad} crashed or hung, {} problems overall",
         share * 100.0,
         problems.len()
     );
     println!(
         "repair notice for {notices} documents; {disagreements} more only because PDFium and cos disagree"
     );
-    assert!(problems.is_empty(), "engine crashed or hung: {problems:#?}");
+    assert!(
+        problems.is_empty(),
+        "engine crashed or hung, or the password steps failed: {problems:#?}"
+    );
     assert!(
         notice_mismatches.is_empty(),
         "the repair notice differs from what cos repairs: {notice_mismatches:#?}"

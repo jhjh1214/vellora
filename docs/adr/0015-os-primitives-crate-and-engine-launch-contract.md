@@ -25,7 +25,7 @@ Invariant 6 allowed `unsafe` only in `vellora-render` and `vellora-engine-client
 - IPC runs over the engine's **standard input and output** (ADR-0005 allows either that or pipes passed at spawn). Standard error carries logs, never document content at `info` level or above.
 - The UI opens the document and creates the tile region, marks both **inheritable** (`share_with_child`), spawns the engine with `--file-handle`, `--region-handle`, `--region-slots`, `--region-slot-bytes` and optionally `--max-document-bytes`, then calls `stop_sharing` so later children do not inherit them.
 - The engine **validates every number it adopts** (not a standard stream, an open handle, a regular file) and refuses a region file shorter than the geometry.
-- `Open { handle_token }` must carry the same number as `--file-handle`; anything else is `InvalidRequest`.
+- `Open { handle_token, password }` must carry the same number as `--file-handle` in `handle_token`; anything else is `InvalidRequest`. `password` is optional text for an encrypted document (protocol v3).
 - A failure to start after the arguments are parsed is reported over the protocol (`Hello`, then `Error`) before the process exits, so the UI can show the reason.
 
 ## Alternatives considered

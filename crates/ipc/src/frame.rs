@@ -3,6 +3,7 @@
 use std::io::{self, Read, Write};
 
 use serde::{Serialize, de::DeserializeOwned};
+use zeroize::Zeroizing;
 
 use crate::{Error, Validate};
 
@@ -54,17 +55,21 @@ fn write_frame_with_max<W: Write, T: Serialize + Validate>(
     max: u32,
 ) -> Result<(), Error> {
     message.validate()?;
-    let payload = postcard::to_stdvec(message).map_err(Error::Encode)?;
-    let len = u32::try_from(payload.len())
+    // A message may carry a password (`Open`), so every buffer that holds its bytes is wiped when
+    // it goes. The exact size is asked for first so that the encoder never grows (and so never
+    // leaves a copy of the password behind in a freed, smaller buffer).
+    let size = postcard::experimental::serialized_size(message).map_err(Error::Encode)?;
+    let len = u32::try_from(size)
         .ok()
         .filter(|len| *len <= max)
         .ok_or(Error::FrameTooLarge {
-            len: payload.len() as u64,
+            len: size as u64,
             max,
         })?;
-    let mut frame = Vec::with_capacity(HEADER_BYTES + payload.len());
-    frame.extend_from_slice(&len.to_le_bytes());
-    frame.extend_from_slice(&payload);
+    let mut frame = Zeroizing::new(vec![0_u8; HEADER_BYTES + size]);
+    frame[..HEADER_BYTES].copy_from_slice(&len.to_le_bytes());
+    let written = postcard::to_slice(message, &mut frame[HEADER_BYTES..]).map_err(Error::Encode)?;
+    debug_assert_eq!(written.len(), size);
     writer.write_all(&frame)?;
     writer.flush()?;
     Ok(())
@@ -86,7 +91,8 @@ fn read_frame_with_max<R: Read, T: DeserializeOwned + Validate>(
         });
     }
 
-    let mut payload = Vec::new();
+    // Wiped when it goes: the payload of an `Open` holds a password.
+    let mut payload = Zeroizing::new(Vec::new());
     let got = reader.take(u64::from(len)).read_to_end(&mut payload)?;
     if got != len as usize {
         return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
@@ -140,6 +146,15 @@ mod tests {
             },
             Request::Open {
                 handle_token: u64::MAX,
+                password: None,
+            },
+            Request::Open {
+                handle_token: 1,
+                password: Some(Password::new("hôtel 🔑")),
+            },
+            Request::Open {
+                handle_token: 1,
+                password: Some(Password::new("p".repeat(MAX_PASSWORD_BYTES))),
             },
             Request::RenderTile {
                 req_id: RequestId(7),
@@ -364,7 +379,11 @@ mod tests {
     #[test]
     fn truncated_input_is_an_error_not_a_close() {
         let mut wire = Vec::new();
-        write_frame(&mut wire, &Request::Open { handle_token: 1 }).unwrap();
+        let open = Request::Open {
+            handle_token: 1,
+            password: Some(Password::new("secret")),
+        };
+        write_frame(&mut wire, &open).unwrap();
         for cut in 1..wire.len() {
             let mut cursor = Cursor::new(wire[..cut].to_vec());
             let err = read_frame::<_, Request>(&mut cursor).unwrap_err();
@@ -503,6 +522,112 @@ mod tests {
             },
         );
         assert_eq!(round_trip(&edge), edge);
+    }
+
+    fn open_with(password: &str) -> Request {
+        Request::Open {
+            handle_token: 1,
+            password: Some(Password::new(password)),
+        }
+    }
+
+    #[test]
+    fn password_limits_are_enforced_on_both_sides_of_the_wire() {
+        let bad = [
+            open_with(&"p".repeat(MAX_PASSWORD_BYTES + 1)),
+            // Two bytes a character: the limit counts bytes.
+            open_with(&"é".repeat(MAX_PASSWORD_BYTES / 2 + 1)),
+            open_with("pass\0word"),
+            open_with("\0"),
+        ];
+        for message in &bad {
+            let mut wire = Vec::new();
+            assert!(
+                matches!(write_frame(&mut wire, message), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+            assert_eq!(wire.len(), 0, "nothing may be sent");
+            let payload = postcard::to_stdvec(message).unwrap();
+            let mut raw = u32::try_from(payload.len()).unwrap().to_le_bytes().to_vec();
+            raw.extend_from_slice(&payload);
+            assert!(
+                matches!(
+                    read_frame::<_, Request>(&mut Cursor::new(raw)),
+                    Err(Error::Invalid(_))
+                ),
+                "{message:?}"
+            );
+        }
+        // The empty password is a password (a user may submit nothing); the limit is inclusive.
+        for ok in [
+            open_with(""),
+            open_with(&"é".repeat(MAX_PASSWORD_BYTES / 2)),
+        ] {
+            assert_eq!(round_trip(&ok), ok);
+        }
+    }
+
+    #[test]
+    fn a_password_never_shows_in_debug_output() {
+        let request = open_with("hunter2-correct-horse");
+        for text in [format!("{request:?}"), format!("{request:#?}")] {
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(text.contains("redacted"), "{text}");
+        }
+        let password = Password::new("hunter2");
+        assert_eq!(password.expose(), "hunter2");
+        assert!(!format!("{password:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn open_has_the_documented_layout() {
+        // Variant 1, the token as a varint, then the option tag.
+        let mut wire = Vec::new();
+        write_frame(
+            &mut wire,
+            &Request::Open {
+                handle_token: 1,
+                password: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(wire, [3, 0, 0, 0, 1, 1, 0]);
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &open_with("ab")).unwrap();
+        // ... then Some, the text's length and its bytes.
+        assert_eq!(wire, [6, 0, 0, 0, 1, 1, 1, 2, b'a', b'b']);
+    }
+
+    #[test]
+    fn error_kinds_keep_their_wire_order() {
+        // The variant order is the wire format: a new kind goes last.
+        let kinds = [
+            ErrorKind::VersionMismatch,
+            ErrorKind::InvalidRequest,
+            ErrorKind::OpenFailed,
+            ErrorKind::RenderFailed,
+            ErrorKind::Internal,
+            ErrorKind::PasswordRequired,
+            ErrorKind::WrongPassword,
+        ];
+        for (index, kind) in kinds.into_iter().enumerate() {
+            let mut wire = Vec::new();
+            write_frame(
+                &mut wire,
+                &Response::Error {
+                    req_id: None,
+                    kind,
+                    message: String::new(),
+                },
+            )
+            .unwrap();
+            // Frame header (4), variant `Error` (3), no request id (0), the kind, empty text (0).
+            assert_eq!(
+                wire[wire.len() - 2],
+                u8::try_from(index).unwrap(),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

@@ -90,6 +90,10 @@ mod ffi {
         OpenFailed,
         RenderFailed,
         Internal,
+        /// The document needs a password (answer to opening it).
+        PasswordRequired,
+        /// The password given does not open the document.
+        WrongPassword,
     }
 
     /// How urgently a tile is wanted.
@@ -159,6 +163,12 @@ mod ffi {
         /// Opens the document at `path` and starts its engine (found through `VELLORA_ENGINE`,
         /// else next to the running executable). `Opened` arrives as an event.
         fn open(path: &str) -> Result<Box<EngineClient>>;
+
+        /// Opens an encrypted document after a `RequestFailed` with `PasswordRequired` or
+        /// `WrongPassword`; `Opened` or the same failure follows. The text is not logged or
+        /// kept beyond what a restarted engine needs. Throws if the document is open, the engine
+        /// is down or the password cannot be sent (NUL, over 256 bytes).
+        fn submit_password(self: &EngineClient, password: &str) -> Result<()>;
 
         /// Number of pages; 0 until `Opened`.
         fn page_count(self: &EngineClient) -> u32;
@@ -277,6 +287,19 @@ impl EngineClient {
             .as_ref()
             .and_then(Client::page_count)
             .unwrap_or(0)
+    }
+
+    /// Sends the password for the document; see [`Client::submit_password`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the handle is closed, the document is open, the engine is down or the
+    /// password cannot be sent.
+    pub fn submit_password(&self, password: &str) -> Result<(), ClientError> {
+        self.client
+            .as_ref()
+            .ok_or(ClientError::Closed)?
+            .submit_password(password)
     }
 
     /// Size of a page in points; zero by zero when unknown.
@@ -423,6 +446,8 @@ impl From<ErrorKind> for FailureKind {
             ErrorKind::OpenFailed => Self::OpenFailed,
             ErrorKind::RenderFailed => Self::RenderFailed,
             ErrorKind::Internal => Self::Internal,
+            ErrorKind::PasswordRequired => Self::PasswordRequired,
+            ErrorKind::WrongPassword => Self::WrongPassword,
         }
     }
 }
@@ -537,6 +562,7 @@ mod tests {
             "::rust::Box<::vellora::EngineClient> open(::rust::Str path)",
             "request_tile(",
             "read_tile(",
+            "submit_password(::rust::Str password)",
             "engine_id()",
             "struct TileTicket",
             "enum class TileState",
@@ -568,6 +594,18 @@ mod tests {
             (EventKind::RequestFailed, false, FailureKind::OpenFailed)
         );
         assert_eq!(failed.message, "no pages");
+
+        for (kind, expected) in [
+            (ErrorKind::PasswordRequired, FailureKind::PasswordRequired),
+            (ErrorKind::WrongPassword, FailureKind::WrongPassword),
+        ] {
+            let refused = EngineEvent::from(Event::RequestFailed {
+                request: None,
+                kind,
+                message: "password required".into(),
+            });
+            assert_eq!((refused.has_request, refused.failure), (false, expected));
+        }
 
         let crashed = EngineEvent::from(Event::EngineCrashed {
             crash: Crash {
@@ -623,6 +661,10 @@ mod tests {
         ));
         assert!(matches!(
             handle.read_tile(0, 1.0, 0, 0, &mut []),
+            Err(ClientError::Closed)
+        ));
+        assert!(matches!(
+            handle.submit_password("anything"),
             Err(ClientError::Closed)
         ));
         assert_eq!(handle.slot_bytes(), 0);

@@ -184,6 +184,7 @@ mod tests {
             license: "MIT".into(),
             categories: vec!["x".into()],
             notes: String::new(),
+            password: None,
         }
     }
 
