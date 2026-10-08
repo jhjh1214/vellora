@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,7 +21,21 @@ use std::time::{Duration, Instant};
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines, LaunchArgs};
 use vellora_shm::{HandleToken, SlotGeometry, share_with_child, stop_sharing};
 
-use crate::limits::{self, Guard, ResourceLimits};
+use crate::limits::{Guard, ResourceLimits};
+
+/// Where the engine looks for PDFium before it looks next to itself: `vellora_render::LIBRARY_ENV`,
+/// which this crate does not link (`crates/engine/tests/sandbox.rs` keeps the two equal). The
+/// Windows sandbox grants the container read access to the file it names (ADR-0017).
+pub const PDFIUM_ENV: &str = "VELLORA_PDFIUM_LIB";
+
+/// The PDFium library next to the engine on Windows (`vellora_render::library_file_name`).
+pub const PDFIUM_LIBRARY_WINDOWS: &str = "pdfium.dll";
+
+/// The operating system's handle on the engine process.
+#[cfg(unix)]
+type Process = std::process::Child;
+#[cfg(windows)]
+type Process = crate::sandbox::Child;
 
 /// Serialises the share, spawn, un-share sequence.
 static SPAWN: Mutex<()> = Mutex::new(());
@@ -38,6 +52,10 @@ pub enum SpawnError {
     /// The operating system refused to start the executable.
     #[error("cannot start the engine: {0}")]
     Start(#[source] io::Error),
+    /// The sandbox could not be built or the process could not be started inside it (Windows).
+    /// There is no fallback to running the engine unsandboxed.
+    #[error("cannot start the engine in its sandbox: {0}")]
+    Sandbox(#[source] io::Error),
     /// The process started but could not be put under its limits; it was killed.
     #[error("cannot apply the resource limits to the engine: {0}")]
     Limits(#[source] io::Error),
@@ -144,10 +162,10 @@ pub struct Crash {
 /// A running engine: the child process, its limits and its two pipes.
 #[derive(Debug)]
 pub struct EngineProcess {
-    child: Child,
+    child: Process,
     document: HandleToken,
-    stdin: Option<ChildStdin>,
-    stdout: Option<ChildStdout>,
+    stdin: Option<File>,
+    stdout: Option<File>,
     // Dropped after the child is reaped; on Windows, closing the job also kills the engine.
     _guard: Guard,
 }
@@ -181,40 +199,22 @@ impl EngineProcess {
             deadlines: config.deadlines,
         };
 
-        let mut command = Command::new(config.engine);
-        command
-            .args(launch.to_args())
-            .envs(config.env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        limits::prepare(&mut command, config.limits);
-        let spawned = command.spawn();
+        let started = start(config, &launch);
 
         // Whatever happened, later children must not inherit the files.
         let unshared_document = stop_sharing(config.document);
         let unshared_region = stop_sharing(config.region);
-        let mut child = spawned.map_err(SpawnError::Start)?;
+        let mut started = started?;
         if let Err(error) = unshared_document.and(unshared_region) {
-            kill_and_reap(&mut child);
+            kill_and_reap(&mut started.child);
             return Err(error.into());
         }
-
-        let guard = match limits::confine(&child, config.limits) {
-            Ok(guard) => guard,
-            Err(error) => {
-                kill_and_reap(&mut child);
-                return Err(SpawnError::Limits(error));
-            }
-        };
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take();
         Ok(Self {
-            child,
+            child: started.child,
             document,
-            stdin,
-            stdout,
-            _guard: guard,
+            stdin: Some(started.stdin),
+            stdout: Some(started.stdout),
+            _guard: started.guard,
         })
     }
 
@@ -232,12 +232,12 @@ impl EngineProcess {
     }
 
     /// The pipe to the engine's standard input (requests). `None` after the first call.
-    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+    pub fn take_stdin(&mut self) -> Option<File> {
         self.stdin.take()
     }
 
     /// The pipe from the engine's standard output (responses). `None` after the first call.
-    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+    pub fn take_stdout(&mut self) -> Option<File> {
         self.stdout.take()
     }
 
@@ -297,10 +297,91 @@ impl Drop for EngineProcess {
     }
 }
 
-fn kill_and_reap(child: &mut Child) {
+fn kill_and_reap(child: &mut Process) {
     // The process may already be gone, which is the outcome wanted.
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// A launched engine, before it is wrapped in an [`EngineProcess`].
+struct Started {
+    child: Process,
+    stdin: File,
+    stdout: File,
+    guard: Guard,
+}
+
+/// Starts the engine under its resource limits (Unix: `setrlimit` between fork and exec).
+#[cfg(unix)]
+fn start(config: &SpawnConfig<'_>, launch: &LaunchArgs) -> Result<Started, SpawnError> {
+    use std::os::fd::OwnedFd;
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new(config.engine);
+    command
+        .args(launch.to_args())
+        .envs(config.env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    crate::limits::prepare(&mut command, config.limits);
+    let mut child = command.spawn().map_err(SpawnError::Start)?;
+    let pipes = child
+        .stdin
+        .take()
+        .zip(child.stdout.take())
+        .map(|(stdin, stdout)| {
+            (
+                File::from(OwnedFd::from(stdin)),
+                File::from(OwnedFd::from(stdout)),
+            )
+        });
+    let guard = match crate::limits::confine(&child, config.limits) {
+        Ok(guard) => guard,
+        Err(error) => {
+            kill_and_reap(&mut child);
+            return Err(SpawnError::Limits(error));
+        }
+    };
+    let Some((stdin, stdout)) = pipes else {
+        kill_and_reap(&mut child);
+        return Err(SpawnError::Start(io::Error::other(
+            "no pipes to the engine",
+        )));
+    };
+    Ok(Started {
+        child,
+        stdin,
+        stdout,
+        guard,
+    })
+}
+
+/// Starts the engine in an `AppContainer`, created suspended and put under its job before it runs
+/// (ADR-0017).
+#[cfg(windows)]
+fn start(config: &SpawnConfig<'_>, launch: &LaunchArgs) -> Result<Started, SpawnError> {
+    use std::os::windows::io::AsRawHandle;
+
+    let args = launch.to_args();
+    let inherit = [
+        config.document.as_raw_handle(),
+        config.region.as_raw_handle(),
+    ];
+    let spec = crate::sandbox::Spec {
+        engine: config.engine,
+        args: &args,
+        env: &config.env,
+        inherit: &inherit,
+        limits: config.limits,
+    };
+    let started = crate::sandbox::spawn(&spec).map_err(SpawnError::Sandbox)?;
+    Ok(Started {
+        child: started.child,
+        stdin: started.stdin,
+        stdout: started.stdout,
+        guard: started.guard,
+    })
 }
 
 #[cfg(test)]

@@ -124,7 +124,7 @@ fn bomb_stream() -> Vec<u8> {
 /// An engine started the way the UI starts it, and the UI's end of the conversation.
 struct Client {
     process: EngineProcess,
-    input: Option<BufWriter<std::process::ChildStdin>>,
+    input: Option<BufWriter<std::fs::File>>,
     frames: Receiver<Option<Response>>,
     _region: TileRegion,
 }

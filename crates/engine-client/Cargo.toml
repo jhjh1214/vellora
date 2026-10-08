@@ -31,9 +31,9 @@ tempfile = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
-# Job objects (memory limit, kill-on-close, no child processes) for the engine process.
+# Job object (memory limit, kill-on-close, no child processes) and AppContainer launch for the engine process.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+windows-sys = { workspace = true, features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_Console", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_Storage_FileSystem"] }
 
 # FFI crate (cxx bridge): `unsafe` is denied by default and allowed only where
 # documented, with a `// SAFETY:` comment on every block (CLAUDE.md invariant 6).
