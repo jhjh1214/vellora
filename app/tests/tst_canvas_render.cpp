@@ -102,7 +102,11 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(canvas->textureCount() > 0, kWaitMs);
 
         // The last page: the status bar says so, and its tiles are drawn on screen.
-        window.canvas().controller()->setScrollPosition(QPointF(0.0, 1.0e12));
+        // Scrolled so that the top of the last page, where its title is, is on screen.
+        vellora::CanvasController* controller = window.canvas().controller();
+        controller->setScrollPosition(
+            QPointF(0.0, controller->layout().pageTop(9'999, controller->zoom()) -
+                             vellora::PageLayout::kGap));
         QTRY_COMPARE_WITH_TIMEOUT(window.pageStatus(), QStringLiteral("Page 10000 / 10000"),
                                   kWaitMs);
         bool ink = false;
