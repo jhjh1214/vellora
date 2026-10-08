@@ -63,6 +63,13 @@ signals:
     void engineRestarted();
     // The session cannot go on; every later request fails.
     void failed(const QString& reason);
+    // The engine did not answer in time and the client killed it. After a Hello or Open timeout
+    // the session is over (no `failed` follows); after a Tile timeout `engineCrashed` follows and
+    // the engine restarts if it can.
+    void engineTimedOut(vellora::TimeoutStage stage, const QString& message);
+    // The file on disk is not what was opened; the restarting engine maps what is there now.
+    // `replaced`: a different file is at the path, rather than the open file modified in place.
+    void documentChanged(bool replaced);
 
 private:
     void dispatch(const EngineEvent& event);

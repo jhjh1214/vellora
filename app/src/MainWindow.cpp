@@ -67,6 +67,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 onEngineCrashed(how, willRestart);
             });
     connect(&m_session, &EngineSession::failed, this, &MainWindow::onFailed);
+    connect(&m_session, &EngineSession::engineTimedOut, this, &MainWindow::onEngineTimedOut);
+    connect(&m_session, &EngineSession::documentChanged, this, &MainWindow::onDocumentChanged);
     connect(m_canvas->controller(), &CanvasController::currentPageChanged, this,
             &MainWindow::onPageChanged);
     connect(m_canvas->controller(), &CanvasController::zoomChanged, this,
@@ -130,6 +132,8 @@ void MainWindow::chooseDocument() {
 bool MainWindow::openDocument(const QString& path) {
     m_canvas->reset();
     m_pageStatus->clear();
+    m_fileChanged = false;
+    m_documentStatus->setToolTip(QString());
     const QString error = m_session.open(path);
     if (!error.isEmpty()) {
         setDocumentStatus(tr("Cannot open: %1").arg(error));
@@ -148,6 +152,9 @@ void MainWindow::onOpened(quint32 pageCount, bool repaired) {
     QString text = tr("%n page(s)", nullptr, static_cast<int>(pageCount));
     if (repaired) {
         text += tr(" — repaired");
+    }
+    if (m_fileChanged) {
+        text += tr(" — file changed on disk");
     }
     setDocumentStatus(text);
 }
@@ -171,6 +178,26 @@ void MainWindow::onEngineCrashed(const QString& how, bool willRestart) {
 void MainWindow::onFailed(const QString& reason) {
     m_canvas->showBanner(tr("The page renderer failed. Reopen the document."));
     setDocumentStatus(tr("Engine failed: %1").arg(reason));
+}
+
+void MainWindow::onEngineTimedOut(TimeoutStage stage, const QString& message) {
+    if (stage == TimeoutStage::Tile) {
+        // The engine was killed; `engineCrashed` follows and shows the restart.
+        statusBar()->showMessage(tr("The page renderer stopped answering (%1)").arg(message));
+        return;
+    }
+    m_canvas->showBanner(tr("The page renderer did not start in time. Reopen the document."));
+    setDocumentStatus(tr("Engine timed out: %1").arg(message));
+}
+
+void MainWindow::onDocumentChanged(bool replaced) {
+    // Reported just before the engine restarts over the file, which then shows what is there now.
+    m_fileChanged = true;
+    m_documentStatus->setToolTip(
+        replaced ? tr("Another program replaced this file after it was opened. The pages shown "
+                      "come from the file as it is now.")
+                 : tr("Another program modified this file after it was opened. The pages shown "
+                      "come from the file as it is now."));
 }
 
 void MainWindow::onPageChanged(quint32 page, quint32 pageCount) {

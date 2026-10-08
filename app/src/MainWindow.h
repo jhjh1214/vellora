@@ -40,6 +40,8 @@ private slots:
     void onRequestFailed(quint64 request, const QString& message);
     void onEngineCrashed(const QString& how, bool willRestart);
     void onFailed(const QString& reason);
+    void onEngineTimedOut(TimeoutStage stage, const QString& message);
+    void onDocumentChanged(bool replaced);
     void onPageChanged(quint32 page, quint32 pageCount);
     void onZoomChanged(double zoom);
 
@@ -56,6 +58,8 @@ private:
     QLabel* m_pageStatus = nullptr;
     QLabel* m_zoomStatus = nullptr;
     QString m_fileName;
+    // The file changed on disk since it was opened; shown next to the page count.
+    bool m_fileChanged = false;
 };
 
 } // namespace vellora

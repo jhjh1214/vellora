@@ -28,7 +28,8 @@ use std::path::{Path, PathBuf};
 use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId};
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
-use crate::client::{Client, ClientConfig, ClientError, Event, TILE_PIXELS, TileLookup};
+use crate::client::{Client, ClientConfig, ClientError, Event, Stage, TILE_PIXELS, TileLookup};
+use crate::document::Change;
 
 /// Environment variable that overrides where [`open`] looks for `vellora-engine`. For development
 /// and tests; an installed shell finds the engine next to its own executable.
@@ -62,6 +63,22 @@ mod ffi {
         EngineRestarted,
         /// `message`. Every later call fails.
         Failed,
+        /// `timeout`, `message`. The engine did not answer in time and was killed. After a
+        /// `Hello` or `Open` timeout every later call fails; after a `Tile` timeout an
+        /// `EngineCrashed` follows and the engine restarts if it can.
+        EngineTimeout,
+        /// `file_replaced`. The file on disk differs from the one opened; reported before the
+        /// engine restarts over it.
+        DocumentChanged,
+    }
+
+    /// What an engine failed to do in time (the client's `Stage`).
+    #[derive(Debug)]
+    enum TimeoutStage {
+        None,
+        Hello,
+        Open,
+        Tile,
     }
 
     /// Broad class of a failure (the protocol's `ErrorKind`).
@@ -116,6 +133,10 @@ mod ffi {
         repaired: bool,
         will_restart: bool,
         failure: FailureKind,
+        timeout: TimeoutStage,
+        /// `DocumentChanged`: a different file is at the path (rather than the open file having
+        /// been modified in place).
+        file_replaced: bool,
         message: String,
         /// Requests lost in a crash; ask again after `EngineRestarted`.
         lost: Vec<u64>,
@@ -187,6 +208,7 @@ mod ffi {
 
 pub use ffi::{
     EngineEvent, EventKind, FailureKind, PageExtent, TilePriority, TileState, TileTicket,
+    TimeoutStage,
 };
 
 /// The client behind the bridge's opaque handle. `None` after `close`.
@@ -406,6 +428,8 @@ impl EngineEvent {
             repaired: false,
             will_restart: false,
             failure: FailureKind::None,
+            timeout: TimeoutStage::None,
+            file_replaced: false,
             message: String::new(),
             lost: Vec::new(),
         }
@@ -455,6 +479,20 @@ impl From<Event> for EngineEvent {
             Event::Failed { reason } => Self {
                 message: reason,
                 ..Self::empty(EventKind::Failed)
+            },
+            Event::EngineTimeout { stage, waited } => Self {
+                timeout: match stage {
+                    Stage::Hello => TimeoutStage::Hello,
+                    Stage::Open => TimeoutStage::Open,
+                    // `Stage` is non-exhaustive; the stalled-tile case is the one that restarts.
+                    _ => TimeoutStage::Tile,
+                },
+                message: format!("no answer for {} s", waited.as_secs()),
+                ..Self::empty(EventKind::EngineTimeout)
+            },
+            Event::DocumentChanged { change } => Self {
+                file_replaced: change == Change::Replaced,
+                ..Self::empty(EventKind::DocumentChanged)
             },
         }
     }

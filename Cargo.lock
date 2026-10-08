@@ -1011,6 +1011,7 @@ dependencies = [
  "cxx",
  "cxx-build",
  "libc",
+ "tempfile",
  "thiserror",
  "vellora-engine",
  "vellora-ipc",
