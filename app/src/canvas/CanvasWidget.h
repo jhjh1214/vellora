@@ -31,6 +31,9 @@ public:
     static constexpr int kMaxTextures = 192;
     // New tiles uploaded per frame, so a burst of finished tiles cannot stall one frame.
     static constexpr int kUploadsPerFrame = 6;
+    // ...and once the uploads of a frame have taken this long, the rest wait for the next frame: a
+    // count does not bound time, and `render()` has 8 ms in all (UiWatchdog::kBudgetMs).
+    static constexpr double kUploadBudgetMs = 3.0;
     // Quads the vertex buffer holds (pages and tiles of one frame).
     static constexpr int kMaxQuads = 2048;
 
@@ -45,6 +48,11 @@ public:
     double lastRenderMs() const { return m_lastRenderMs; }
     double slowestRenderMs() const { return m_slowestRenderMs; }
     double lastUploadMs() const { return m_lastUploadMs; }
+
+signals:
+    // Emitted at the end of every `render()` with the time it took, in milliseconds (the UI
+    // watchdog's frame measurement).
+    void frameRendered(double ms);
 
 protected:
     void initialize(QRhiCommandBuffer* cb) override;
