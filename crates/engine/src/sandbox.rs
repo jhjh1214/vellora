@@ -1,12 +1,14 @@
 //! The engine's own sandbox on Linux (M1 task 5, ADR-0018).
 //!
-//! [`apply`] is called by `main` after the PDFium library is loaded and before any thread is
-//! started or any document byte is read (both Landlock and seccomp filters bind the calling thread
-//! and the threads it creates afterwards, not the threads that already exist). It does three things:
+//! [`apply`] is called by `main` before the PDFium thread is started (that thread loads the
+//! library, so its directory stays readable) and before any document byte is read. Both Landlock
+//! and seccomp filters bind the calling thread and the threads it creates afterwards, not the
+//! threads that already exist. It does three things:
 //!
-//! 1. **Landlock**: every file-system right is handled, and only reading under the font and
-//!    library directories (and the process's own `/proc/self`) is granted back. The engine can no
-//!    longer open, create, rename or delete anything else. Descriptors that are already open (the
+//! 1. **Landlock**: every file-system right is handled, and only reading under the font,
+//!    library and PDFium directories (and the process's own `/proc/self`) is granted back. The
+//!    engine can no longer open, create, rename or delete anything else. Descriptors that are
+//!    already open (the
 //!    document, the tile region, the standard streams) keep working: Landlock checks opens, not
 //!    reads.
 //! 2. **No new privileges** (set by both mechanisms).
@@ -20,6 +22,7 @@
 //! and the caller logs it.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use landlock::{
     ABI, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
@@ -78,22 +81,26 @@ impl Report {
 }
 
 /// Applies the file-system rules and the system-call filter to the calling thread and to every
-/// thread it creates afterwards. Never fails: each part reports its own outcome.
+/// thread it creates afterwards. lso_readable are directories read access is granted on in
+/// addition to [READABLE] (the directory of the PDFium library, which the renderer thread loads
+/// after this call). Never fails: each part reports its own outcome.
 #[must_use]
-pub fn apply() -> Report {
+pub fn apply(also_readable: &[&Path]) -> Report {
     Report {
-        landlock: restrict_files().map_err(|error| error.to_string()),
+        landlock: restrict_files(also_readable).map_err(|error| error.to_string()),
         seccomp: filter_syscalls(),
     }
 }
 
-fn restrict_files() -> Result<Landlock, RulesetError> {
+fn restrict_files(also_readable: &[&Path]) -> Result<Landlock, RulesetError> {
     // ABI 3 adds truncation; older kernels get the subset they know (best effort).
     let abi = ABI::V3;
     let read = AccessFs::from_read(abi);
     // A directory that does not exist on this system (no X11 fonts) is simply left out.
     let rules = READABLE
         .iter()
+        .map(Path::new)
+        .chain(also_readable.iter().copied())
         .filter_map(|path| PathFd::new(path).ok())
         .map(|fd| Ok::<_, RulesetError>(PathBeneath::new(fd, read)));
     let status = Ruleset::default()

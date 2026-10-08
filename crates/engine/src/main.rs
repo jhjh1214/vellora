@@ -75,7 +75,9 @@ fn start(launch: &LaunchArgs) -> anyhow::Result<Engine> {
     // After the library is loaded and before the PDFium thread exists: the sandbox binds the
     // threads created from here on.
     #[cfg(target_os = "linux")]
-    log_sandbox(&vellora_engine::sandbox::apply());
+    log_sandbox(&vellora_engine::sandbox::apply(&[library
+        .parent()
+        .unwrap_or(std::path::Path::new("/"))]));
     let renderer = Renderer::start(library).context("cannot start PDFium")?;
     let mut engine = Engine::new(
         renderer,

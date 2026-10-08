@@ -76,7 +76,7 @@ fn main() {
     ];
 
     let before: Vec<String> = probes.iter().map(|(_, probe)| probe()).collect();
-    let report = vellora_engine::sandbox::apply();
+    let report = vellora_engine::sandbox::apply(&[]);
     println!("landlock: {:?}", report.landlock);
     println!("seccomp: {:?}", report.seccomp);
     // Threads created after `apply` are filtered too: run the probes on a fresh one.

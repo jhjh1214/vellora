@@ -110,7 +110,8 @@ fn run_probe() -> HashMap<String, String> {
     }
     assert!(
         report.contains("done: yes"),
-        "the probe ended abnormally; it said:\n{report}"
+        "the probe ended abnormally ({:?}); it said:\n{report}",
+        process.wait_timeout(Duration::from_secs(5))
     );
 
     // The engine did not inherit the pipe: with our copy closed, the reader sees end-of-file.
