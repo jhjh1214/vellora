@@ -25,7 +25,11 @@ private slots:
         QVERIFY2(watchdog.longestStallMs() >= 100,
                  qPrintable(QString::number(watchdog.longestStallMs())));
         QVERIFY(watchdog.longestStallMs() < 1000);
-        QCOMPARE(stalled.last().at(0).toLongLong(), watchdog.longestStallMs());
+        qint64 longest = 0;
+        for (const QList<QVariant>& arguments : stalled) {
+            longest = qMax(longest, arguments.at(0).toLongLong());
+        }
+        QCOMPARE(longest, watchdog.longestStallMs());
     }
 
     void anIdleEventLoopIsNotAStall() {

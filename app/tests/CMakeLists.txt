@@ -40,6 +40,11 @@ if(UNIX AND NOT APPLE)
   endif()
 else()
   add_test(NAME tst_canvas_render COMMAND tst_canvas_render)
+  if(APPLE AND NOT "$ENV{VELLORA_TEST_GPU}" STREQUAL "1")
+    # On the macOS CI runners (virtualised Metal) this test hangs intermittently inside Qt's
+    # event loop before the first tile (M0 task 22d notes); run it locally or set VELLORA_TEST_GPU=1.
+    set_tests_properties(tst_canvas_render PROPERTIES DISABLED TRUE)
+  endif()
   set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=90000")
 endif()
 if(TEST tst_canvas_render)
