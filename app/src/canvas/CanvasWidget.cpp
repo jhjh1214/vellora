@@ -220,7 +220,9 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
         }
         auto it = m_textures.find(tile.id());
         if (it == m_textures.end()) {
-            if (uploads >= kUploadsPerFrame) {
+            // At least one upload per frame, so a slow machine still makes progress.
+            if (uploads >= kUploadsPerFrame ||
+                (uploads > 0 && uploadNs >= static_cast<qint64>(kUploadBudgetMs * 1e6))) {
                 waiting = true;
                 continue;
             }
@@ -272,6 +274,7 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
     m_lastUploadMs = static_cast<double>(uploadNs) / 1e6;
     m_lastRenderMs = static_cast<double>(frameClock.nsecsElapsed()) / 1e6;
     m_slowestRenderMs = std::max(m_slowestRenderMs, m_lastRenderMs);
+    emit frameRendered(m_lastRenderMs);
     if (waiting) {
         update(); // more tiles to upload: continue next frame
     }

@@ -3,19 +3,22 @@
 #include "KillProcess.h"
 #include "MainWindow.h"
 #include "SyntheticPdf.h"
+#include "VelloraTestMain.h"
 #include "canvas/CanvasWidget.h"
+#include "diagnostics/Application.h"
+#include "diagnostics/DiagnosticsScript.h"
 #include "diagnostics/UiWatchdog.h"
 
-#include <QEventLoop>
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
-#include <QTimer>
 
 namespace {
 
 constexpr int kWaitMs = 60'000;
+// The scripted session takes at least 2,000 steps of 8 ms, more when every frame waits for a vsync.
+constexpr int kScriptWaitMs = 300'000;
 
 bool isGrey(QRgb pixel) {
     return qAbs(qRed(pixel) - 0xC8) < 4 && qAbs(qGreen(pixel) - 0xC8) < 4 &&
@@ -124,11 +127,12 @@ private slots:
             kWaitMs);
     }
 
-    // Scripted scrolling and zooming through a 10,000-page document with the stall watchdog
-    // running: the numbers go to the log (the acceptance of M0 task 22 reads them on a developer
-    // machine with a real GPU). Only a catastrophic stall fails the test, because CI renders in
-    // software, which legitimately stalls the UI thread.
-    void scrollingATenThousandPageDocumentIsWatched() {
+    // The frame-time check (M1 task 1): the scripted session of `--diagnostics-script` scrolls
+    // 2,000 pages of a 10,000-page document and zooms in and out 20 times, with the real canvas
+    // drawing frames. None of our code may take longer than its budget: not an event handler or
+    // timer (measured in `Application::notify`), not one `render()`. The vsynced present is not
+    // ours and is not measured, which is why this holds on CI's software rasterisers.
+    void scrollingATenThousandPageDocumentStaysWithinTheFrameBudget() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString path = dir.filePath(QStringLiteral("10k.pdf"));
@@ -147,54 +151,35 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(canvas->textureCount() > 0, kWaitMs);
 
         vellora::UiWatchdog watchdog;
-        watchdog.start();
+        auto* application = qobject_cast<vellora::Application*>(QCoreApplication::instance());
+        QVERIFY(application != nullptr);
+        application->setWatchdog(&watchdog);
+        watchdog.watch(canvas);
         vellora::CanvasController* controller = window.canvas().controller();
+        vellora::DiagnosticsScript script(controller);
+        QSignalSpy finished(&script, &vellora::DiagnosticsScript::finished);
         const quint64 framesBefore = canvas->framesRendered();
-        // Driven by a timer inside the event loop, like input events, never by sleeping: a sleep
-        // would itself block the loop and show up as a stall.
-        QElapsedTimer clock;
-        clock.start();
-        double y = 0.0;
-        int steps = 0;
-        QEventLoop loop;
-        QTimer driver;
-        driver.setTimerType(Qt::PreciseTimer);
-        driver.setInterval(8);
-        connect(&driver, &QTimer::timeout, &loop, [&] {
-            if (clock.elapsed() >= 4000) {
-                loop.quit();
-                return;
-            }
-            y += 350.0; // about a page every two steps
-            controller->setScrollPosition(QPointF(0.0, y));
-            if (steps % 100 == 50) {
-                controller->zoomBy(1.25, QPointF(300.0, 300.0)); // a new zoom bucket now and then
-            } else if (steps % 100 == 99) {
-                controller->zoomBy(0.8, QPointF(300.0, 300.0));
-            }
-            ++steps;
-        });
-        driver.start();
-        loop.exec();
+        watchdog.start();
+        script.start();
+        const bool done = finished.wait(kScriptWaitMs);
         watchdog.stop();
-        qInfo("render() in the last frame %.2f ms (tile upload %.2f ms), slowest %.2f ms",
-              canvas->lastRenderMs(), canvas->lastUploadMs(), canvas->slowestRenderMs());
-        qInfo("scrolled %d steps over page %u of 10000, %llu frames, %d textures; "
-              "UI stalls over %lld ms: %d, longest %lld ms",
-              steps, controller->currentPage() + 1,
+        application->setWatchdog(nullptr);
+
+        qInfo("%s; %llu frames drawn, %d textures, ended on page %u of 10000",
+              qPrintable(watchdog.summary()),
               static_cast<unsigned long long>(canvas->framesRendered() - framesBefore),
-              canvas->textureCount(), static_cast<long long>(vellora::UiWatchdog::kStallMs),
-              watchdog.stallCount(), static_cast<long long>(watchdog.longestStallMs()));
-        // How far the scripted scroll got depends on how fast frames present (vsync), so only
-        // that it made real progress is asserted.
-        QVERIFY(steps >= 20);
-        QVERIFY(controller->currentPage() >= 5);
-        QVERIFY2(watchdog.longestStallMs() < 500,
-                 qPrintable(QString::number(watchdog.longestStallMs())));
+              canvas->textureCount(), controller->currentPage() + 1);
+        QVERIFY2(done, "the scripted session did not finish");
+        QCOMPARE(script.stepsDone(), 2000);
+        QCOMPARE(script.zoomsDone(), 20);
+        // The measurements saw real work: frames were drawn and handlers ran.
+        QVERIFY2(watchdog.frames().samples >= 20, qPrintable(watchdog.summary()));
+        QVERIFY2(watchdog.handlers().samples >= 2000, qPrintable(watchdog.summary()));
+        QVERIFY2(watchdog.frames().overBudget == 0, qPrintable(watchdog.summary()));
+        QVERIFY2(watchdog.handlers().overBudget == 0, qPrintable(watchdog.summary()));
         // Nothing is left asking the engine for tiles that are no longer wanted.
         QTRY_VERIFY_WITH_TIMEOUT(controller->tilesInFlight() <= 64, kWaitMs);
     }
-
     void drawingContinuesAfterTheEngineIsKilled() {
         vellora::MainWindow window;
         window.resize(700, 500);
@@ -219,5 +204,5 @@ private slots:
     }
 };
 
-QTEST_MAIN(TstCanvasRender)
+VELLORA_TEST_MAIN(TstCanvasRender)
 #include "tst_canvas_render.moc"

@@ -66,6 +66,10 @@ add_library(vellora_shell STATIC
   src/commands/CommandPalette.h
   src/commands/CommandRegistry.cpp
   src/commands/CommandRegistry.h
+  src/diagnostics/Application.cpp
+  src/diagnostics/Application.h
+  src/diagnostics/DiagnosticsScript.cpp
+  src/diagnostics/DiagnosticsScript.h
   src/diagnostics/UiWatchdog.cpp
   src/diagnostics/UiWatchdog.h
   src/bridge/EngineSession.cpp

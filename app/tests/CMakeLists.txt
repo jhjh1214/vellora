@@ -21,7 +21,21 @@ vellora_add_test(tst_canvas_view tst_canvas_view.cpp)
 vellora_add_test(tst_commands tst_commands.cpp)
 vellora_add_test(tst_ui_watchdog tst_ui_watchdog.cpp)
 vellora_add_test(tst_engine_recovery tst_engine_recovery.cpp)
+vellora_add_test(tst_diagnostics_script tst_diagnostics_script.cpp)
 
+# The hidden `--diagnostics-script` flag of the app itself: runs the scripted session on a small
+# document (no GPU needed; the offscreen platform draws nothing) and exits 0 with its report.
+add_test(NAME vellora_diagnostics_script
+         COMMAND vellora --diagnostics-script scroll-zoom
+                 "${VELLORA_ROOT}/crates/engine/tests/fixtures/golden.pdf")
+set_tests_properties(vellora_diagnostics_script PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 150
+  PASS_REGULAR_EXPRESSION "diagnostics-script scroll-zoom: 2 pages, 20 zooms;")
+add_test(NAME vellora_diagnostics_script_unknown
+         COMMAND vellora --diagnostics-script no-such-scenario)
+set_tests_properties(vellora_diagnostics_script_unknown PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60
+  PASS_REGULAR_EXPRESSION "unknown --diagnostics-script 'no-such-scenario'")
 # Drawing needs a platform that can run QRhi: the real one on Windows and macOS (their runners
 # have a software or virtual GPU), and an X server with Mesa's software OpenGL on Linux.
 qt_add_executable(tst_canvas_render tst_canvas_render.cpp)
@@ -34,19 +48,20 @@ if(UNIX AND NOT APPLE)
   if(VELLORA_XVFB_RUN)
     add_test(NAME tst_canvas_render
              COMMAND ${VELLORA_XVFB_RUN} -a -s "-screen 0 1280x1024x24" $<TARGET_FILE:tst_canvas_render>)
-    set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb;QTEST_FUNCTION_TIMEOUT=90000")
+    set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb;QTEST_FUNCTION_TIMEOUT=360000")
   else()
     message(WARNING "xvfb-run not found: tst_canvas_render (GPU drawing) is not registered")
   endif()
 else()
   add_test(NAME tst_canvas_render COMMAND tst_canvas_render)
   if(APPLE AND NOT "$ENV{VELLORA_TEST_GPU}" STREQUAL "1")
-    # On the macOS CI runners (virtualised Metal) this test hangs intermittently inside Qt's
-    # event loop before the first tile (M0 task 22d notes); run it locally or set VELLORA_TEST_GPU=1.
+    # On the macOS CI runners (a paravirtualised Metal GPU) this test is not stuck but extremely
+    # slow, so it runs into its timeouts, and its frame-time check could not pass. Evidence in
+    # app/README.md ("macOS and the canvas test"). Run it on real hardware or set VELLORA_TEST_GPU=1.
     set_tests_properties(tst_canvas_render PROPERTIES DISABLED TRUE)
   endif()
-  set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=90000")
+  set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=360000")
 endif()
 if(TEST tst_canvas_render)
-  set_tests_properties(tst_canvas_render PROPERTIES TIMEOUT 150)
+  set_tests_properties(tst_canvas_render PROPERTIES TIMEOUT 600)
 endif()
