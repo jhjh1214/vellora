@@ -46,7 +46,7 @@ private slots:
         QVERIFY(session.isOpen());
         QVERIFY(opened.wait(kWaitMs));
         QCOMPARE(opened.first().at(0).toUInt(), 3U);
-        QCOMPARE(opened.first().at(1).toBool(), false);
+        QVERIFY(opened.first().at(1).toStringList().isEmpty());
         QCOMPARE(session.pageCount(), 3U);
         QCOMPARE(session.pageSize(0), QSizeF(220.0, 140.0));
         QVERIFY(!session.pageSize(99).isValid());

@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include "RepairBar.h"
+
 #include <QAction>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -8,6 +10,7 @@
 #include <QScreen>
 #include <QStatusBar>
 #include <QStyle>
+#include <QVBoxLayout>
 #include <functional>
 #include <utility>
 
@@ -35,8 +38,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                         screen()->availableGeometry()));
     }
 
-    m_canvas = new CanvasView(&m_session, this);
-    setCentralWidget(m_canvas);
+    // The repair bar sits above the canvas and takes its height from it; it is hidden unless the
+    // engine repaired the file.
+    auto* central = new QWidget(this);
+    auto* centralLayout = new QVBoxLayout(central);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+    m_repairBar = new RepairBar(central);
+    m_canvas = new CanvasView(&m_session, central);
+    centralLayout->addWidget(m_repairBar);
+    centralLayout->addWidget(m_canvas, 1);
+    setCentralWidget(central);
 
     m_documentStatus = plainLabel(this);
     m_pageStatus = plainLabel(this);
@@ -133,6 +145,7 @@ bool MainWindow::openDocument(const QString& path) {
     m_canvas->reset();
     m_pageStatus->clear();
     m_fileChanged = false;
+    m_repairBar->setReasons({});
     m_documentStatus->setToolTip(QString());
     const QString error = m_session.open(path);
     if (!error.isEmpty()) {
@@ -145,13 +158,17 @@ bool MainWindow::openDocument(const QString& path) {
     return true;
 }
 
-void MainWindow::onOpened(quint32 pageCount, bool repaired) {
+void MainWindow::onOpened(quint32 pageCount, const QStringList& repairs) {
     // Also the answer of a restarted engine: it has the document again, so tiles are on their way.
     m_canvas->hideBanner();
     statusBar()->clearMessage();
     QString text = tr("%n page(s)", nullptr, static_cast<int>(pageCount));
-    if (repaired) {
+    if (!repairs.isEmpty()) {
         text += tr(" — repaired");
+    }
+    // A restarted engine answers again with the same reasons; a bar the user dismissed stays gone.
+    if (repairs != m_repairBar->reasons()) {
+        m_repairBar->setReasons(repairs);
     }
     if (m_fileChanged) {
         text += tr(" — file changed on disk");

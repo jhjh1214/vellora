@@ -101,11 +101,7 @@ pub fn summarize(store: &ObjectStore<'_>) -> Summary {
     problems.truncate(MAX_PROBLEMS);
 
     // After the scan: reading objects can find damage and repair it.
-    let repair_reasons: Vec<String> = store
-        .repaired()
-        .iter()
-        .map(summary::describe_repair)
-        .collect();
+    let repair_reasons: Vec<String> = store.repaired().iter().map(ToString::to_string).collect();
     Summary {
         file_size: store.data().len() as u64,
         version: store

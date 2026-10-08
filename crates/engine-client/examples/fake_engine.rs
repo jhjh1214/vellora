@@ -40,7 +40,7 @@ fn main() {
                     width: 100.0,
                     height: 100.0,
                 }],
-                repaired: false,
+                repairs: vec![],
             };
             if write_frame(&mut out, &opened).is_err() {
                 return;

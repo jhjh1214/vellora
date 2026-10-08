@@ -74,13 +74,16 @@ fn opens_a_document_and_renders_tiles_that_match_the_golden_images() {
     let Response::Opened {
         page_count,
         page_sizes,
-        repaired,
+        repairs,
     } = engine.open()
     else {
         panic!("not opened");
     };
     assert_eq!(page_count, 3);
-    assert!(!repaired, "a clean file must not be reported as repaired");
+    assert!(
+        repairs.is_empty(),
+        "a clean file must not be reported as repaired: {repairs:?}"
+    );
     // Page 2 is 160 x 200 points turned by 90 degrees.
     assert_eq!(
         page_sizes,
@@ -312,6 +315,30 @@ fn a_document_over_the_size_limit_is_refused_before_it_is_mapped() {
     assert!(message.contains("limit"), "{message}");
 }
 
+/// M1 task 6: on a hostile file the engine (PDFium) and `cos` can count different pages, here 1
+/// against the 0 that `cos` finds after settling and in its full rewrite. The engine cannot hide
+/// that, so it must at least say so: the notice carries the mismatch.
+///
+/// The task asks for the *same* page count in both, which this file does not give (see the note
+/// under M1 task 6 and *Decisions needed* in `docs/milestones/README.md`), so this test does not
+/// claim it.
+#[test]
+fn a_page_count_disagreement_with_cos_is_reported_in_the_repair_notice() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cos/tests/fixtures/fuzz/duplicate-object-after-bad-offset.pdf");
+    let pdf = std::fs::read(path).unwrap();
+
+    let mut engine = Session::start(&pdf);
+    engine.handshake();
+    let Response::Opened { repairs, .. } = engine.open() else {
+        panic!("a recoverable file must open");
+    };
+    assert!(
+        repairs.iter().any(|r| r.code == "page-count-mismatch"),
+        "{repairs:?}"
+    );
+}
+
 #[test]
 fn a_damaged_cross_reference_opens_and_is_reported_as_repaired() {
     let mut pdf = GOLDEN_PDF.to_vec();
@@ -329,14 +356,19 @@ fn a_damaged_cross_reference_opens_and_is_reported_as_repaired() {
     engine.handshake();
     let Response::Opened {
         page_count,
-        repaired,
+        repairs,
         ..
     } = engine.open()
     else {
         panic!("a recoverable file must open");
     };
     assert_eq!(page_count, 3);
-    assert!(repaired, "a rebuilt cross-reference must be reported");
+    assert!(
+        repairs
+            .iter()
+            .any(|r| r.code.starts_with("xref") || r.code.starts_with("object-")),
+        "a rebuilt cross-reference must be reported: {repairs:?}"
+    );
 
     // And it still renders.
     engine.send(&tile(1, 1, 1.0, (0, 0, 50, 50), 0));

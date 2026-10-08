@@ -189,12 +189,15 @@ mod tests {
                         height: 841.75,
                     },
                 ],
-                repaired: true,
+                repairs: vec![Repair {
+                    code: "xref-unreadable".into(),
+                    message: "cross-reference unreadable".into(),
+                }],
             },
             Response::Opened {
                 page_count: 0,
                 page_sizes: vec![],
-                repaired: false,
+                repairs: vec![],
             },
             Response::TileReady {
                 req_id: RequestId(7),
@@ -353,7 +356,7 @@ mod tests {
                 };
                 MAX_PAGE_SIZES_PER_MESSAGE
             ],
-            repaired: false,
+            repairs: vec![],
         };
         assert_eq!(round_trip(&message), message);
     }
@@ -512,12 +515,12 @@ mod tests {
             Response::Opened {
                 page_count: 5,
                 page_sizes: vec![size; 6],
-                repaired: false,
+                repairs: vec![],
             },
             Response::Opened {
                 page_count: u32::MAX,
                 page_sizes: vec![size; MAX_PAGE_SIZES_PER_MESSAGE + 1],
-                repaired: false,
+                repairs: vec![],
             },
             Response::Opened {
                 page_count: 1,
@@ -525,7 +528,7 @@ mod tests {
                     width: f32::NAN,
                     height: 1.0,
                 }],
-                repaired: false,
+                repairs: vec![],
             },
             Response::Opened {
                 page_count: 1,
@@ -533,7 +536,22 @@ mod tests {
                     width: 1.0,
                     height: 0.0,
                 }],
-                repaired: false,
+                repairs: vec![],
+            },
+            Response::Opened {
+                page_count: 1,
+                page_sizes: vec![size],
+                repairs: vec![repair("a", "b"); MAX_REPAIRS + 1],
+            },
+            Response::Opened {
+                page_count: 1,
+                page_sizes: vec![size],
+                repairs: vec![repair(&"c".repeat(MAX_REPAIR_CODE_BYTES + 1), "b")],
+            },
+            Response::Opened {
+                page_count: 1,
+                page_sizes: vec![size],
+                repairs: vec![repair("a", &"m".repeat(MAX_REPAIR_MESSAGE_BYTES + 1))],
             },
             Response::Error {
                 req_id: None,
@@ -552,6 +570,29 @@ mod tests {
                 Err(Error::Invalid(_))
             ));
         }
+    }
+
+    fn repair(code: &str, message: &str) -> Repair {
+        Repair {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    #[test]
+    fn repairs_at_the_limits_are_accepted() {
+        let message = Response::Opened {
+            page_count: 0,
+            page_sizes: vec![],
+            repairs: vec![
+                repair(
+                    &"c".repeat(MAX_REPAIR_CODE_BYTES),
+                    &"m".repeat(MAX_REPAIR_MESSAGE_BYTES)
+                );
+                MAX_REPAIRS
+            ],
+        };
+        assert_eq!(round_trip(&message), message);
     }
 
     #[test]

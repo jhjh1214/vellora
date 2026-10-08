@@ -74,6 +74,45 @@ pub enum RepairReason {
     },
 }
 
+impl RepairReason {
+    /// A stable kebab-case identifier of the kind of repair, without the numbers. The UI shows
+    /// it next to the message and tests match on it.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::XrefUnreadable(_) => "xref-unreadable",
+            Self::XrefUndecodable => "xref-undecodable",
+            Self::RootEntryInvalid => "root-invalid",
+            Self::ObjectOffsetInvalid { .. } => "object-offset-invalid",
+            Self::ObjectRecovered { .. } => "object-recovered",
+            Self::TrailerSynthesized => "trailer-synthesized",
+            Self::ObjectStreamNotExpanded { .. } => "object-stream-not-expanded",
+        }
+    }
+}
+
+/// One line for a person; the numbers are object numbers, never document text.
+impl std::fmt::Display for RepairReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::XrefUnreadable(kind) => write!(f, "cross-reference unreadable ({kind})"),
+            Self::XrefUndecodable => f.write_str("cross-reference stream could not be decoded"),
+            Self::RootEntryInvalid => f.write_str("/Root missing or not pointing at an object"),
+            Self::ObjectOffsetInvalid { number } => {
+                write!(f, "object {number} is not where the cross-reference says")
+            }
+            Self::ObjectRecovered { number, recovery } => {
+                write!(f, "object {number} needed a repair ({recovery:?})")
+            }
+            Self::TrailerSynthesized => f.write_str("no usable trailer; built from the catalog"),
+            Self::ObjectStreamNotExpanded { stream } => write!(
+                f,
+                "object stream {stream} could not be decoded; its objects are missing"
+            ),
+        }
+    }
+}
+
 /// Whether a real `number generation obj` header starts at `base + offset`, with the number
 /// matching (the generation is not compared: producers disagree about it).
 ///

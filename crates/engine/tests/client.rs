@@ -145,9 +145,9 @@ fn open_render_crash_restart_render() {
         seen.last(),
         Some(Event::Opened {
             page_count: 3,
-            repaired: false,
+            repairs,
             ..
-        })
+        }) if repairs.is_empty()
     ));
     assert_eq!(client.page_count(), Some(3));
     assert_eq!(
@@ -311,7 +311,8 @@ fn the_bridge_entry_points_drive_the_engine() {
         events.extend(handle.poll_events());
     }
     let opened = events.iter().find(|e| e.kind == EventKind::Opened).unwrap();
-    assert_eq!((opened.page_count, opened.repaired), (3, false));
+    assert_eq!(opened.page_count, 3);
+    assert_eq!(opened.repairs, Vec::<bridge::RepairNote>::new());
     assert_eq!(handle.page_count(), 3);
     assert_eq!(
         (handle.page_size(1).width, handle.page_size(1).height),
