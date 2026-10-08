@@ -31,7 +31,7 @@ Crates: `landlock` 0.4 (MIT OR Apache-2.0, the reference binding maintained with
 
 ### Measured outcome
 
-CI (Ubuntu runner, kernel with Landlock): `crates/engine/tests/sandbox_linux.rs` runs the probe `examples/sandbox_probe.rs`, which tries each action before and after `sandbox::apply` on a thread created after it. It requires `landlock: Full` and the filter installed, then for `/etc/passwd`, creating a file, the parent's `/proc/<pid>/environ`, a UDP socket and starting `/bin/true`: works before, `EPERM` or `EACCES` after; reading `/usr/lib`, its own `/proc/self` and starting a thread: works both times. The existing engine, client and Qt test suites run against the self-sandboxed engine on Linux and pass, which exercises PDFium loading and rendering under the sandbox. A unit test checks the seals on the tile region.
+CI (Ubuntu runner, kernel with Landlock): `crates/engine/tests/sandbox_linux.rs` runs the probe `examples/engine_sandbox_probe.rs`, which tries each action before and after `sandbox::apply` on a thread created after it. It requires `landlock: Full` and the filter installed, then for `/etc/passwd`, creating a file, the parent's `/proc/<pid>/environ`, a UDP socket and starting `/bin/true`: works before, `EPERM` or `EACCES` after; reading `/usr/lib`, its own `/proc/self` and starting a thread: works both times. The existing engine, client and Qt test suites run against the self-sandboxed engine on Linux and pass, which exercises PDFium loading and rendering under the sandbox. A unit test checks the seals on the tile region.
 
 **Not measured:** the corpus gate and the system-font rendering comparison were only run on Windows (the corpus gate is not part of CI until M1 task 20), so on Linux PDFium's behaviour on real documents under the sandbox is covered by the golden-page tests only. The `kill`/`tgkill` rules are untested (the probe cannot send signals without `unsafe`).
 
@@ -55,5 +55,5 @@ CI (Ubuntu runner, kernel with Landlock): `crates/engine/tests/sandbox_linux.rs`
 ## References
 
 - ADR-0004, ADR-0015, ADR-0017
-- `crates/engine/src/sandbox.rs`, `crates/engine/examples/sandbox_probe.rs`, `crates/engine/tests/sandbox_linux.rs`, `crates/shm/src/region.rs`
+- `crates/engine/src/sandbox.rs`, `crates/engine/examples/engine_sandbox_probe.rs`, `crates/engine/tests/sandbox_linux.rs`, `crates/shm/src/region.rs`
 - Linux documentation: *Landlock*, *seccomp*, `memfd_create(2)`, `fcntl(2)` file seals

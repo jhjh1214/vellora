@@ -1,6 +1,6 @@
 //! The engine's Linux sandbox (M1 task 5, ADR-0018): what a compromised engine cannot do.
 //!
-//! `examples/sandbox_probe.rs` tries each forbidden thing before and after `sandbox::apply` and
+//! `examples/engine_sandbox_probe.rs` tries each forbidden thing before and after `sandbox::apply` and
 //! reports both. A refusal counts only if the same action worked before, so a refusal cannot be an
 //! accident of the environment. Linux only. The kernel must have Landlock (the report says so); a
 //! kernel without it fails this test instead of passing it quietly.
@@ -24,7 +24,7 @@ fn run_probe() -> (String, HashMap<String, (String, String)>) {
         .and_then(Path::parent)
         .unwrap()
         .join("examples")
-        .join("sandbox_probe");
+        .join("engine_sandbox_probe");
     assert!(
         probe.is_file(),
         "{} is missing: run `cargo test -p vellora-engine` (it builds the examples)",
