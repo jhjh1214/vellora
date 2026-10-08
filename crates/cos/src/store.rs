@@ -47,7 +47,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::crypt::{Decryptor, Encryption, EncryptionInfo, PasswordRole};
 use crate::error::{EncryptionError, Error, Result, SyntaxKind};
-use crate::limits::{DecodeBudget, LimitKind, Limits};
+use crate::limits::{DecodeBudget, LimitKind, Limits, ScanBudget};
 use crate::object::{Dict, DictEntry, ObjRef, Object, ObjectKind, Stream};
 use crate::objstm::ObjectStream;
 use crate::parser::Parser;
@@ -184,6 +184,8 @@ struct State<'a> {
     /// up in the revision lists is linear.
     index: Option<HashMap<u32, XrefEntry>>,
     budget: DecodeBudget,
+    /// Shared by every `endstream` search of this document.
+    scan: ScanBudget,
     objects: Lru<Arc<Object<'static>>>,
     streams: Lru<Arc<ObjectStream>>,
     repaired: Vec<RepairReason>,
@@ -268,8 +270,10 @@ impl<'a> State<'a> {
         self.ensure_index();
         let empty = HashMap::new();
         let index = self.index.as_ref().unwrap_or(&empty);
-        let resolver = |reference: ObjRef| length_of(env, base, index, reference);
+        let scan = &self.scan;
+        let resolver = |reference: ObjRef| length_of(env, base, index, scan, reference);
         let indirect = Parser::at(env.data, position, env.limits)
+            .with_scan_budget(scan)
             .with_length_resolver(&resolver)
             .parse_indirect_object()?;
         for &recovery in &indirect.recoveries {
@@ -487,6 +491,7 @@ fn length_of(
     env: Env<'_, '_>,
     base: usize,
     index: &HashMap<u32, XrefEntry>,
+    scan: &ScanBudget,
     reference: ObjRef,
 ) -> Option<i64> {
     let Some(&XrefEntry::InUse { offset, .. }) = index.get(&reference.num) else {
@@ -497,6 +502,7 @@ fn length_of(
     }
     let position = usize::try_from(offset).ok()?.checked_add(base)?;
     let indirect = Parser::at(env.data, position, env.limits)
+        .with_scan_budget(scan)
         .parse_indirect_object()
         .ok()?;
     indirect.object.as_integer()
@@ -551,6 +557,7 @@ impl<'a> ObjectStore<'a> {
             xref,
             index: None,
             budget,
+            scan: ScanBudget::new(&limits, data.len() as u64),
             objects: Lru::new(limits.max_cache_bytes),
             streams: Lru::new(limits.max_cache_bytes),
             rebuild_attempted: false,

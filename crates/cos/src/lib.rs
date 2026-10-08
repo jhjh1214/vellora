@@ -56,7 +56,7 @@ pub mod xref;
 
 pub use crypt::{CryptMethod, Decryptor, Encryption, EncryptionInfo, PasswordRole};
 pub use error::{EncryptionError, Error, Result, SyntaxKind, WriteError};
-pub use limits::{DecodeBudget, LimitKind, Limits};
+pub use limits::{DecodeBudget, LimitKind, Limits, ScanBudget};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use objstm::ObjectStream;
 pub use pages::{Inherited, Page, Pages};

@@ -4,7 +4,9 @@
 
 use std::path::Path;
 
-use vellora_cos::{EncryptionPolicy, FullOptions, Limits, ObjectStore, write_full};
+use vellora_cos::{
+    EncryptionPolicy, Error, FullOptions, LimitKind, Limits, ObjRef, ObjectStore, write_full,
+};
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(
@@ -64,4 +66,97 @@ fn a_rewrite_does_not_depend_on_what_was_read_before_it() {
     let _ = fresh.resolve(vellora_cos::ObjRef::new(4, 0));
     let after = ObjectStore::open(&outputs[0], Limits::default()).unwrap();
     assert_eq!(pages(&after), pages(&fresh));
+}
+
+/// A well-formed file whose cross-reference is right but whose `count` stream objects all
+/// declare a `/Length` that is too long and have no `endstream` at all, so reading each one
+/// searches to the end of the file. Generated here, not stored: it is 1.5 MB of filler.
+fn streams_with_wrong_length(count: u32) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |out: &mut Vec<u8>, body: &str| {
+        offsets.push(out.len());
+        out.extend_from_slice(body.as_bytes());
+    };
+    object(
+        &mut out,
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    );
+    object(
+        &mut out,
+        "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+    );
+    for n in 3..3 + count {
+        let filler = "x".repeat(100);
+        object(
+            &mut out,
+            &format!("{n} 0 obj\n<< /Length 99999999 >>\nstream\n{filler}\nendobj\n"),
+        );
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes(),
+    );
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            offsets.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// Without a shared budget every one of the 10,000 reads scans the rest of the file (about 7 GB
+/// in all). With it, the first reads fail as `MissingEndstream`, the budget runs out, and the
+/// rest fail as `LimitExceeded(ScanBytes)` at once; the document stays usable throughout.
+#[test]
+fn thousands_of_broken_stream_lengths_do_not_cost_thousands_of_scans() {
+    const COUNT: u32 = 10_000;
+    let data = streams_with_wrong_length(COUNT);
+    let started = std::time::Instant::now();
+    let store = ObjectStore::open(&data, Limits::default()).unwrap();
+    let (mut missing, mut over_budget) = (0, 0);
+    for n in 3..3 + COUNT {
+        match store.resolve(ObjRef::new(n, 0)) {
+            Err(Error::Syntax { .. }) => missing += 1,
+            Err(Error::LimitExceeded {
+                limit: LimitKind::ScanBytes,
+                ..
+            }) => over_budget += 1,
+            other => panic!("object {n}: unexpected {other:?}"),
+        }
+    }
+    let elapsed = started.elapsed();
+    assert!(missing > 0, "the budget should allow some searches");
+    assert!(over_budget > 0, "the budget should run out");
+    assert_eq!(missing + over_budget, COUNT);
+    // The failure is per object: the rest of the document is still readable.
+    assert!(store.resolve(ObjRef::new(1, 0)).is_ok());
+    assert_eq!(pages(&store), 0);
+    // Linear work takes well under a second; the CI limit is generous.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+}
+
+/// The budget is not a hidden cap on honest files: with it raised past the cost, the same
+/// file is searched every time and no read reports the budget.
+#[test]
+fn a_larger_scan_budget_lets_every_search_run() {
+    const COUNT: u32 = 300;
+    let data = streams_with_wrong_length(COUNT);
+    let mut limits = Limits::default();
+    limits.min_scan_bytes = u64::MAX;
+    let store = ObjectStore::open(&data, limits).unwrap();
+    for n in 3..3 + COUNT {
+        assert!(
+            matches!(store.resolve(ObjRef::new(n, 0)), Err(Error::Syntax { .. })),
+            "object {n}"
+        );
+    }
 }
