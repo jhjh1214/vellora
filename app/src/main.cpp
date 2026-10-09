@@ -1,3 +1,4 @@
+#include "BuildInfo.h"
 #include "MainWindow.h"
 #include "SingleInstance.h"
 #include "diagnostics/Application.h"
@@ -14,6 +15,7 @@ int main(int argc, char** argv) {
     vellora::Application app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Vellora"));
     QApplication::setOrganizationName(QStringLiteral("Vellora"));
+    QApplication::setApplicationVersion(QLatin1String(vellora::buildinfo::kVersion));
 
     QCommandLineParser parser;
     parser.addHelpOption();

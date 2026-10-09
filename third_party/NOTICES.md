@@ -14,7 +14,7 @@ lcms, libjpeg-turbo, libopenjpeg, libpng, llvm-libc, simdutf, zlib.
 
 Qt
 --
-The desktop shell links Qt 6.8 (LTS) Widgets, Gui and Core dynamically. Qt is available under the
+The desktop shell links Qt 6.8 (LTS) Widgets, Network, Gui and Core dynamically. Qt is available under the
 GNU Lesser General Public License version 3 (LGPL-3.0) with the Qt exceptions; Vellora uses only
 LGPL-licensed Qt modules (ADR-0007). Qt's source code and license texts are available at
 https://code.qt.io/ and https://www.qt.io/licensing. Because Qt is linked dynamically, you may

@@ -10,6 +10,8 @@ Before 1.0 we move from prebuilt binaries to building PDFium from source in CI (
 
 `THIRD_PARTY_LICENSES` at the repository root is generated; do not edit it by hand. Regenerate it after dependency changes (needs `cargo install --locked cargo-about --features cli`, and the PDFium build from `cargo xtask pdfium fetch` for the license texts):
 
+The file is embedded in the application (Help → About Vellora → Third-party licenses). `cargo test -p xtask` fails when a crate that is linked into a binary is missing from it, so regenerate it whenever `Cargo.lock` changes.
+
 ```sh
 cargo about generate --workspace about.hbs -o THIRD_PARTY_LICENSES
 cat third_party/NOTICES.md >> THIRD_PARTY_LICENSES
