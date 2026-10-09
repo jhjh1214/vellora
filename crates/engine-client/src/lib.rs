@@ -18,7 +18,8 @@
 //! [`limits`]); task 20 added the protocol client with restart after a crash ([`client`]) and the
 //! `cxx` bridge ([`bridge`]); task 21 added the tile cache ([`cache`]); task 22a wired it into the
 //! client and bridge (`docs/milestones/M0.md`). M1 task 2 added the client's own deadlines (engine
-//! start-up and stalled tiles) and the write-deny open of the document ([`document`]).
+//! start-up and stalled tiles) and the write-deny open of the document ([`document`]). Task 9b added
+//! the log files ([`logging`]) and the capture of the engine's log lines (`capture`).
 //!
 //! **`unsafe`:** denied crate-wide. Only the bridge module allows it, for the glue the `cxx` macro
 //! generates, and the small OS modules in [`limits`] and [`document`] (every block has a
@@ -26,9 +27,11 @@
 
 pub mod bridge;
 pub mod cache;
+mod capture;
 pub mod client;
 mod document;
 pub mod limits;
+pub mod logging;
 pub mod process;
 #[cfg(windows)]
 #[allow(unsafe_code)]

@@ -159,13 +159,15 @@ pub struct Crash {
     pub killed_by_client: bool,
 }
 
-/// A running engine: the child process, its limits and its two pipes.
+/// A running engine: the child process, its limits and its pipes (requests in, responses out, log
+/// lines out).
 #[derive(Debug)]
 pub struct EngineProcess {
     child: Process,
     document: HandleToken,
     stdin: Option<File>,
     stdout: Option<File>,
+    stderr: Option<File>,
     // Dropped after the child is reaped; on Windows, closing the job also kills the engine.
     _guard: Guard,
 }
@@ -214,6 +216,7 @@ impl EngineProcess {
             document,
             stdin: Some(started.stdin),
             stdout: Some(started.stdout),
+            stderr: Some(started.stderr),
             _guard: started.guard,
         })
     }
@@ -239,6 +242,12 @@ impl EngineProcess {
     /// The pipe from the engine's standard output (responses). `None` after the first call.
     pub fn take_stdout(&mut self) -> Option<File> {
         self.stdout.take()
+    }
+
+    /// The pipe from the engine's standard error (its log lines). `None` after the first call.
+    /// Whoever takes it must keep reading: a full pipe stops the engine at its next log line.
+    pub fn take_stderr(&mut self) -> Option<File> {
+        self.stderr.take()
     }
 
     /// Waits up to `timeout` for the process to end.
@@ -308,6 +317,7 @@ struct Started {
     child: Process,
     stdin: File,
     stdout: File,
+    stderr: File,
     guard: Guard,
 }
 
@@ -323,17 +333,19 @@ fn start(config: &SpawnConfig<'_>, launch: &LaunchArgs) -> Result<Started, Spawn
         .envs(config.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::piped());
     crate::limits::prepare(&mut command, config.limits);
     let mut child = command.spawn().map_err(SpawnError::Start)?;
     let pipes = child
         .stdin
         .take()
         .zip(child.stdout.take())
-        .map(|(stdin, stdout)| {
+        .zip(child.stderr.take())
+        .map(|((stdin, stdout), stderr)| {
             (
                 File::from(OwnedFd::from(stdin)),
                 File::from(OwnedFd::from(stdout)),
+                File::from(OwnedFd::from(stderr)),
             )
         });
     let guard = match crate::limits::confine(&child, config.limits) {
@@ -343,7 +355,7 @@ fn start(config: &SpawnConfig<'_>, launch: &LaunchArgs) -> Result<Started, Spawn
             return Err(SpawnError::Limits(error));
         }
     };
-    let Some((stdin, stdout)) = pipes else {
+    let Some((stdin, stdout, stderr)) = pipes else {
         kill_and_reap(&mut child);
         return Err(SpawnError::Start(io::Error::other(
             "no pipes to the engine",
@@ -353,6 +365,7 @@ fn start(config: &SpawnConfig<'_>, launch: &LaunchArgs) -> Result<Started, Spawn
         child,
         stdin,
         stdout,
+        stderr,
         guard,
     })
 }
@@ -380,6 +393,7 @@ fn start(config: &SpawnConfig<'_>, launch: &LaunchArgs) -> Result<Started, Spawn
         child: started.child,
         stdin: started.stdin,
         stdout: started.stdout,
+        stderr: started.stderr,
         guard: started.guard,
     })
 }

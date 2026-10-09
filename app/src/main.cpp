@@ -3,6 +3,7 @@
 #include "SingleInstance.h"
 #include "diagnostics/Application.h"
 #include "diagnostics/DiagnosticsScript.h"
+#include "diagnostics/Logging.h"
 #include "diagnostics/UiWatchdog.h"
 #include "settings/AppSettings.h"
 
@@ -48,6 +49,18 @@ int main(int argc, char** argv) {
     // VELLORA_UI_WATCHDOG=1; a scripted session always).
     vellora::UiWatchdog watchdog;
     app.setWatchdog(&watchdog);
+
+    // The application log: rotating files in the platform's log folder. A measurement run
+    // (`--diagnostics-script`) does not write one.
+    if (!scripted) {
+        const QString problem = vellora::Logging::start();
+        if (!problem.isEmpty()) {
+            err << "vellora: no log file: " << problem << '\n';
+        } else {
+            qInfo("Vellora %s (%s) started", vellora::buildinfo::kVersion,
+                  vellora::buildinfo::kCommit);
+        }
+    }
 
     // Files are given relative to where the command was run; a running instance has another
     // working directory.
@@ -111,5 +124,7 @@ int main(int argc, char** argv) {
             QApplication::exit(0);
         });
     }
-    return QApplication::exec();
+    const int result = QApplication::exec();
+    vellora::Logging::stop();
+    return result;
 }
