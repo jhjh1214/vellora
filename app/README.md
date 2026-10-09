@@ -13,7 +13,10 @@ app/
 ├─ CMakeLists.txt     # Qt 6.8 + Corrosion; builds the shell, stages vellora-engine and PDFium beside it
 ├─ src/
 │  ├─ main.cpp
-│  ├─ MainWindow.{h,cpp}        # menu bar, File -> Open, status bar
+│  ├─ MainWindow.{h,cpp}        # menu bar, tabs, File -> Open / Open Recent, status bar
+│  ├─ DocumentTab.{h,cpp}       # one document: engine session, canvas, repair bar, password prompt
+│  ├─ SingleInstance.{h,cpp}    # a second launch forwards its files to the running instance
+│  ├─ settings/AppSettings.*    # recent files, geometry, per-document view state (QSettings)
 │  ├─ bridge/EngineSession.*    # QObject over the cxx bridge: polled events -> signals, tiles
 │  ├─ canvas/
 │  │  ├─ PageLayout.*           # page column geometry (pure)

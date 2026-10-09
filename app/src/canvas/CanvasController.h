@@ -89,6 +89,11 @@ public:
     void actualSize();
     void fitWidth();
 
+    // The place at the top edge of the viewport, and putting the view back there at a zoom (for
+    // restoring a saved view once the layout is known).
+    PageLayout::Anchor topAnchor() const { return m_layout.anchorAt(m_scroll.y(), m_zoom); }
+    void restoreView(PageLayout::Anchor anchor, double zoom);
+
     quint32 pageCount() const { return m_layout.pageCount(); }
     // The page under the middle of the viewport.
     quint32 currentPage() const;

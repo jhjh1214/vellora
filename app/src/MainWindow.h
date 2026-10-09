@@ -1,20 +1,26 @@
-// The main window: native menu bar (File, View), the scrolling canvas, and a status bar with the
-// page, the zoom and the document's state. A bar above the canvas says when the file was repaired.
-// Task 22d routes every action through the command registry.
+// The main window: native menu bar (File, View, Window), one tab per open document, and a status
+// bar with the current tab's page, zoom and state. Every action is a registered command (the menus,
+// the shortcuts and the command palette derive from the registry).
+//
+// Each tab (`DocumentTab`) has its own engine process, which ends when the tab closes. The window
+// always has at least one tab; a tab without a document is "empty" and is reused by the next file
+// that is opened. The accessors without a tab argument (`session()`, `canvas()`, ...) are the
+// current tab's.
 #pragma once
 
+#include "DocumentTab.h"
 #include "bridge/EngineSession.h"
 #include "canvas/CanvasView.h"
 #include "commands/CommandPalette.h"
 #include "commands/CommandRegistry.h"
+#include "settings/AppSettings.h"
 
 #include <QMainWindow>
 #include <QStringList>
-#include <functional>
-#include <optional>
-#include <utility>
 
 class QLabel;
+class QMenu;
+class QTabWidget;
 
 namespace vellora {
 
@@ -24,70 +30,83 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    // How many wrong passwords end the attempt to open an encrypted document.
+    static constexpr int kMaxPasswordAttempts = DocumentTab::kMaxPasswordAttempts;
+    // How many closed tabs "Reopen Closed Tab" remembers.
+    static constexpr int kMaxClosedTabs = 20;
+    using PasswordProvider = DocumentTab::PasswordProvider;
+
+    // `settings` is not owned and may be null: then nothing is remembered between runs.
+    explicit MainWindow(AppSettings* settings = nullptr, QWidget* parent = nullptr);
     ~MainWindow() override;
 
-    // Opens `path` (the File -> Open dialog calls this with the chosen file). Shows the error in
-    // the status bar and returns false if the engine cannot be started.
+    // Opens `path` in a tab: the tab that already shows it, else the current tab if it is empty,
+    // else a new one. False (the reason is in the tab's `documentStatus`) if the engine cannot be
+    // started.
     bool openDocument(const QString& path);
+    // Opens each of `paths` (a command line, a drop, another launch). Returns the ones that could
+    // not be opened.
+    QStringList openDocuments(const QStringList& paths);
 
-    // How many wrong passwords end the attempt to open an encrypted document.
-    static constexpr int kMaxPasswordAttempts = 3;
-    // What the window asks when a document needs a password: the file name, the attempt (from 1),
-    // the number of attempts and whether the previous password was refused. An empty optional is
-    // "cancel". The default shows a modal `PasswordDialog`; tests replace it.
-    using PasswordProvider = std::function<std::optional<QString>(
-        const QString& fileName, int attempt, int maxAttempts, bool wrong)>;
-    void setPasswordProvider(PasswordProvider provider) {
-        m_passwordProvider = std::move(provider);
-    }
+    int tabCount() const;
+    DocumentTab& tab(int index);
+    DocumentTab& currentTab();
+    int currentTabIndex() const;
+    void setCurrentTabIndex(int index);
+    // Closes the tab (its engine ends with it); the window keeps at least one, empty, tab.
+    void closeTab(int index);
+    void closeCurrentTab() { closeTab(currentTabIndex()); }
+    // Opens the file of the tab closed last, if any (up to `kMaxClosedTabs`). False if none.
+    bool reopenClosedTab();
+    QStringList closedTabs() const { return m_closedTabs; }
 
-    EngineSession& session() { return m_session; }
+    // File -> Open Recent. Rebuilt every time it is shown; unreadable files are greyed out.
+    QMenu* recentMenu() { return m_recentMenu; }
+    void refreshRecentMenu();
+
+    // What the window asks when a document needs a password (all tabs, present and future).
+    void setPasswordProvider(PasswordProvider provider);
+
+    // The current tab's parts and status texts.
+    EngineSession& session() { return currentTab().session(); }
+    CanvasView& canvas() { return currentTab().canvas(); }
+    RepairBar& repairBar() { return currentTab().repairBar(); }
     CommandRegistry& commands() { return m_commands; }
     CommandPalette& palette() { return *m_palette; }
-    CanvasView& canvas() { return *m_canvas; }
-    RepairBar& repairBar() { return *m_repairBar; }
-    // What the status bar shows, for tests.
     QString documentStatus() const;
     QString pageStatus() const;
     QString zoomStatus() const;
 
+signals:
+    // A tab was created (the watchdog wants to time its canvas).
+    void tabAdded(vellora::DocumentTab* tab);
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
 private slots:
     void chooseDocument();
-    void onOpened(quint32 pageCount, const QStringList& repairs);
-    void onRequestFailed(quint64 request, const QString& message);
-    void onPasswordRequested(bool wrong);
-    void onEngineCrashed(const QString& how, bool willRestart);
-    void onFailed(const QString& reason);
-    void onEngineTimedOut(TimeoutStage stage, const QString& message);
-    void onDocumentChanged(bool replaced);
-    void onPageChanged(quint32 page, quint32 pageCount);
-    void onZoomChanged(double zoom);
 
 private:
+    DocumentTab* addTab();
     void registerCommands();
-    void setDocumentStatus(const QString& text);
-    void askForPassword(bool wrong, quint64 generation);
-    void giveUpOnDocument(const QString& status);
+    void updateChrome();
+    void updateTabTitle(DocumentTab* tab);
+    void removeUnavailableRecent();
 
-    // The canvas uses the session, so the destructor deletes the canvas before this member goes.
-    EngineSession m_session;
+    AppSettings* m_settings;
     CommandRegistry m_commands;
-    CanvasView* m_canvas = nullptr;
-    RepairBar* m_repairBar = nullptr;
+    QTabWidget* m_tabs = nullptr;
     CommandPalette* m_palette = nullptr;
+    QMenu* m_recentMenu = nullptr;
     QLabel* m_documentStatus = nullptr;
     QLabel* m_pageStatus = nullptr;
     QLabel* m_zoomStatus = nullptr;
-    QString m_fileName;
-    // The file changed on disk since it was opened; shown next to the page count.
-    bool m_fileChanged = false;
     PasswordProvider m_passwordProvider;
-    // Wrong passwords for the document being opened; never more than `kMaxPasswordAttempts`.
-    int m_wrongPasswords = 0;
-    // Counts `openDocument` calls, so that a prompt queued for one document is not shown for the
-    // next.
-    quint64 m_openGeneration = 0;
+    QStringList m_closedTabs; // most recent last
+    QList<QAction*> m_recentFixedActions;
 };
 
 } // namespace vellora

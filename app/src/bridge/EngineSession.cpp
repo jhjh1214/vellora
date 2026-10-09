@@ -1,6 +1,7 @@
 #include "bridge/EngineSession.h"
 
 #include <QDir>
+#include <atomic>
 #include <exception>
 
 namespace vellora {
@@ -15,15 +16,23 @@ QString toQString(const rust::String& text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
+std::atomic<int> g_liveSessions{0};
+
 } // namespace
 
+int EngineSession::liveCount() {
+    return g_liveSessions.load();
+}
+
 EngineSession::EngineSession(QObject* parent) : QObject(parent) {
+    ++g_liveSessions;
     m_timer.setInterval(kPollIntervalMs);
     connect(&m_timer, &QTimer::timeout, this, &EngineSession::pollNow);
 }
 
 EngineSession::~EngineSession() {
     close();
+    --g_liveSessions;
 }
 
 QString EngineSession::open(const QString& path) {

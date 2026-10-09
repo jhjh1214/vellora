@@ -109,6 +109,15 @@ void CanvasController::setZoom(double zoom, QPointF anchor) {
     applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), anchor);
 }
 
+void CanvasController::restoreView(PageLayout::Anchor anchor, double zoom) {
+    if (!std::isfinite(zoom) || !std::isfinite(anchor.offsetPoints)) {
+        return;
+    }
+    applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), QPointF(0.0, 0.0));
+    anchor.page = std::min(anchor.page, m_layout.pageCount() == 0 ? 0 : m_layout.pageCount() - 1);
+    setScrollPosition({m_scroll.x(), m_layout.yOf(anchor, m_zoom)});
+}
+
 void CanvasController::actualSize() {
     applyZoom(1.0, QPointF(m_viewport.width() / 2.0, m_viewport.height() / 2.0));
 }

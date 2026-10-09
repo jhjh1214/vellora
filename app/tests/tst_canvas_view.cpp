@@ -111,7 +111,9 @@ private slots:
         window.canvas().zoomIn();
         window.canvas().controller()->setScrollPosition(QPointF(0.0, 1.0e9));
 
-        QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
+        // Replacing the document of the tab (opening the same file elsewhere would only switch to
+        // its tab).
+        QVERIFY(window.currentTab().open(QStringLiteral(VELLORA_GOLDEN_PDF)));
         QCOMPARE(window.canvas().controller()->zoom(), 1.0);
         QCOMPARE(window.canvas().controller()->scrollPosition(), QPointF(0.0, 0.0));
         QCOMPARE(window.zoomStatus(), QStringLiteral("100%"));

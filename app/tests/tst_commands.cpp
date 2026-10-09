@@ -6,9 +6,11 @@
 #include <QAction>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMenuBar>
 #include <QSignalSpy>
 #include <QTest>
+#include <functional>
 
 using vellora::Command;
 using vellora::CommandRegistry;
@@ -68,9 +70,11 @@ private slots:
         }
 
         // Every menu entry is the action of a registered command: same title, same shortcuts.
+        // The Open Recent submenu holds recent files, which are not commands, and its two fixed
+        // entries, which are; the files come from the settings and there are none here.
         int entries = 0;
-        for (const QAction* menuAction : window.menuBar()->actions()) {
-            for (const QAction* entry : menuAction->menu()->actions()) {
+        const std::function<void(const QMenu*)> check = [&](const QMenu* menu) {
+            for (const QAction* entry : menu->actions()) {
                 if (entry->isSeparator()) {
                     continue;
                 }
@@ -81,7 +85,16 @@ private slots:
                                       command.shortcuts == entry->shortcuts());
                 }
                 QVERIFY2(found, qPrintable(entry->text()));
+                if (entry->menu() != nullptr) {
+                    if (entry->menu() == window.recentMenu()) {
+                        window.refreshRecentMenu();
+                    }
+                    check(entry->menu());
+                }
             }
+        };
+        for (const QAction* menuAction : window.menuBar()->actions()) {
+            check(menuAction->menu());
         }
         QCOMPARE(entries, registry.commands().size());
     }

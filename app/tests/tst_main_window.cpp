@@ -105,20 +105,29 @@ private slots:
         bar.dismissButton()->click();
         QVERIFY(!bar.isVisible());
 
-        // Another document starts with a clean slate: a clean file shows no bar...
-        opened.clear();
+        // Another document is another tab with a clean slate: no bar for a clean file...
         QVERIFY2(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)),
                  qPrintable(window.documentStatus()));
-        QVERIFY(opened.wait(60'000));
-        QVERIFY(!bar.isVisible());
-        QVERIFY(bar.reasons().isEmpty());
-        QVERIFY(bar.showDetails() == nullptr);
+        QCOMPARE(window.tabCount(), 2);
+        QSignalSpy openedGolden(&window.session(), &vellora::EngineSession::opened);
+        QVERIFY(openedGolden.wait(60'000));
+        vellora::RepairBar& cleanBar = window.repairBar();
+        QVERIFY(!cleanBar.isVisible());
+        QVERIFY(cleanBar.reasons().isEmpty());
+        QVERIFY(cleanBar.showDetails() == nullptr);
 
-        // ...and a damaged one shows it again, even though it was dismissed before.
-        opened.clear();
-        QVERIFY2(window.openDocument(path), qPrintable(window.documentStatus()));
-        QVERIFY(opened.wait(60'000));
-        QVERIFY(bar.isVisible());
+        // ...the damaged file's tab keeps its bar dismissed when it is switched back to...
+        window.setCurrentTabIndex(0);
+        QVERIFY(!window.repairBar().isVisible());
+        QVERIFY(!window.repairBar().reasons().isEmpty());
+
+        // ...and the same damaged file opened as another document shows its bar again.
+        const QString copy = dir.filePath(QStringLiteral("damaged-copy.pdf"));
+        QVERIFY(QFile::copy(path, copy));
+        QVERIFY2(window.openDocument(copy), qPrintable(window.documentStatus()));
+        QSignalSpy openedCopy(&window.session(), &vellora::EngineSession::opened);
+        QVERIFY(openedCopy.wait(60'000));
+        QVERIFY(window.repairBar().isVisible());
     }
 
     void showsEngineTextAsPlainText() {
@@ -187,6 +196,7 @@ private slots:
         QVERIFY2(window.documentStatus().startsWith(QStringLiteral("Cannot open")),
                  qPrintable(window.documentStatus()));
         QCOMPARE(window.session().pageCount(), 0U);
+        // No document is open any more, so the window title is the application's.
         QCOMPARE(window.windowTitle(), QStringLiteral("Vellora"));
     }
 
@@ -234,7 +244,8 @@ private slots:
         connect(&window.session(), &vellora::EngineSession::passwordRequested, &window, [&] {
             if (!reopened) {
                 reopened = true;
-                QVERIFY(window.openDocument(QStringLiteral(VELLORA_GOLDEN_PDF)));
+                // Replaces the document in the tab that asked.
+                QVERIFY(window.tab(0).open(QStringLiteral(VELLORA_GOLDEN_PDF)));
             }
         });
         QVERIFY(window.openDocument(QStringLiteral(VELLORA_PROTECTED_PDF)));
