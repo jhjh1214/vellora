@@ -6,8 +6,11 @@
 #pragma once
 
 #include "canvas/CanvasController.h"
+#include "canvas/LinkLayer.h"
 
 #include <QAbstractScrollArea>
+#include <functional>
+#include <optional>
 
 class QLabel;
 class QRubberBand;
@@ -28,6 +31,7 @@ public:
     explicit CanvasView(EngineSession* session, QWidget* parent = nullptr);
 
     CanvasController* controller() { return &m_controller; }
+    LinkLayer* links() { return &m_links; }
     CanvasWidget* canvas() { return m_canvas; }
 
     // Forgets the old document's view; call before the session opens another file.
@@ -46,12 +50,27 @@ public:
     void fitWidth();
     void fitPage();
 
+    // ---- links ----
+    // How a link reads in a tool tip; the default names the target page by its number. The owner
+    // replaces it to use the document's page labels. Plain text.
+    using LinkDescriber = std::function<QString(const Link&)>;
+    void setLinkDescriber(LinkDescriber describer) { m_describer = std::move(describer); }
+    // The tool tip text of the link under `viewportPos`, or empty if there is none.
+    QString linkToolTipAt(QPoint viewportPos) const;
+    // The shape the pointer has over `viewportPos`: a hand over a link that can be followed, a
+    // "not allowed" sign over one that would run what Vellora never runs, else an arrow.
+    Qt::CursorShape linkCursorAt(QPoint viewportPos) const;
+
     // The rectangle tool: while armed, dragging with the left button draws a rectangle and zooms to
     // it. Held Z arms it for as long as the key is down; `armZoomRect(true)` arms it for one drag.
     void armZoomRect(bool armed);
     bool zoomRectArmed() const { return m_zoomRectOneShot || m_zKeyDown; }
     // The rectangle being dragged (viewport pixels); empty when none.
     QRect dragRect() const;
+
+signals:
+    // The reader clicked (pressed and released on) a link. What it does is the owner's to decide.
+    void linkActivated(const vellora::Link& link);
 
 protected:
     bool viewportEvent(QEvent* event) override;
@@ -67,9 +86,11 @@ private:
     void syncScrollBars();
     void placeBanner();
     void updateCursor();
+    void refreshHover();
     void endDrag(bool zoom);
 
     CanvasController m_controller;
+    LinkLayer m_links;
     CanvasWidget* m_canvas;
     QLabel* m_banner = nullptr;
     bool m_syncing = false;
@@ -78,6 +99,13 @@ private:
     QRubberBand* m_band = nullptr;
     QPoint m_dragStart;
     bool m_dragging = false;
+    LinkDescriber m_describer;
+    // Where the pointer is over the viewport, to look again when the view moves beneath it.
+    std::optional<QPoint> m_pointer;
+    // The link the left button went down on, and where.
+    std::optional<Link> m_pressedLink;
+    quint32 m_pressedPage = 0;
+    QPoint m_pressPos;
 };
 
 } // namespace vellora

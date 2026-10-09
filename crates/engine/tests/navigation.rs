@@ -689,3 +689,44 @@ fn links_are_refused_before_a_document_is_open() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
+
+/// Acceptance of task 13: describing links, and rendering the page they are on, touches no
+/// network. Links to a local listener (an address, a form submission, a remote jump) are read and
+/// the page is rendered; the listener must see nothing.
+#[test]
+fn describing_links_makes_no_network_connection() {
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/x");
+    let link = |action: String| {
+        format!("<< /Type /Annot /Subtype /Link /Rect [10 10 20 20] /A << {action} >> >>")
+    };
+    let annots = [
+        link(format!("/S /URI /URI ({url})")),
+        link(format!("/S /SubmitForm /F ({url})")),
+        link(format!("/S /GoToR /F ({url}) /D [0 /Fit]")),
+        link(format!("/S /ImportData /F ({url})")),
+        link(format!("/S /Launch /F ({url})")),
+    ]
+    .join(" ");
+    let mut engine = opened(&pdf_with_first_page(
+        "",
+        &format!("/Annots [{annots}]"),
+        &[],
+    ));
+    let (links, _) = get_links(&mut engine, 0, 0, 256);
+    assert_eq!(links.len(), 5);
+    assert_eq!(links[0].action, LinkAction::Uri(url));
+    engine.send(&tile_request(1));
+    assert!(matches!(engine.recv(), Response::TileReady { .. }));
+
+    std::thread::sleep(Duration::from_millis(500));
+    match listener.accept() {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        other => panic!("the engine connected to a link target: {other:?}"),
+    }
+}

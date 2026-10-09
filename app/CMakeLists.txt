@@ -110,8 +110,14 @@ add_library(vellora_shell STATIC
   src/canvas/CanvasView.h
   src/canvas/CanvasWidget.cpp
   src/canvas/CanvasWidget.h
+  src/canvas/LinkLayer.cpp
+  src/canvas/LinkLayer.h
   src/canvas/PageLayout.cpp
   src/canvas/PageLayout.h
+  src/links/LinkActions.cpp
+  src/links/LinkActions.h
+  src/links/UriConfirmDialog.cpp
+  src/links/UriConfirmDialog.h
   src/navigation/NavigationHistory.cpp
   src/navigation/NavigationHistory.h
   src/sidebar/OutlineView.cpp

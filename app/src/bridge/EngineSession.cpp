@@ -16,17 +16,35 @@ QString toQString(const rust::String& text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
+Destination toDestination(const OutlineNode& node) {
+    Destination destination;
+    destination.page = node.page;
+    destination.fit = node.fit;
+    destination.left = static_cast<double>(node.left);
+    destination.top = static_cast<double>(node.top);
+    destination.right = static_cast<double>(node.right);
+    destination.bottom = static_cast<double>(node.bottom);
+    destination.zoom = static_cast<double>(node.zoom);
+    return destination;
+}
+
+Link toLink(const LinkNode& node) {
+    Link link;
+    link.rect = QRectF(QPointF(static_cast<double>(node.left), static_cast<double>(node.top)),
+                       QPointF(static_cast<double>(node.right), static_cast<double>(node.bottom)))
+                    .normalized();
+    link.kind = node.kind;
+    link.named = node.named;
+    link.text = toQString(node.text);
+    link.destination = toDestination(node.destination);
+    return link;
+}
+
 OutlineItem toItem(const OutlineNode& node) {
     OutlineItem item;
     item.id = node.id;
     item.title = toQString(node.title);
-    item.destination.page = node.page;
-    item.destination.fit = node.fit;
-    item.destination.left = static_cast<double>(node.left);
-    item.destination.top = static_cast<double>(node.top);
-    item.destination.right = static_cast<double>(node.right);
-    item.destination.bottom = static_cast<double>(node.bottom);
-    item.destination.zoom = static_cast<double>(node.zoom);
+    item.destination = toDestination(node);
     item.hasChildren = node.has_children;
     item.open = node.open;
     item.bold = node.bold;
@@ -188,6 +206,17 @@ quint64 EngineSession::requestOutline(std::optional<quint32> parent, std::option
     }
 }
 
+quint64 EngineSession::requestLinks(quint32 page, quint32 skip, quint32 limit) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_links(page, skip, limit);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 quint64 EngineSession::requestOutlinePath(quint32 page) {
     if (!m_client) {
         return 0;
@@ -320,6 +349,15 @@ void EngineSession::dispatch(const EngineEvent& event) {
     case EventKind::PageFound:
         emit pageFound(event.request, event.found, event.found_page);
         break;
+    case EventKind::Links: {
+        QList<Link> links;
+        links.reserve(static_cast<qsizetype>(event.links.size()));
+        for (const LinkNode& node : event.links) {
+            links.append(toLink(node));
+        }
+        emit linksReady(event.request, event.links_page, links, event.more);
+        break;
+    }
     }
 }
 

@@ -2,10 +2,14 @@
 
 #include "PasswordDialog.h"
 #include "RepairBar.h"
+#include "links/LinkActions.h"
+#include "links/UriConfirmDialog.h"
 #include "sidebar/ThumbnailSidebar.h"
 
+#include <QDesktopServices>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -56,6 +60,22 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     m_splitter->setSizes({sidebarWidth, 1000});
     connect(m_splitter, &QSplitter::splitterMoved, this, [this] { saveSidebar(); });
     connect(m_sidebar, &ThumbnailSidebar::thumbnailWidthChanged, this, [this] { saveSidebar(); });
+
+    m_uriConfirmer = [this](const QString& uri, const QString& host) {
+        UriConfirmDialog dialog(uri, host, this);
+        const bool open = dialog.exec() == QDialog::Accepted;
+        return UriChoice{open, open && dialog.trustHost()};
+    };
+    m_uriOpener = [](const QUrl& url) { return QDesktopServices::openUrl(url); };
+    m_notifier = [this](const QString& text) {
+        QMessageBox box(QMessageBox::Information, tr("Link"), text, QMessageBox::Ok, this);
+        box.setTextFormat(Qt::PlainText); // the text includes the document's own words
+        box.exec();
+    };
+    connect(m_canvas, &CanvasView::linkActivated, this, &DocumentTab::activateLink);
+    m_canvas->setLinkDescriber([this](const Link& link) {
+        return LinkActions::describe(link, [this](quint32 page) { return pageLabel(page); });
+    });
 
     m_zoomStatus = tr("%1%").arg(qRound(m_canvas->controller()->zoom() * 100.0));
     // A new tab arranges its pages the way the user last chose.
@@ -137,6 +157,8 @@ bool DocumentTab::open(const QString& path) {
     m_canvas->reset();
     m_sidebar->reset();
     m_history.clear();
+    m_trustedHosts.clear();
+    m_canvas->links()->reset();
     m_labels.clear();
     m_labelsDefined = false;
     m_labelRequest = 0;
@@ -440,6 +462,76 @@ void DocumentTab::goToPageNumber(const QString& text) {
         return;
     }
     emit message(tr("This document has no page \"%1\".").arg(text));
+}
+
+void DocumentTab::activateLink(const Link& link) {
+    switch (link.kind) {
+    case LinkKind::GoTo:
+        jumpTo(link.destination);
+        break;
+    case LinkKind::Named: {
+        const quint32 count = m_canvas->controller()->pageCount();
+        const quint32 current = m_canvas->controller()->currentPage();
+        if (count == 0) {
+            break;
+        }
+        switch (link.named) {
+        case NamedKind::NextPage:
+            if (current + 1 < count) {
+                jumpToPage(current + 1);
+            }
+            break;
+        case NamedKind::PrevPage:
+            if (current > 0) {
+                jumpToPage(current - 1);
+            }
+            break;
+        case NamedKind::FirstPage:
+            jumpToPage(0);
+            break;
+        case NamedKind::LastPage:
+            jumpToPage(count - 1);
+            break;
+        default:
+            break;
+        }
+        break;
+    }
+    case LinkKind::Uri:
+        openUri(link.text);
+        break;
+    case LinkKind::Inert:
+        notify(LinkActions::inertNotice(link.text));
+        break;
+    default:
+        break; // a link that goes nowhere
+    }
+}
+
+void DocumentTab::openUri(const QString& uri) {
+    const LinkActions::UriCheck check = LinkActions::checkUri(uri);
+    if (!check.allowed) {
+        notify(tr("This address was not opened. %1\n\n%2").arg(check.problem, uri));
+        return;
+    }
+    const bool trusted = !check.host.isEmpty() && m_trustedHosts.contains(check.host);
+    if (!trusted) {
+        const UriChoice choice = m_uriConfirmer(uri, check.host);
+        if (!choice.open) {
+            return;
+        }
+        if (choice.trustHost && !check.host.isEmpty()) {
+            m_trustedHosts.insert(check.host);
+        }
+    }
+    if (!m_uriOpener(QUrl(uri, QUrl::StrictMode))) {
+        notify(tr("The address could not be opened.\n\n%1").arg(uri));
+    }
+}
+
+void DocumentTab::notify(const QString& text) {
+    emit message(text.section(QLatin1Char('\n'), 0, 0));
+    m_notifier(text);
 }
 
 void DocumentTab::showOutline() {

@@ -81,6 +81,8 @@ public:
     quint64 requestPageLabels(quint32 first, quint32 count);
     // The page that has the label `text`.
     quint64 findPageLabel(const QString& text);
+    // Up to `limit` (1 to 256) links of `page` after the first `skip`.
+    quint64 requestLinks(quint32 page, quint32 skip, quint32 limit);
 
     // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
     quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }
@@ -103,6 +105,8 @@ signals:
     // `defined`: the document has page labels; if not, `labels` are the page numbers.
     void pageLabelsReady(quint64 request, quint32 first, bool defined, const QStringList& labels);
     void pageFound(quint64 request, bool found, quint32 page);
+    // `more`: ask again with `skip` advanced by the number received.
+    void linksReady(quint64 request, quint32 page, const QList<vellora::Link>& links, bool more);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);
     // Requests in `lost` will never be answered; ask again after `engineRestarted`.

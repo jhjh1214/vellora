@@ -10,6 +10,8 @@
 #include "navigation/NavigationHistory.h"
 #include "settings/AppSettings.h"
 
+#include <QSet>
+#include <QUrl>
 #include <QWidget>
 #include <functional>
 #include <optional>
@@ -73,6 +75,30 @@ public:
     // engine is asked, so the jump follows a moment later; if there is no such page, `message`
     // says so.
     void goToPageText(const QString& text);
+    // ---- links ----
+    // What clicking a link does. A jump inside the document is followed (and recorded in the
+    // history); an address is opened only after the reader confirms it, for the schemes http,
+    // https and mailto (anything else is shown and refused); every other kind of action is
+    // described and never run.
+    void activateLink(const Link& link);
+    // The question before an address is opened: whether to open it, and whether to stop asking
+    // for its host in this document. The default shows a `UriConfirmDialog`; tests replace it.
+    struct UriChoice {
+        bool open = false;
+        bool trustHost = false;
+    };
+    using UriConfirmer = std::function<UriChoice(const QString& uri, const QString& host)>;
+    void setUriConfirmer(UriConfirmer confirmer) { m_uriConfirmer = std::move(confirmer); }
+    // What opens an address (the default asks the desktop); tests replace it.
+    using UriOpener = std::function<bool(const QUrl& url)>;
+    void setUriOpener(UriOpener opener) { m_uriOpener = std::move(opener); }
+    // What tells the reader something that needs reading (a refused address, an action never
+    // run). The default shows a message box; tests replace it.
+    using Notifier = std::function<void(const QString& text)>;
+    void setNotifier(Notifier notifier) { m_notifier = std::move(notifier); }
+    // Hosts the reader chose not to be asked about again, for this document and this run.
+    bool isHostTrusted(const QString& host) const { return m_trustedHosts.contains(host); }
+
     // Shows the sidebar on its outline tab.
     void showOutline();
     // The label of a page: the document's own if it has page labels, else its number.
@@ -139,6 +165,8 @@ private:
     void refreshPageStatus();
     // A page typed by number, the fallback when no page has that label.
     void goToPageNumber(const QString& text);
+    void openUri(const QString& uri);
+    void notify(const QString& text);
 
     AppSettings* m_settings;
     // The canvas and the sidebar use the session, so the destructor deletes them before this member
@@ -166,6 +194,10 @@ private:
     std::optional<AppSettings::ViewState> m_savedView;
     bool m_opened = false;
     bool m_applyingLayout = false;
+    UriConfirmer m_uriConfirmer;
+    UriOpener m_uriOpener;
+    Notifier m_notifier;
+    QSet<QString> m_trustedHosts;
     NavigationHistory m_history;
     // The page labels, read in windows after the document opens (empty if it defines none).
     QStringList m_labels;
