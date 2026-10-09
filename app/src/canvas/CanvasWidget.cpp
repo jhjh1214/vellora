@@ -108,6 +108,11 @@ void CanvasWidget::releaseTextures() {
         it->texture->deleteLater();
     }
     m_textures.clear();
+    for (const GpuTile& spare : std::as_const(m_spare)) {
+        spare.bindings->deleteLater();
+        spare.texture->deleteLater();
+    }
+    m_spare.clear();
 }
 
 void CanvasWidget::releaseResources() {
@@ -186,8 +191,13 @@ void CanvasWidget::evictTextures() {
         if (oldest->lastUsed == m_frames) {
             return;
         }
-        oldest->bindings->deleteLater();
-        oldest->texture->deleteLater();
+        // Kept to be written again (a few; a burst of evictions must not hold memory).
+        if (m_spare.size() < kMaxSpareTextures) {
+            m_spare.append(*oldest);
+        } else {
+            oldest->bindings->deleteLater();
+            oldest->texture->deleteLater();
+        }
         m_textures.erase(oldest);
     }
 }
@@ -246,41 +256,84 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
     QVector<Quad> sharp;
     QVector<const TileDraw*> missing;
     int uploads = 0;
+    // Phases of tile uploading done this frame. A tile is uploaded in two frames: one reads its
+    // pixels out of the shared region (about 1.5 ms), the next creates or reuses its texture and
+    // uploads (about 2 ms). A frame does a phase only if it is expected to fit the budget, except
+    // that every frame does at least one, so a slow machine still makes progress.
+    int work = 0;
     bool waiting = false;
+    const auto affordable = [&](double estimateMs) {
+        return work == 0 || static_cast<double>(uploadNs) / 1e6 + estimateMs <= kUploadBudgetMs;
+    };
+    const auto remember = [](double& estimate, qint64 tookNs) {
+        estimate = 0.7 * estimate + 0.3 * (static_cast<double>(tookNs) / 1e6);
+    };
+    // A staged tile that is no longer wanted is dropped.
+    if (m_hasStaged) {
+        const bool wanted =
+            std::any_of(frame.tiles.begin(), frame.tiles.end(), [this](const TileDraw& t) {
+                return t.id() == m_stagedId && !m_textures.contains(t.id());
+            });
+        m_hasStaged = wanted;
+    }
     for (const TileDraw& tile : frame.tiles) {
         auto it = m_textures.find(tile.id());
         if (it == m_textures.end()) {
-            // At least one upload per frame, so a slow machine still makes progress.
-            if (uploads >= kUploadsPerFrame ||
-                (uploads > 0 && uploadNs >= static_cast<qint64>(kUploadBudgetMs * 1e6))) {
+            const bool staged = m_hasStaged && m_stagedId == tile.id();
+            // Another tile is staged and is finished first.
+            if (m_hasStaged && !staged) {
                 waiting = true;
                 missing.append(&tile);
                 continue;
             }
-            QElapsedTimer uploadClock;
-            uploadClock.start();
-            if (!m_session->readTile(tile.page, tile.scale, tile.x, tile.y, m_scratch)) {
-                missing.append(&tile); // not rendered yet; tileReady will bring us back
+            if (uploads >= kUploadsPerFrame ||
+                !affordable(staged ? m_gpuEstimateMs : m_readEstimateMs)) {
+                waiting = true;
+                missing.append(&tile);
+                continue;
+            }
+            QElapsedTimer clock;
+            clock.start();
+            if (!staged) {
+                if (!m_session->readTile(tile.page, tile.scale, tile.x, tile.y, m_scratch)) {
+                    missing.append(&tile); // not rendered yet; tileReady will bring us back
+                    continue;
+                }
+                m_hasStaged = true;
+                m_stagedId = tile.id();
+                ++work;
+                const qint64 took = clock.nsecsElapsed();
+                uploadNs += took;
+                remember(m_readEstimateMs, took);
+                waiting = true; // the upload follows in the next frame
+                missing.append(&tile);
                 continue;
             }
             GpuTile gpu;
-            gpu.texture = rhi->newTexture(QRhiTexture::BGRA8, QSize(kTilePixels, kTilePixels));
-            gpu.texture->create();
-            gpu.bindings = bindingsFor(gpu.texture);
+            if (!m_spare.isEmpty()) {
+                gpu = m_spare.takeLast();
+            } else {
+                gpu.texture = rhi->newTexture(QRhiTexture::BGRA8, QSize(kTilePixels, kTilePixels));
+                gpu.texture->create();
+                gpu.bindings = bindingsFor(gpu.texture);
+            }
             // The slot is a whole megabyte; the tile is its first 512 x 512 x 4 bytes.
             updates->uploadTexture(
                 gpu.texture,
                 QRhiTextureUploadEntry(0, 0,
                                        QRhiTextureSubresourceUploadDescription(
                                            m_scratch.constData(), kTilePixels * kTilePixels * 4)));
+            m_hasStaged = false;
             it = m_textures.insert(tile.id(), gpu);
             ++uploads;
-            uploadNs += uploadClock.nsecsElapsed();
+            ++work;
+            const qint64 took = clock.nsecsElapsed();
+            uploadNs += took;
+            remember(m_gpuEstimateMs, took);
         }
         it->lastUsed = m_frames;
         sharp.append({it->bindings, tile.dest, tile.uv, tile.rotation});
     }
-
     // Stand-ins for the tiles that are not there yet: whatever the GPU still holds of the same
     // page at another scale, cut to the part of the page the missing tile would show. The tile
     // whose scale is nearest goes last, on top.
