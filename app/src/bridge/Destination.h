@@ -6,6 +6,7 @@
 #include "vellora-engine-client/src/bridge.rs.h"
 
 #include <QMetaType>
+#include <QRectF>
 #include <QString>
 #include <cmath>
 #include <limits>
@@ -39,7 +40,19 @@ struct OutlineItem {
     bool italic = false;
 };
 
+// A link on a page: where it is and what it does. The engine only describes links; what to do is
+// decided by the shell (internal jumps are followed, addresses are confirmed, the rest is never
+// run).
+struct Link {
+    QRectF rect; // points of the page as shown, origin at the top left
+    LinkKind kind = LinkKind::Unresolved;
+    NamedKind named = NamedKind::None; // for `Named`
+    QString text;                      // `Uri`: the address; `Inert`: the name of the action
+    Destination destination;           // for `GoTo`
+};
+
 } // namespace vellora
 
+Q_DECLARE_METATYPE(vellora::Link)
 Q_DECLARE_METATYPE(vellora::Destination)
 Q_DECLARE_METATYPE(vellora::OutlineItem)

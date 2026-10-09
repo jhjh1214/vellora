@@ -1,13 +1,16 @@
 #include "canvas/CanvasView.h"
 
 #include "canvas/CanvasWidget.h"
+#include "links/LinkActions.h"
 
 #include <QEvent>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QRubberBand>
 #include <QScrollBar>
+#include <QToolTip>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -28,7 +31,8 @@ int clampToInt(double value) {
 } // namespace
 
 CanvasView::CanvasView(EngineSession* session, QWidget* parent)
-    : QAbstractScrollArea(parent), m_controller(session), m_canvas(nullptr) {
+    : QAbstractScrollArea(parent), m_controller(session), m_links(session, &m_controller, this),
+      m_canvas(nullptr) {
     // The canvas is a child of the viewport, not the viewport itself: the scroll area consumes the
     // viewport's paint events, so a QRhiWidget used as viewport would never be asked to render.
     m_canvas = new CanvasWidget(session, &m_controller, viewport());
@@ -40,6 +44,9 @@ CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     m_banner->setWordWrap(true);
     m_banner->hide();
     setFocusPolicy(Qt::StrongFocus);
+    // Hover: the pointer shows what is under it without a button down.
+    viewport()->setMouseTracking(true);
+    m_canvas->setMouseTracking(true);
     // Always shown (disabled when there is nothing to scroll): a scroll bar that comes and goes as
     // the zoom or the page changes resizes the viewport, and with it the GPU surface, which costs
     // a frame (measured: 8-9 ms in a turned view, whose pages overflow at 125% but not at 100%).
@@ -60,6 +67,8 @@ CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     connect(&m_controller, &CanvasController::contentChanged, this, &CanvasView::syncScrollBars);
     connect(&m_controller, &CanvasController::viewModeChanged, this, [this] { syncScrollBars(); });
     connect(&m_controller, &CanvasController::viewChanged, this, &CanvasView::syncScrollBars);
+    connect(&m_controller, &CanvasController::viewChanged, this, [this] { refreshHover(); });
+    connect(&m_links, &LinkLayer::linksChanged, this, [this] { refreshHover(); });
 }
 
 void CanvasView::reset() {
@@ -91,7 +100,59 @@ bool CanvasView::viewportEvent(QEvent* event) {
         m_controller.setViewportSize(viewport()->size());
         syncScrollBars();
     }
+    if (event->type() == QEvent::ToolTip) {
+        const auto* help = static_cast<QHelpEvent*>(event);
+        const QString text = linkToolTipAt(help->pos());
+        if (text.isEmpty()) {
+            QToolTip::hideText();
+        } else {
+            // Qt reads a tool tip as rich text when it looks like it, and the text is the
+            // document's: escaped, and kept as written.
+            QToolTip::showText(
+                help->globalPos(),
+                QStringLiteral("<p style='white-space:pre'>%1</p>").arg(text.toHtmlEscaped()),
+                viewport());
+        }
+        return true;
+    }
+    if (event->type() == QEvent::Leave) {
+        m_pointer.reset();
+    }
     return QAbstractScrollArea::viewportEvent(event);
+}
+
+QString CanvasView::linkToolTipAt(QPoint viewportPos) const {
+    const LinkLayer::Hit hit = m_links.hitTest(viewportPos);
+    if (hit.link == nullptr) {
+        return {};
+    }
+    if (m_describer) {
+        return m_describer(*hit.link);
+    }
+    return LinkActions::describe(*hit.link, [](quint32 page) { return QString::number(page + 1); });
+}
+
+Qt::CursorShape CanvasView::linkCursorAt(QPoint viewportPos) const {
+    const LinkLayer::Hit hit = m_links.hitTest(viewportPos);
+    if (hit.link == nullptr) {
+        return Qt::ArrowCursor;
+    }
+    switch (hit.link->kind) {
+    case LinkKind::GoTo:
+    case LinkKind::Uri:
+    case LinkKind::Named:
+        return Qt::PointingHandCursor;
+    case LinkKind::Inert:
+        return Qt::ForbiddenCursor;
+    default:
+        return Qt::ArrowCursor; // a link that goes nowhere
+    }
+}
+
+void CanvasView::refreshHover() {
+    if (m_pointer) {
+        updateCursor();
+    }
 }
 
 void CanvasView::wheelEvent(QWheelEvent* event) {
@@ -174,7 +235,11 @@ QRect CanvasView::dragRect() const {
 }
 
 void CanvasView::updateCursor() {
-    viewport()->setCursor(zoomRectArmed() ? Qt::CrossCursor : Qt::ArrowCursor);
+    if (zoomRectArmed()) {
+        viewport()->setCursor(Qt::CrossCursor);
+    } else {
+        viewport()->setCursor(m_pointer ? linkCursorAt(*m_pointer) : Qt::ArrowCursor);
+    }
 }
 
 void CanvasView::mousePressEvent(QMouseEvent* event) {
@@ -189,6 +254,16 @@ void CanvasView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (event->button() == Qt::LeftButton) {
+        const LinkLayer::Hit hit = m_links.hitTest(event->position());
+        if (hit.link != nullptr) {
+            m_pressedLink = *hit.link;
+            m_pressedPage = hit.page;
+            m_pressPos = event->position().toPoint();
+        } else {
+            m_pressedLink.reset();
+        }
+    }
     QAbstractScrollArea::mousePressEvent(event);
 }
 
@@ -198,6 +273,8 @@ void CanvasView::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    m_pointer = event->position().toPoint();
+    updateCursor();
     QAbstractScrollArea::mouseMoveEvent(event);
 }
 
@@ -207,6 +284,18 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* event) {
         endDrag(true);
         event->accept();
         return;
+    }
+    if (event->button() == Qt::LeftButton && m_pressedLink) {
+        // A click: released on the same link it went down on, without being dragged away.
+        const Link pressed = *m_pressedLink;
+        m_pressedLink.reset();
+        const LinkLayer::Hit hit = m_links.hitTest(event->position());
+        constexpr int kClickSlop = 6;
+        if (hit.link != nullptr && hit.page == m_pressedPage && hit.link->rect == pressed.rect &&
+            hit.link->kind == pressed.kind &&
+            (event->position().toPoint() - m_pressPos).manhattanLength() <= kClickSlop) {
+            emit linkActivated(pressed);
+        }
     }
     QAbstractScrollArea::mouseReleaseEvent(event);
 }
