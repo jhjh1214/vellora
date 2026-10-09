@@ -40,6 +40,34 @@ FetchContent_MakeAvailable(Corrosion)
 
 get_filename_component(VELLORA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
+# What this build is (src/BuildInfo.h.in): the workspace version, the git commit and the date.
+file(READ "${VELLORA_ROOT}/Cargo.toml" VELLORA_CARGO_TOML)
+# At the start of a line: `rust-version = "..."` is in the same table.
+if(VELLORA_CARGO_TOML MATCHES "\\[workspace\\.package\\][^\\[]*[\r\n]version = \"([^\"]+)\"")
+  set(VELLORA_VERSION "${CMAKE_MATCH_1}")
+else()
+  message(FATAL_ERROR "no [workspace.package] version in ${VELLORA_ROOT}/Cargo.toml")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELLORA_ROOT}/Cargo.toml")
+set(VELLORA_COMMIT "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+  execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --short=12 HEAD
+                  WORKING_DIRECTORY "${VELLORA_ROOT}" OUTPUT_VARIABLE VELLORA_GIT_HEAD
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE VELLORA_GIT_RESULT)
+  if(VELLORA_GIT_RESULT EQUAL 0 AND VELLORA_GIT_HEAD)
+    set(VELLORA_COMMIT "${VELLORA_GIT_HEAD}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=no
+                    WORKING_DIRECTORY "${VELLORA_ROOT}" OUTPUT_VARIABLE VELLORA_GIT_STATUS
+                    ERROR_QUIET)
+    if(VELLORA_GIT_STATUS)
+      set(VELLORA_COMMIT "${VELLORA_COMMIT}+dirty")
+    endif()
+  endif()
+endif()
+string(TIMESTAMP VELLORA_BUILD_DATE "%Y-%m-%d" UTC)
+configure_file(src/BuildInfo.h.in "${CMAKE_BINARY_DIR}/generated/BuildInfo.h" @ONLY)
+
 # `--locked`: the app builds exactly the dependencies in Cargo.lock, like CI's cargo jobs.
 corrosion_import_crate(
   MANIFEST_PATH "${VELLORA_ROOT}/Cargo.toml"
@@ -53,8 +81,12 @@ corrosion_set_env_vars(vellora_engine_client "VELLORA_CXXBRIDGE_DIR=${VELLORA_CX
 
 # The shell's own code, as a library so the tests link exactly what the executable links.
 add_library(vellora_shell STATIC
+  src/AboutDialog.cpp
+  src/AboutDialog.h
   src/DocumentTab.cpp
   src/DocumentTab.h
+  src/LicensesDialog.cpp
+  src/LicensesDialog.h
   src/MainWindow.cpp
   src/MainWindow.h
   src/SingleInstance.cpp
@@ -85,7 +117,15 @@ add_library(vellora_shell STATIC
   src/diagnostics/UiWatchdog.h
   src/bridge/EngineSession.cpp
   src/bridge/EngineSession.h)
-target_include_directories(vellora_shell PUBLIC src "${VELLORA_CXXBRIDGE_DIR}/include")
+target_include_directories(vellora_shell PUBLIC src "${VELLORA_CXXBRIDGE_DIR}/include"
+                           "${CMAKE_BINARY_DIR}/generated")
+
+# The licence texts the About dialog shows travel inside the executable: Vellora's own licence and
+# the third-party notices (Rust crates, PDFium, Qt). Generated and checked by `cargo test -p xtask`.
+qt_add_resources(vellora_shell "vellora_licenses"
+  PREFIX "/licenses"
+  BASE "${VELLORA_ROOT}"
+  FILES "${VELLORA_ROOT}/LICENSE" "${VELLORA_ROOT}/THIRD_PARTY_LICENSES")
 target_link_libraries(vellora_shell PUBLIC Qt6::Widgets Qt6::Network Qt6::GuiPrivate vellora_engine_client)
 qt_add_shaders(vellora_shell "vellora_shaders"
   PREFIX "/shaders"

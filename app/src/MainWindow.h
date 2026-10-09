@@ -18,6 +18,7 @@
 #include <QMainWindow>
 #include <QStringList>
 
+class QDialog;
 class QLabel;
 class QMenu;
 class QTabWidget;
@@ -63,6 +64,9 @@ public:
     // File -> Open Recent. Rebuilt every time it is shown; unreadable files are greyed out.
     QMenu* recentMenu() { return m_recentMenu; }
     void refreshRecentMenu();
+
+    // Help -> About Vellora. Opens the dialog without blocking and returns it.
+    QDialog* showAbout();
 
     // What the window asks when a document needs a password (all tabs, present and future).
     void setPasswordProvider(PasswordProvider provider);

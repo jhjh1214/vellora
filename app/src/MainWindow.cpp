@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "AboutDialog.h"
 #include "RepairBar.h"
 
 #include <QAction>
@@ -112,6 +113,9 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     windowMenu->addAction(m_commands.createAction(QStringLiteral("tabs.next"), this));
     windowMenu->addAction(m_commands.createAction(QStringLiteral("tabs.previous"), this));
 
+    auto* helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->addAction(m_commands.createAction(QStringLiteral("help.about"), this));
+
     m_palette = new CommandPalette(&m_commands, this);
 
     connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateChrome(); });
@@ -165,6 +169,7 @@ void MainWindow::registerCommands() {
         [this] { canvas().actualSize(); });
     add("view.fitWidth", tr("Fit Width"), {QKeySequence(Qt::CTRL | Qt::Key_2)},
         [this] { canvas().fitWidth(); });
+    add("help.about", tr("About Vellora"), {}, [this] { showAbout(); });
     add("palette.show", tr("Command Palette…"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)},
         [this] { m_palette->open(); });
 }
@@ -247,6 +252,13 @@ int MainWindow::currentTabIndex() const {
 
 void MainWindow::setCurrentTabIndex(int index) {
     m_tabs->setCurrentIndex(index);
+}
+
+QDialog* MainWindow::showAbout() {
+    auto* dialog = new AboutDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->open();
+    return dialog;
 }
 
 void MainWindow::setPasswordProvider(PasswordProvider provider) {

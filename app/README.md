@@ -14,6 +14,7 @@ app/
 ├─ src/
 │  ├─ main.cpp
 │  ├─ MainWindow.{h,cpp}        # menu bar, tabs, File -> Open / Open Recent, status bar
+│  ├─ AboutDialog.*, LicensesDialog.*   # Help -> About, third-party licenses (embedded THIRD_PARTY_LICENSES)
 │  ├─ DocumentTab.{h,cpp}       # one document: engine session, canvas, repair bar, password prompt
 │  ├─ SingleInstance.{h,cpp}    # a second launch forwards its files to the running instance
 │  ├─ settings/AppSettings.*    # recent files, geometry, per-document view state (QSettings)
