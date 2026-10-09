@@ -29,11 +29,14 @@ class CanvasWidget : public QRhiWidget {
 public:
     // Textures kept on the GPU (1 MiB each); the least recently drawn go first.
     static constexpr int kMaxTextures = 192;
-    // New tiles uploaded per frame, so a burst of finished tiles cannot stall one frame.
+    // New tiles finished (uploaded) per frame, so a burst of finished tiles cannot stall one frame.
     static constexpr int kUploadsPerFrame = 6;
-    // ...and once the uploads of a frame have taken this long, the rest wait for the next frame: a
-    // count does not bound time, and `render()` has 8 ms in all (UiWatchdog::kBudgetMs).
+    // A tile is uploaded in two frames (read, then upload), and a frame does a half only if it is
+    // expected to fit in this long, from what the last ones cost: a count does not bound time, and
+    // `render()` has 8 ms in all (UiWatchdog::kBudgetMs). Every frame does at least one half.
     static constexpr double kUploadBudgetMs = 3.0;
+    // Evicted textures kept for reuse.
+    static constexpr int kMaxSpareTextures = 8;
     // Quads the vertex buffer holds (pages and tiles of one frame).
     static constexpr int kMaxQuads = 2048;
 
@@ -83,11 +86,24 @@ private:
     bool m_whiteUploaded = false;
 
     QHash<TileId, GpuTile> m_textures;
+    // Evicted textures kept to be written again: creating a texture costs a driver call that is
+    // sometimes slow, and a frame has 8 ms.
+    QVector<GpuTile> m_spare;
     QByteArray m_scratch;
     quint64 m_frames = 0;
     double m_lastRenderMs = 0.0;
     double m_slowestRenderMs = 0.0;
     double m_lastUploadMs = 0.0;
+    // What the two halves of a tile upload have cost lately (moving averages, ms): reading the
+    // pixels from the shared region, and creating the texture and uploading them. A frame does a
+    // half only if it is expected to fit the budget, because a budget checked after the fact is
+    // overshot by a whole half.
+    double m_readEstimateMs = 1.5;
+    double m_gpuEstimateMs = 2.0;
+    // The tile read in the last frame, waiting to be uploaded in this one (`m_scratch` has its
+    // pixels).
+    bool m_hasStaged = false;
+    TileId m_stagedId;
 };
 
 } // namespace vellora
