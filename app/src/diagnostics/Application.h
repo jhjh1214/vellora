@@ -1,6 +1,7 @@
 // The application object, which times how long delivering each event takes (measurement (a) of
 // UiWatchdog). `notify` is the one place every event passes through on its way to a receiver:
-// handlers, timers and queued slots included.
+// handlers, timers and queued slots included. The event dispatcher's own pump is not timed; what it
+// delivers is, event by event.
 #pragma once
 
 #include <QApplication>

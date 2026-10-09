@@ -9,6 +9,9 @@
 //! | Linux | `RLIMIT_AS` (address space) | `RLIMIT_CPU` | not enforced yet | engine exits at end of input |
 //! | macOS | **not enforced** (the kernel ignores `RLIMIT_AS` and `RLIMIT_DATA`) | `RLIMIT_CPU` | not enforced yet | engine exits at end of input |
 //!
+//! On Linux and macOS the engine also starts with `RLIMIT_CORE = 0`: a core file would hold the
+//! document's content, and writing one delays the exit of a process that aborts on a deadline.
+//!
 //! The unenforced cells are listed in the security model's tracker; the per-OS sandbox of the
 //! later phases is what closes them. On Windows the job is assigned to the engine while it is still
 //! suspended (`sandbox.rs`, ADR-0017), so no instruction of it runs outside the job.
@@ -111,6 +114,10 @@ mod os {
     pub(super) fn prepare(command: &mut Command, limits: ResourceLimits) {
         // Built outside the `unsafe` block below: its own `unsafe` is the `setrlimit` call.
         let apply = move || -> io::Result<()> {
+            // No core dump, ever: it would write what the engine holds (the document's pixels and
+            // text) to disk, and on a host with a crash-collecting `core_pattern` the process
+            // lingers for seconds before it is gone, which is not what a hard deadline means.
+            set_limit!(libc::RLIMIT_CORE, 0_u64)?;
             #[cfg(not(target_os = "macos"))]
             if let Some(bytes) = limits.memory_bytes {
                 set_limit!(libc::RLIMIT_AS, bytes)?;
@@ -277,6 +284,14 @@ mod tests {
         let output = command.output().unwrap();
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_engine_never_dumps_core() {
+        // Whatever limits are asked for, including none: a core file would hold the document.
+        assert_eq!(ulimit("-c", ResourceLimits::default()), "0");
+        assert_eq!(ulimit("-c", ResourceLimits::for_mapped(1 << 20)), "0");
     }
 
     #[cfg(unix)]
