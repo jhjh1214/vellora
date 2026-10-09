@@ -35,9 +35,8 @@ use std::ptr;
 use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_INVALID_PARAMETER, HANDLE, HANDLE_FLAG_INHERIT,
-    INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation, TRUE, WAIT_FAILED, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    ERROR_INVALID_PARAMETER, HANDLE, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, TRUE,
+    WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, SE_FILE_OBJECT, SetEntriesInAclW,
@@ -50,16 +49,12 @@ use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, FreeSid, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     SECURITY_CAPABILITIES,
 };
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, GetFileType, OPEN_EXISTING,
-};
-use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
+use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
     PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
     UpdateProcThreadAttribute, WaitForSingleObject,
@@ -179,6 +174,7 @@ pub(crate) struct Started {
     pub(crate) child: Child,
     pub(crate) stdin: File,
     pub(crate) stdout: File,
+    pub(crate) stderr: File,
     pub(crate) guard: Guard,
 }
 
@@ -200,12 +196,15 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
     let (stdout_parent, stdout_child) = pipe().map_err(at("creating the pipes"))?;
     keep_private(&stdin_parent)?;
     keep_private(&stdout_parent)?;
-    let stderr = inheritable_stderr().map_err(at("preparing standard error"))?;
+    // The engine's log lines come to this process too: the container cannot write files, and its
+    // output must not depend on where the UI's own standard error happens to point.
+    let (stderr_parent, stderr_child) = pipe().map_err(at("creating the pipes"))?;
+    keep_private(&stderr_parent)?;
 
     let mut handles: Vec<HANDLE> = vec![
         stdin_child.as_raw_handle(),
         stdout_child.as_raw_handle(),
-        stderr.as_raw_handle(),
+        stderr_child.as_raw_handle(),
     ];
     handles.extend_from_slice(spec.inherit);
 
@@ -217,7 +216,7 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
         [
             stdin_child.as_raw_handle(),
             stdout_child.as_raw_handle(),
-            stderr.as_raw_handle(),
+            stderr_child.as_raw_handle(),
         ],
     )
     .map_err(at("creating the process"))?;
@@ -247,6 +246,7 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
         child,
         stdin: File::from(stdin_parent),
         stdout: File::from(stdout_parent),
+        stderr: File::from(stderr_parent),
         guard,
     })
 }
@@ -346,60 +346,6 @@ fn keep_private(handle: &OwnedHandle) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
-}
-
-/// The UI's standard error as an inheritable copy, or the null device when there is none or it is
-/// not a file or a pipe (a console cannot be handed to a container).
-fn inheritable_stderr() -> io::Result<OwnedHandle> {
-    // SAFETY: `GetStdHandle` only reads the process's standard handle table.
-    let own = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-    // SAFETY: `GetFileType` accepts any handle value and reports "unknown" for an invalid one.
-    // 1 = disk file, 3 = pipe.
-    let usable = !own.is_null()
-        && own != INVALID_HANDLE_VALUE
-        && matches!(unsafe { GetFileType(own) }, 1 | 3);
-    if usable {
-        let mut copy: HANDLE = ptr::null_mut();
-        // SAFETY: duplicates a handle of this process into this process, inheritable.
-        let duplicated = unsafe {
-            DuplicateHandle(
-                GetCurrentProcess(),
-                own,
-                GetCurrentProcess(),
-                &raw mut copy,
-                0,
-                TRUE,
-                DUPLICATE_SAME_ACCESS,
-            )
-        };
-        if duplicated != 0 {
-            // SAFETY: a fresh handle, owned from here on.
-            return Ok(unsafe { OwnedHandle::from_raw_handle(copy) });
-        }
-    }
-    let nul = wide(OsStr::new("NUL"))?;
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: size_u32::<SECURITY_ATTRIBUTES>(),
-        lpSecurityDescriptor: ptr::null_mut(),
-        bInheritHandle: TRUE,
-    };
-    // SAFETY: `nul` is NUL-terminated and `attributes` outlives the call.
-    let handle = unsafe {
-        CreateFileW(
-            nul.as_ptr(),
-            0x4000_0000, // GENERIC_WRITE
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            &raw const attributes,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: a fresh handle, owned from here on.
-    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 /// `CreateProcessW` with the container token and the handle list, suspended. Returns the process

@@ -1097,6 +1097,8 @@ dependencies = [
  "libc",
  "tempfile",
  "thiserror",
+ "tracing",
+ "tracing-subscriber",
  "vellora-engine",
  "vellora-ipc",
  "vellora-shm",

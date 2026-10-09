@@ -67,6 +67,12 @@ public:
 
     // Help -> About Vellora. Opens the dialog without blocking and returns it.
     QDialog* showAbout();
+    // Help -> Open Log Folder: shows the folder of the application log in the file manager (the
+    // folder is created if it does not exist yet). False if the file manager could not be asked.
+    bool openLogFolder();
+    // What shows a folder; the default asks the desktop (tests replace it).
+    using FolderOpener = std::function<bool(const QString& folder)>;
+    void setFolderOpener(FolderOpener opener) { m_folderOpener = std::move(opener); }
 
     // What the window asks when a document needs a password (all tabs, present and future).
     void setPasswordProvider(PasswordProvider provider);
@@ -109,6 +115,7 @@ private:
     QLabel* m_pageStatus = nullptr;
     QLabel* m_zoomStatus = nullptr;
     PasswordProvider m_passwordProvider;
+    FolderOpener m_folderOpener;
     QStringList m_closedTabs; // most recent last
     QList<QAction*> m_recentFixedActions;
 };

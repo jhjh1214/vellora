@@ -113,6 +113,8 @@ add_library(vellora_shell STATIC
   src/diagnostics/Application.h
   src/diagnostics/DiagnosticsScript.cpp
   src/diagnostics/DiagnosticsScript.h
+  src/diagnostics/Logging.cpp
+  src/diagnostics/Logging.h
   src/diagnostics/UiWatchdog.cpp
   src/diagnostics/UiWatchdog.h
   src/bridge/EngineSession.cpp

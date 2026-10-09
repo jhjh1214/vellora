@@ -25,11 +25,13 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use tracing::Level;
 use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId};
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
 use crate::client::{Client, ClientConfig, ClientError, Event, Stage, TILE_PIXELS, TileLookup};
 use crate::document::Change;
+use crate::logging::{self, LogConfig, LogError, LogGuard};
 
 /// Environment variable that overrides where [`open`] looks for `vellora-engine`. For development
 /// and tests; an installed shell finds the engine next to its own executable.
@@ -96,6 +98,15 @@ mod ffi {
         WrongPassword,
     }
 
+    /// How serious a line from the Qt side is.
+    #[derive(Debug)]
+    enum LogLevel {
+        Debug,
+        Info,
+        Warning,
+        Error,
+    }
+
     /// How urgently a tile is wanted.
     #[derive(Debug)]
     enum TilePriority {
@@ -157,6 +168,27 @@ mod ffi {
     }
 
     extern "Rust" {
+        /// The running log (task 9b); `stop` writes what is queued and ends it.
+        type LogHandle;
+
+        /// The folder the log goes to unless told otherwise (`VELLORA_LOG_DIR` overrides it).
+        fn default_log_directory() -> String;
+
+        /// Starts the application log in `directory` (the default folder if empty): rotating
+        /// files that also receive the engine's log lines. Throws if it is already started or
+        /// the folder cannot be used. The level is `info`, or what `VELLORA_LOG` says.
+        fn start_logging(directory: &str) -> Result<Box<LogHandle>>;
+
+        /// Waits until everything logged so far is in the files.
+        fn flush(self: &LogHandle);
+
+        /// Writes what is queued and stops logging. Safe to call twice.
+        fn stop(self: &mut LogHandle);
+
+        /// A line from `qDebug`, `qWarning` and the like. Never call this with document content
+        /// or a password.
+        fn log_message(level: LogLevel, message: &str);
+
         /// An open document and the engine process rendering it.
         type EngineClient;
 
@@ -227,9 +259,71 @@ mod ffi {
 }
 
 pub use ffi::{
-    EngineEvent, EventKind, FailureKind, PageExtent, RepairNote, TilePriority, TileState,
+    EngineEvent, EventKind, FailureKind, LogLevel, PageExtent, RepairNote, TilePriority, TileState,
     TileTicket, TimeoutStage,
 };
+
+/// The running log behind the bridge's opaque handle. `None` after `stop`.
+#[derive(Debug)]
+pub struct LogHandle {
+    guard: Option<LogGuard>,
+}
+
+/// The default log folder as text (the bridge's `default_log_directory`).
+#[must_use]
+pub fn default_log_directory() -> String {
+    logging::default_log_dir().to_string_lossy().into_owned()
+}
+
+/// Starts the application log; see the bridge's `start_logging`.
+///
+/// # Errors
+///
+/// [`LogError`], which the bridge turns into an exception.
+pub fn start_logging(directory: &str) -> Result<Box<LogHandle>, LogError> {
+    let dir = if directory.is_empty() {
+        logging::default_log_dir()
+    } else {
+        PathBuf::from(directory)
+    };
+    let mut config = LogConfig::new(dir);
+    if let Some(level) = env::var("VELLORA_LOG")
+        .ok()
+        .and_then(|text| text.parse::<Level>().ok())
+    {
+        config.level = level;
+    }
+    Ok(Box::new(LogHandle {
+        guard: Some(logging::init(&config)?),
+    }))
+}
+
+impl LogHandle {
+    /// Waits until everything logged so far is in the files.
+    pub fn flush(&self) {
+        if let Some(guard) = &self.guard {
+            guard.flush();
+        }
+    }
+
+    /// Writes what is queued and stops logging.
+    pub fn stop(&mut self) {
+        self.guard = None;
+    }
+}
+
+/// A line from the Qt side, as a log event (the bridge's `log_message`).
+pub fn log_message(level: LogLevel, message: &str) {
+    logging::log_qt(
+        match level {
+            LogLevel::Error => Level::ERROR,
+            LogLevel::Warning => Level::WARN,
+            LogLevel::Info => Level::INFO,
+            _ => Level::DEBUG,
+        },
+        message,
+    );
+}
 
 /// The client behind the bridge's opaque handle. `None` after `close`.
 #[derive(Debug)]

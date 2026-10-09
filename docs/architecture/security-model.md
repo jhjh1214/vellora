@@ -36,7 +36,7 @@
 
 - **No telemetry.** No automatic crash upload. The update check is opt-in.
 - Crash dumps are written locally. The user decides whether to attach them to an issue.
-- Logs never contain document text at `info` level or above.
+- Logs never contain document text at `info` level or above, and never a password. They are rotating files in the user's own log folder, at most 10 MiB in all (Help → Open Log Folder). The engine cannot write files; the UI process reads its standard error and treats it as untrusted data (cut, sanitised, size-capped).
 
 ## Sandbox status tracker
 

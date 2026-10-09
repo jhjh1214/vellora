@@ -2,9 +2,12 @@
 
 #include "AboutDialog.h"
 #include "RepairBar.h"
+#include "diagnostics/Logging.h"
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
@@ -114,6 +117,7 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     windowMenu->addAction(m_commands.createAction(QStringLiteral("tabs.previous"), this));
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->addAction(m_commands.createAction(QStringLiteral("help.openLogFolder"), this));
     helpMenu->addAction(m_commands.createAction(QStringLiteral("help.about"), this));
 
     m_palette = new CommandPalette(&m_commands, this);
@@ -169,6 +173,7 @@ void MainWindow::registerCommands() {
         [this] { canvas().actualSize(); });
     add("view.fitWidth", tr("Fit Width"), {QKeySequence(Qt::CTRL | Qt::Key_2)},
         [this] { canvas().fitWidth(); });
+    add("help.openLogFolder", tr("Open Log Folder"), {}, [this] { openLogFolder(); });
     add("help.about", tr("About Vellora"), {}, [this] { showAbout(); });
     add("palette.show", tr("Command Palette…"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)},
         [this] { m_palette->open(); });
@@ -259,6 +264,16 @@ QDialog* MainWindow::showAbout() {
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->open();
     return dialog;
+}
+
+bool MainWindow::openLogFolder() {
+    const QString folder = Logging::directory();
+    // Exists even when logging could not start, so that there is something to show.
+    QDir().mkpath(folder);
+    if (m_folderOpener) {
+        return m_folderOpener(folder);
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
 }
 
 void MainWindow::setPasswordProvider(PasswordProvider provider) {

@@ -77,6 +77,7 @@ use vellora_shm::{SlotGeometry, TileRegion};
 use crate::cache::{DEFAULT_BUDGET_BYTES, ReserveError, TileCache, TileKey};
 use crate::document::{self, Change, Seen};
 use crate::limits::ResourceLimits;
+use crate::logging::LineRing;
 use crate::process::{Crash, EngineProcess, SpawnConfig, SpawnError};
 
 /// Engines restarted after crashes in a row, with no tile delivered in between, before the client
@@ -96,6 +97,9 @@ pub const DEFAULT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default time from the engine's `Hello` to its answer to `Open`.
 pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The environment variable that sets the engine's log level (`error` ... `trace`).
+const LOG_LEVEL_ENV: &str = "VELLORA_LOG";
 
 /// How many times the engine's hard tile deadline the client waits for any answer before it kills
 /// an engine that has requests in flight.
@@ -517,6 +521,8 @@ struct Shared {
     region: TileRegion,
     state: Mutex<State>,
     sink: Mutex<Sink>,
+    /// The last lines the engines printed, for a crash report.
+    engine_log: Arc<LineRing>,
     /// Signals events to [`Client::wait_events`].
     wake: Condvar,
     /// Signals the watchdog that a deadline may have changed.
@@ -596,6 +602,7 @@ impl Client {
                 seen,
             }),
             sink: Mutex::new(Sink(None)),
+            engine_log: Arc::new(LineRing::new(crate::capture::TAIL_LINES)),
             wake: Condvar::new(),
             watch: Condvar::new(),
             config,
@@ -895,6 +902,13 @@ impl Client {
             .is_some_and(|o| !o.repairs.is_empty())
     }
 
+    /// The last 200 lines the engines of this client printed (oldest first, each marked with the
+    /// engine's process id), for a crash report. Their text is the engine's: untrusted data.
+    #[must_use]
+    pub fn engine_log_tail(&self) -> Vec<String> {
+        self.shared.engine_log.tail()
+    }
+
     /// The operating-system id of the current engine process, if one is running.
     #[must_use]
     pub fn engine_id(&self) -> Option<u32> {
@@ -953,6 +967,13 @@ fn launch(shared: &Shared) -> Result<Launched, ClientError> {
     spawn.max_document_bytes = config.max_document_bytes;
     spawn.deadlines = config.deadlines;
     spawn.env.clone_from(&config.env);
+    // The engine logs at `warn` unless told otherwise; the log files want its `info` lines (a
+    // document was opened, the session ended) unless the user chose a level.
+    let level_chosen = config.env.iter().any(|(name, _)| name == LOG_LEVEL_ENV)
+        || std::env::var_os(LOG_LEVEL_ENV).is_some();
+    if !level_chosen {
+        spawn.env.push((LOG_LEVEL_ENV.into(), "info".into()));
+    }
     if let Some(limits) = config.limits {
         spawn.limits = limits;
     }
@@ -961,6 +982,11 @@ fn launch(shared: &Shared) -> Result<Launched, ClientError> {
         // Both pipes were requested at spawn; losing one means there is nothing to talk to.
         return Err(ClientError::EngineUnavailable);
     };
+    // The engine's log lines: someone must read them, or its next log line would block.
+    if let Some(stderr) = process.take_stderr() {
+        crate::capture::spawn_reader(process.id(), stderr, Arc::clone(&shared.engine_log));
+    }
+    tracing::info!(pid = process.id(), "engine started");
     let mut writer = BufWriter::new(stdin);
     // The engine says `Hello` first and reads ours afterwards, but a pipe holds both of our
     // messages, so there is no need to wait for its `Hello` before sending `Open`.
@@ -1111,6 +1137,7 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
         process.kill();
     }
     let crash = process.crash(CRASH_GRACE);
+    tracing::warn!(?crash, "engine ended without being asked");
     drop(process);
     // Dropped only now: a write blocked on the dying engine's pipe fails when the process is gone.
     shared.sink().0 = None;

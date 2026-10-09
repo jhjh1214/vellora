@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- Logs: the application writes rotating log files (at most 10 MiB) to the platform's log folder, including the sandboxed engine's log lines, which the UI process now reads from the engine's standard error. Help → Open Log Folder shows the folder; `VELLORA_LOG_DIR` and `VELLORA_LOG` change where and how much.
 - Help → About Vellora: version, commit and build date, the MPL-2.0 license, the Qt LGPL notice with how to replace Qt, and a viewer for the licenses of every bundled component (Rust crates, PDFium and the libraries inside it, Qt). `cargo test` fails when `THIRD_PARTY_LICENSES` lacks a crate that is linked.
 - Tabs: every document opens in its own tab with its own engine process (Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+W, Ctrl+Shift+T to reopen). Files can be given on the command line, dropped on the window or chosen from File → Open Recent (15 files, unreadable ones greyed out); a second launch hands its files to the running window. The window size and, for each file, the page and zoom it was left at are remembered.
 - Encrypted documents: the engine opens them with a password (user or owner, any revision of the Standard Security Handler). A document that needs one is refused with a typed `PasswordRequired`, a wrong password with `WrongPassword`; the shell asks in a modal prompt with three attempts and never logs or stores the password. Revision 6 passwords are SASLprep-normalised, older ones are also tried as Latin-1 (protocol v3).
