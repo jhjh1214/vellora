@@ -258,6 +258,13 @@ void OutlineView::onItemActivated(QTreeWidgetItem* item) {
         return;
     }
     if (const std::optional<Destination> destination = destinationOf(item)) {
+        // The reader has chosen where to be: a follow asked for the page they were on (and not
+        // answered yet) must not move the selection away from what they clicked.
+        if (m_pathRequest != 0) {
+            m_session->cancel(m_pathRequest);
+            m_pathRequest = 0;
+        }
+        m_path.clear();
         emit destinationActivated(*destination);
     }
 }

@@ -108,6 +108,9 @@ pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 /// The least time between two engine incident reports.
 const INCIDENT_SPACING: Duration = Duration::from_secs(10);
 
+/// How long the line of a panic the engine caught is waited for before the report is written.
+const PANIC_LINE_PATIENCE: Duration = Duration::from_secs(2);
+
 /// How long a crashed engine's last log lines are waited for before the report is written.
 const LOG_DRAIN_PATIENCE: Duration = Duration::from_millis(500);
 
@@ -1562,13 +1565,24 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
                 }
                 drop(state);
                 if let Some(message) = incident {
-                    // The engine prints a panic's message just before it answers; give the log
-                    // reader a moment to take it, without holding up this thread.
+                    // The engine prints a panic's message just before it answers, on a stream of
+                    // its own, so the line may reach the log tail after the answer. Wait for it
+                    // (a failure that is not a panic never prints one, so not for long), without
+                    // holding up this thread.
                     let shared = Arc::clone(shared);
                     let _ = thread::Builder::new()
                         .name("vellora-incident".into())
                         .spawn(move || {
-                            thread::sleep(Duration::from_millis(150));
+                            let give_up = Instant::now() + PANIC_LINE_PATIENCE;
+                            while Instant::now() < give_up
+                                && !shared
+                                    .engine_log
+                                    .tail()
+                                    .iter()
+                                    .any(|line| line.contains("panicked at"))
+                            {
+                                thread::sleep(Duration::from_millis(10));
+                            }
                             shared
                                 .record_incident("the engine reported an internal error", &message);
                         });
