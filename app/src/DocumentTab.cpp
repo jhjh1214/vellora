@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace vellora {
 
@@ -31,6 +32,18 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     setFocusProxy(m_canvas);
 
     m_zoomStatus = tr("%1%").arg(qRound(m_canvas->controller()->zoom() * 100.0));
+    // A new tab arranges its pages the way the user last chose.
+    if (m_settings != nullptr) {
+        applyLayout(m_settings->lastLayout());
+    }
+    connect(m_canvas->controller(), &CanvasController::viewModeChanged, this,
+            [this](CanvasController::ViewMode) {
+                // A layout restored with a document is not the user's new choice.
+                if (m_settings != nullptr && !m_applyingLayout) {
+                    m_settings->setLastLayout(currentLayout());
+                }
+                emit viewModeChanged();
+            });
 
     connect(&m_session, &EngineSession::opened, this, &DocumentTab::onOpened);
     connect(&m_session, &EngineSession::requestFailed, this, &DocumentTab::onRequestFailed);
@@ -86,13 +99,27 @@ bool DocumentTab::open(const QString& path) {
     return true;
 }
 
+AppSettings::Layout DocumentTab::currentLayout() const {
+    const CanvasController::ViewMode mode = m_canvas->controller()->viewMode();
+    return {mode.continuous, static_cast<int>(mode.spread), mode.rotation};
+}
+
+void DocumentTab::applyLayout(const AppSettings::Layout& layout) {
+    m_applyingLayout = true;
+    m_canvas->controller()->setViewMode(
+        {layout.continuous, static_cast<PageLayout::Spread>(std::clamp(layout.spread, 0, 2)),
+         layout.rotation});
+    m_applyingLayout = false;
+}
+
 void DocumentTab::saveViewState() {
     if (!m_settings || !m_opened || m_viewKey.isEmpty()) {
         return;
     }
     const CanvasController* controller = m_canvas->controller();
     const PageLayout::Anchor top = controller->topAnchor();
-    m_settings->setViewState(m_viewKey, {top.page, top.offsetPoints, controller->zoom()});
+    m_settings->setViewState(m_viewKey,
+                             {top.page, top.offsetPoints, controller->zoom(), currentLayout()});
 }
 
 void DocumentTab::onOpened(quint32 pageCount, const QStringList& repairs) {
@@ -104,6 +131,7 @@ void DocumentTab::onOpened(quint32 pageCount, const QStringList& repairs) {
         m_opened = true;
         // Only the first answer: after a restart the view is where the user left it.
         if (m_savedView) {
+            applyLayout(m_savedView->layout);
             m_canvas->controller()->restoreView({m_savedView->page, m_savedView->offsetPoints},
                                                 m_savedView->zoom);
             m_savedView.reset();

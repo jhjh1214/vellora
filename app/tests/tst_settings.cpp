@@ -184,6 +184,50 @@ private slots:
         QVERIFY(!writable.viewState(QStringLiteral("inf")).has_value());
     }
 
+    void aViewStateKeepsHowThePagesWereArranged() {
+        QTemporaryDir dir;
+        QSettings backing(dir.filePath(QStringLiteral("s.ini")), QSettings::IniFormat);
+        AppSettings settings(&backing);
+        settings.setViewState(QStringLiteral("k"), {4, 12.5, 2.0, {false, 2, 3}});
+        const auto state = settings.viewState(QStringLiteral("k"));
+        QVERIFY(state.has_value());
+        QCOMPARE(state->layout, (AppSettings::Layout{false, 2, 3}));
+        QCOMPARE(state->page, 4U);
+    }
+
+    void stateWrittenBeforeViewModesOpensInTheUsualArrangement() {
+        QTemporaryDir dir;
+        QSettings backing(dir.filePath(QStringLiteral("s.ini")), QSettings::IniFormat);
+        backing.beginWriteArray(QStringLiteral("views"));
+        backing.setArrayIndex(0);
+        backing.setValue(QStringLiteral("key"), QStringLiteral("old"));
+        backing.setValue(QStringLiteral("page"), 3);
+        backing.setValue(QStringLiteral("offset"), 1.0);
+        backing.setValue(QStringLiteral("zoom"), 1.5);
+        backing.endArray();
+        const AppSettings settings(&backing);
+        const auto state = settings.viewState(QStringLiteral("old"));
+        QVERIFY(state.has_value());
+        QCOMPARE(state->layout, (AppSettings::Layout{true, 0, 0}));
+        QCOMPARE(state->zoom, 1.5);
+    }
+
+    void theLastArrangementIsKeptAndBounded() {
+        QTemporaryDir dir;
+        QSettings backing(dir.filePath(QStringLiteral("s.ini")), QSettings::IniFormat);
+        AppSettings settings(&backing);
+        QCOMPARE(settings.lastLayout(), (AppSettings::Layout{true, 0, 0}));
+        settings.setLastLayout({false, 1, 2});
+        QCOMPARE(settings.lastLayout(), (AppSettings::Layout{false, 1, 2}));
+        // Whatever is in the file is clamped to what exists.
+        backing.setValue(QStringLiteral("view/layout"), QStringList{"0", "99", "-3"});
+        QCOMPARE(settings.lastLayout(), (AppSettings::Layout{false, 2, 1}));
+        backing.setValue(QStringLiteral("view/layout"), QStringList{"garbage"});
+        QCOMPARE(settings.lastLayout(), (AppSettings::Layout{true, 0, 0}));
+        AppSettings nothing;
+        nothing.setLastLayout({false, 2, 2});
+        QCOMPARE(nothing.lastLayout(), (AppSettings::Layout{true, 0, 0}));
+    }
     void pathsAreResolvedAgainstTheDirectoryTheCommandRanIn() {
         QTemporaryDir dir;
         const QStringList resolved = vellora::resolvePaths(

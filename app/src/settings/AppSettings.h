@@ -22,12 +22,23 @@ public:
     static constexpr int kMaxRecentFiles = 15;
     static constexpr int kMaxViewStates = 500;
 
-    // Where a document was left: the page at the top of the window, how far into it (in points)
-    // and the zoom. The view mode joins them when there are view modes (M1 task 10).
+    // How the pages are arranged: continuous or a row at a time, how many to a row (0 one, 1 two,
+    // 2 two with a cover) and the view turned in quarter turns. Plain numbers, so that the settings
+    // do not depend on the canvas.
+    struct Layout {
+        bool continuous = true;
+        int spread = 0;
+        int rotation = 0;
+        friend bool operator==(const Layout&, const Layout&) = default;
+    };
+
+    // Where a document was left: the page at the top of the window, how far into it (in points),
+    // the zoom and how the pages were arranged.
     struct ViewState {
         quint32 page = 0;
         double offsetPoints = 0.0;
         double zoom = 1.0;
+        Layout layout;
     };
 
     // Not owned; may be null.
@@ -38,6 +49,10 @@ public:
 
     QString lastDirectory() const;
     void setLastDirectory(const QString& directory);
+
+    // The arrangement last chosen, for documents that have no saved state of their own.
+    Layout lastLayout() const;
+    void setLastLayout(const Layout& layout);
 
     // Crash reports modified before this have been shown to the user (null: none yet).
     QDateTime crashReportsSeenUntil() const;

@@ -71,20 +71,23 @@ private slots:
 
         // Every menu entry is the action of a registered command: same title, same shortcuts.
         // The Open Recent submenu holds recent files, which are not commands, and its two fixed
-        // entries, which are; the files come from the settings and there are none here.
+        // entries, which are; the files come from the settings and there are none here. A
+        // submenu that only groups entries (Page Layout, Zoom) is not a command either.
         int entries = 0;
         const std::function<void(const QMenu*)> check = [&](const QMenu* menu) {
             for (const QAction* entry : menu->actions()) {
                 if (entry->isSeparator()) {
                     continue;
                 }
-                ++entries;
                 bool found = false;
                 for (const Command& command : registry.commands()) {
                     found = found || (command.title == entry->text() &&
                                       command.shortcuts == entry->shortcuts());
                 }
-                QVERIFY2(found, qPrintable(entry->text()));
+                if (entry->menu() == nullptr || found) {
+                    QVERIFY2(found, qPrintable(entry->text()));
+                    ++entries;
+                }
                 if (entry->menu() != nullptr) {
                     if (entry->menu() == window.recentMenu()) {
                         window.refreshRecentMenu();
@@ -124,8 +127,11 @@ private slots:
         auto* search = palette.findChild<QLineEdit*>();
         QVERIFY(search != nullptr);
         QTest::keyClicks(search, QStringLiteral("zoom"));
-        QCOMPARE(palette.visibleCommandIds(),
+        // The zoom commands, presets included, in registration order.
+        QCOMPARE(palette.visibleCommandIds().mid(0, 2),
                  (QStringList{QStringLiteral("view.zoomIn"), QStringLiteral("view.zoomOut")}));
+        QVERIFY(palette.visibleCommandIds().contains(QStringLiteral("view.zoom.6400")));
+        QVERIFY(palette.visibleCommandIds().contains(QStringLiteral("view.zoomToSelection")));
         // Words may come in any order and any case.
         search->setText(QStringLiteral("OUT zoom"));
         QCOMPARE(palette.visibleCommandIds(), QStringList{QStringLiteral("view.zoomOut")});
@@ -134,16 +140,19 @@ private slots:
         QVERIFY(!palette.runCurrent());
 
         // Up and Down choose, Return runs the choice and closes the palette.
-        search->setText(QStringLiteral("zoom"));
-        QCOMPARE(palette.currentCommandId(), QStringLiteral("view.zoomIn"));
+        search->setText(QStringLiteral("fit"));
+        QCOMPARE(palette.visibleCommandIds(),
+                 (QStringList{QStringLiteral("view.fitWidth"), QStringLiteral("view.fitPage")}));
+        QCOMPARE(palette.currentCommandId(), QStringLiteral("view.fitWidth"));
         QTest::keyClick(search, Qt::Key_Down);
-        QCOMPARE(palette.currentCommandId(), QStringLiteral("view.zoomOut"));
+        QCOMPARE(palette.currentCommandId(), QStringLiteral("view.fitPage"));
         QTest::keyClick(search, Qt::Key_Down);
-        QCOMPARE(palette.currentCommandId(), QStringLiteral("view.zoomIn")); // wraps
-        const double before = window.canvas().controller()->zoom();
+        QCOMPARE(palette.currentCommandId(), QStringLiteral("view.fitWidth")); // wraps
+        QTest::keyClick(search, Qt::Key_Down);
         QTest::keyClick(search, Qt::Key_Return);
         QVERIFY(!palette.isVisible());
-        QVERIFY(window.canvas().controller()->zoom() > before);
+        QCOMPARE(window.canvas().controller()->zoomMode(),
+                 vellora::CanvasController::ZoomMode::FitPage);
     }
 
     void thePaletteOpensFromItsOwnCommandAndClosesOnEscape() {

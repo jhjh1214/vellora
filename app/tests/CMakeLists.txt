@@ -1,5 +1,11 @@
 # Qt Test suites. They run the real engine executable, so they need PDFium (`cargo xtask pdfium
 # fetch`) and fail, never skip, without it.
+# Every Qt Test executable writes its report to a file in `test-logs/` as well. On Windows its
+# console output does not reach CTest, so without the file a failure would say only "Failed"; CI
+# prints these files when a step fails.
+set(VELLORA_TEST_LOG_DIR "${CMAKE_BINARY_DIR}/test-logs")
+file(MAKE_DIRECTORY "${VELLORA_TEST_LOG_DIR}")
+
 function(vellora_add_test name source)
   qt_add_executable(${name} ${source})
   target_link_libraries(${name} PRIVATE vellora_shell Qt6::Test)
@@ -8,7 +14,7 @@ function(vellora_add_test name source)
     # One page, user password `user-pw` (made by crates/cos/tests/fixtures/encryption/generate.py).
     VELLORA_PROTECTED_PDF="${VELLORA_ROOT}/crates/cos/tests/fixtures/encryption/r6-aes-256-user-password.pdf")
   vellora_stage_runtime(${name})
-  add_test(NAME ${name} COMMAND ${name})
+  add_test(NAME ${name} COMMAND ${name} -o "${VELLORA_TEST_LOG_DIR}/${name}.log,txt")
   # QTEST_FUNCTION_TIMEOUT makes Qt name the test function that hangs, before CTest's timeout kills
   # the whole executable without saying which one it was.
   set_tests_properties(${name} PROPERTIES
@@ -17,6 +23,7 @@ endfunction()
 
 vellora_add_test(tst_engine_session tst_engine_session.cpp)
 vellora_add_test(tst_main_window tst_main_window.cpp)
+vellora_add_test(tst_view_modes tst_view_modes.cpp)
 vellora_add_test(tst_tabs tst_tabs.cpp)
 vellora_add_test(tst_about tst_about.cpp)
 vellora_add_test(tst_logging tst_logging.cpp)
@@ -58,13 +65,15 @@ if(UNIX AND NOT APPLE)
   find_program(VELLORA_XVFB_RUN xvfb-run)
   if(VELLORA_XVFB_RUN)
     add_test(NAME tst_canvas_render
-             COMMAND ${VELLORA_XVFB_RUN} -a -s "-screen 0 1280x1024x24" $<TARGET_FILE:tst_canvas_render>)
+             COMMAND ${VELLORA_XVFB_RUN} -a -s "-screen 0 1280x1024x24" $<TARGET_FILE:tst_canvas_render>
+                     -o "${VELLORA_TEST_LOG_DIR}/tst_canvas_render.log,txt")
     set_tests_properties(tst_canvas_render PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb;QTEST_FUNCTION_TIMEOUT=360000")
   else()
     message(WARNING "xvfb-run not found: tst_canvas_render (GPU drawing) is not registered")
   endif()
 else()
-  add_test(NAME tst_canvas_render COMMAND tst_canvas_render)
+  add_test(NAME tst_canvas_render
+           COMMAND tst_canvas_render -o "${VELLORA_TEST_LOG_DIR}/tst_canvas_render.log,txt")
   if(APPLE AND NOT "$ENV{VELLORA_TEST_GPU}" STREQUAL "1")
     # On the macOS CI runners (a paravirtualised Metal GPU) this test is not stuck but extremely
     # slow, so it runs into its timeouts, and its frame-time check could not pass. Evidence in
