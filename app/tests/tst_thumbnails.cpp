@@ -1,12 +1,9 @@
-// The thumbnail sidebar with a real engine and no GPU: what it asks for, what it draws, how it
-// follows and drives the canvas, and that a fling through 10,000 pages stays within the frame
-// budget.
+// The thumbnail sidebar with a real engine and no GPU: what it asks for, what it draws, and how it
+// follows and drives the canvas. Its frame-time check is `tst_thumbnails_frame_time`.
 #include "MainWindow.h"
 #include "SyntheticPdf.h"
 #include "VelloraTestMain.h"
 #include "canvas/CanvasController.h"
-#include "diagnostics/Application.h"
-#include "diagnostics/UiWatchdog.h"
 #include "settings/AppSettings.h"
 #include "sidebar/ThumbnailSidebar.h"
 
@@ -17,7 +14,6 @@
 #include <QSlider>
 #include <QTemporaryDir>
 #include <QTest>
-#include <QTimer>
 
 using vellora::CanvasController;
 using vellora::EngineSession;
@@ -326,65 +322,27 @@ private slots:
         }
     }
 
-    // The frame-time check (M1 task 11): a fling through a 10,000-page document's thumbnails, with
-    // the real window and the real engine. As for the canvas, none of our code may take longer
-    // than the budget: not an event handler or timer (measured in `Application::notify`), and not
-    // one repaint of the sidebar.
-    void flingingThroughTenThousandThumbnailsStaysWithinTheFrameBudget() {
+    // Flinging through the list asks for nothing until it stops (the timing of this is measured in
+    // `tst_thumbnails_frame_time`): 1,500 steps of a window and more make a few dozen requests, not
+    // one for every page that went by, and the last screen is drawn once the list is still.
+    void flingingThroughTenThousandThumbnailsAsksForNothingUntilItStops() {
         QTemporaryDir dir;
-        const QString path = writeSynthetic(dir, 10'000);
-        vellora::MainWindow window;
-        window.resize(900, 700);
-        window.show();
-        QSignalSpy opened(&window.session(), &EngineSession::opened);
-        QVERIFY(window.openDocument(path));
-        QVERIFY(opened.wait(kWaitMs));
-        window.currentTab().setSidebarVisible(true);
-        ThumbnailView& view = window.currentTab().sidebar().thumbnails();
-        QCOMPARE(view.pageCount(), 10'000U);
-        QTRY_VERIFY_WITH_TIMEOUT(view.hasThumbnail(0), kWaitMs);
-
-        vellora::UiWatchdog watchdog;
-        auto* application = qobject_cast<vellora::Application*>(QCoreApplication::instance());
-        QVERIFY(application != nullptr);
-        application->setWatchdog(&watchdog);
-        connect(&view, &ThumbnailView::paintTimed, &watchdog,
-                [&watchdog](double ms) { watchdog.recordFrame(ms); });
-
-        // Every 8 ms the list moves by about six cells, until the end: 1,500 steps and more.
-        QScrollBar* bar = view.verticalScrollBar();
+        Fixture f(writeSynthetic(dir, 10'000));
+        QTRY_VERIFY_WITH_TIMEOUT(f.view.hasThumbnail(0), kWaitMs);
+        const quint64 before = f.view.requestsSent();
+        QScrollBar* bar = f.view.verticalScrollBar();
         int steps = 0;
-        QTimer fling;
-        fling.setTimerType(Qt::PreciseTimer);
-        fling.setInterval(8);
-        bool done = false;
-        connect(&fling, &QTimer::timeout, this, [&] {
-            ++steps;
+        while (bar->value() < bar->maximum()) {
             bar->setValue(bar->value() + 1'200);
-            done = bar->value() >= bar->maximum();
-        });
-        watchdog.start();
-        fling.start();
-        QTRY_VERIFY_WITH_TIMEOUT(done, 120'000);
-        fling.stop();
-        // Let the list settle and the engine answer, so that the measurement includes the tail: the
-        // thumbnails of the last screen are asked for once the list is still, and drawn.
-        QTRY_VERIFY_WITH_TIMEOUT(view.hasThumbnail(view.visiblePages().first), kWaitMs);
-        QTRY_VERIFY_WITH_TIMEOUT(view.thumbnailsInFlight() == 0, kWaitMs);
-        watchdog.stop();
-        application->setWatchdog(nullptr);
-
-        qInfo("fling: %d steps; %s; %llu requests sent", steps, qPrintable(watchdog.summary()),
-              static_cast<unsigned long long>(view.requestsSent()));
+            ++steps;
+            QCoreApplication::processEvents(); // the queued scheduling pass, as in real use
+        }
         QVERIFY2(steps >= 1'400, qPrintable(QString::number(steps)));
-        // The measurements saw real work: repaints and handlers.
-        QVERIFY2(watchdog.frames().samples >= 100, qPrintable(watchdog.summary()));
-        QVERIFY2(watchdog.handlers().samples >= 1'400, qPrintable(watchdog.summary()));
-        QVERIFY2(watchdog.frames().overBudget == 0, qPrintable(watchdog.summary()));
-        QVERIFY2(watchdog.handlers().overBudget == 0, qPrintable(watchdog.summary()));
-        // Nothing was asked for while the list was flying: only before it moved and after it
-        // stopped (the first screen, and the last one).
-        QVERIFY2(view.requestsSent() < 200, qPrintable(QString::number(view.requestsSent())));
+        QCOMPARE(f.view.requestsSent(), before);
+        QCOMPARE(f.view.thumbnailsInFlight(), 0);
+        // Once the list has been still for a moment the last screen is asked for and drawn.
+        QTRY_VERIFY_WITH_TIMEOUT(f.view.hasThumbnail(f.view.visiblePages().first), kWaitMs);
+        QVERIFY(f.view.requestsSent() - before <= ThumbnailView::kMaxWanted);
     }
 };
 
