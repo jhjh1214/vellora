@@ -212,7 +212,17 @@ mod tests {
         );
 
         drop(document);
-        assert!(exclusive(&writer), "the lock outlived the document");
+        // The lock belongs to the open file description, which a child forked by a test running
+        // beside this one (the `ulimit` tests) holds a copy of until it execs. So "released" is
+        // judged within a few seconds; a lock that is really leaked never is.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !exclusive(&writer) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lock outlived the document"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
