@@ -16,15 +16,21 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
-use vellora_cos::{DestinationResolver, Limits, ObjectStore, Outline, OutlineItem, PageLabels};
+use vellora_cos::links::read_links;
+use vellora_cos::{
+    DestinationResolver, Limits, ObjectStore, Outline, OutlineItem, Page, PageLabels,
+};
 use vellora_ipc::{
-    Destination, ErrorKind, Fit, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES, OutlineEntry, Request,
-    RequestId, Response, TitleStyle,
+    Destination, ErrorKind, Fit, Link, LinkAction, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES,
+    NamedAction, OutlineEntry, Request, RequestId, Response, TitleStyle,
 };
 use vellora_shm::MappedFile;
 use zeroize::Zeroizing;
 
 use crate::session::{error_response, send_shared};
+
+/// Pages whose objects are kept for reading their links; links on later pages are not offered.
+const MAX_LINK_PAGES: usize = 1 << 16;
 
 /// Items asked of `cos` at a time while the whole outline is walked.
 const WALK_CHUNK: usize = 256;
@@ -53,7 +59,8 @@ pub(crate) fn request_id(request: &Request) -> Option<RequestId> {
         Request::GetOutline { req_id, .. }
         | Request::GetOutlinePath { req_id, .. }
         | Request::GetPageLabels { req_id, .. }
-        | Request::FindPageLabel { req_id, .. } => Some(*req_id),
+        | Request::FindPageLabel { req_id, .. }
+        | Request::GetLinks { req_id, .. } => Some(*req_id),
         _ => None,
     }
 }
@@ -282,6 +289,8 @@ struct Navigator<'s, 'a> {
     /// number tree is walked once.
     labels: Option<Result<Option<PageLabels>, String>>,
     flat: Option<FlatOutline>,
+    /// The page objects in order, up to `MAX_LINK_PAGES`, read on first use.
+    pages: Option<Vec<Page>>,
 }
 
 impl<'s, 'a> Navigator<'s, 'a> {
@@ -291,6 +300,7 @@ impl<'s, 'a> Navigator<'s, 'a> {
             page_count,
             labels: None,
             flat: None,
+            pages: None,
         }
     }
 
@@ -321,6 +331,12 @@ impl<'s, 'a> Navigator<'s, 'a> {
                 first,
                 count,
             } => self.page_labels(req_id, first, count),
+            Request::GetLinks {
+                req_id,
+                page,
+                skip,
+                limit,
+            } => self.links(req_id, page, skip, limit),
             Request::FindPageLabel { req_id, ref text } => {
                 let page_count = self.page_count;
                 match self.labels() {
@@ -383,6 +399,50 @@ impl<'s, 'a> Navigator<'s, 'a> {
         }
     }
 
+    /// A window of the links of `page`. A page the document has no object for (past the cached
+    /// ones) has none.
+    fn links(&mut self, req_id: RequestId, page: u32, skip: u32, limit: u32) -> Response {
+        let page_count = self.page_count;
+        if page >= page_count {
+            return error_response(
+                Some(req_id),
+                ErrorKind::InvalidRequest,
+                &format_args!("page {page} is out of range: the document has {page_count} pages"),
+            );
+        }
+        let pages = self.pages.get_or_insert_with(|| {
+            self.resolver
+                .store()
+                .pages()
+                .filter_map(Result::ok)
+                .take(MAX_LINK_PAGES)
+                .collect()
+        });
+        let Some(object) = usize::try_from(page).ok().and_then(|at| pages.get(at)) else {
+            return Response::Links {
+                req_id,
+                page,
+                links: Vec::new(),
+                more: false,
+            };
+        };
+        let skip = usize::try_from(skip).unwrap_or(usize::MAX);
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        match read_links(&self.resolver, object, skip, limit) {
+            Ok(read) => Response::Links {
+                req_id,
+                page,
+                links: read
+                    .links
+                    .into_iter()
+                    .filter_map(|link| link_of(link, page_count))
+                    .collect(),
+                more: read.more,
+            },
+            Err(error) => error_response(Some(req_id), ErrorKind::ReadFailed, &error),
+        }
+    }
+
     /// The labels, read on first use.
     fn labels(&mut self) -> Result<Option<&PageLabels>, String> {
         let read = self
@@ -393,6 +453,36 @@ impl<'s, 'a> Navigator<'s, 'a> {
             Err(reason) => Err(reason.clone()),
         }
     }
+}
+
+/// A link as the protocol carries it. A jump to a page the document does not have (PDFium and
+/// `cos` can disagree about a damaged page tree) goes nowhere; a rectangle that is not finite
+/// cannot be placed, so the link is dropped.
+fn link_of(link: vellora_cos::Link, page_count: u32) -> Option<Link> {
+    if !link.rect.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let action = match link.action {
+        vellora_cos::LinkAction::GoTo(d) if d.page < page_count => LinkAction::GoTo(Destination {
+            page: d.page,
+            fit: fit(d.fit),
+        }),
+        vellora_cos::LinkAction::GoTo(_) | vellora_cos::LinkAction::Unresolved => {
+            LinkAction::Unresolved
+        }
+        vellora_cos::LinkAction::Uri(uri) => LinkAction::Uri(uri),
+        vellora_cos::LinkAction::Named(named) => LinkAction::Named(match named {
+            vellora_cos::NamedAction::NextPage => NamedAction::NextPage,
+            vellora_cos::NamedAction::PrevPage => NamedAction::PrevPage,
+            vellora_cos::NamedAction::FirstPage => NamedAction::FirstPage,
+            vellora_cos::NamedAction::LastPage => NamedAction::LastPage,
+        }),
+        vellora_cos::LinkAction::Inert(kind) => LinkAction::Inert(kind),
+    };
+    Some(Link {
+        rect: link.rect,
+        action,
+    })
 }
 
 /// An outline item as the protocol carries it. A destination to a page the document does not

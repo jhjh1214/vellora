@@ -73,7 +73,7 @@ use std::time::{Duration, Instant};
 
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
-    ErrorKind, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
+    ErrorKind, Link, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
     RequestId, Response, SlotId, TileRect, check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
@@ -312,6 +312,17 @@ pub enum Event {
         /// The zero-based page that has the label, if one does.
         page: Option<u32>,
     },
+    /// The answer to [`Client::request_links`].
+    Links {
+        /// The request it answers.
+        request: RequestId,
+        /// The page the links are on.
+        page: u32,
+        /// The links, in the order of the page.
+        links: Vec<Link>,
+        /// More follow: ask again with `skip` advanced by `links.len()`.
+        more: bool,
+    },
     /// A request failed, or the engine reported a problem of its own (`request` is `None`).
     RequestFailed {
         /// The failed request.
@@ -482,6 +493,20 @@ impl Ledger {
                 Event::PageFound {
                     request: req_id,
                     page,
+                },
+            ),
+            Response::Links {
+                req_id,
+                page,
+                links,
+                more,
+            } => self.answered(
+                req_id,
+                Event::Links {
+                    request: req_id,
+                    page,
+                    links,
+                    more,
                 },
             ),
             Response::Error {
@@ -1151,6 +1176,31 @@ impl Client {
         self.request_navigation(|req_id| Request::FindPageLabel {
             req_id,
             text: text.to_owned(),
+        })
+    }
+
+    /// Asks for the links of `page` (zero-based): at most `limit` (1 to 256) after skipping the
+    /// first `skip`. The answer is [`Event::Links`]; when it says `more`, ask again with `skip`
+    /// advanced by the number received.
+    ///
+    /// The engine only describes the links. What an action does is up to the caller: internal
+    /// jumps are followed, addresses are shown and confirmed, everything else is never run.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for a `limit` out of
+    /// range.
+    pub fn request_links(
+        &self,
+        page: u32,
+        skip: u32,
+        limit: u32,
+    ) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetLinks {
+            req_id,
+            page,
+            skip,
+            limit,
         })
     }
 
@@ -1838,6 +1888,28 @@ mod tests {
         assert!(ledger.pending.is_empty());
         // Four answers in, but no tile: the budget of one restart is still spent.
         assert!(!ledger.crashed().1);
+    }
+
+    #[test]
+    fn link_answers_clear_their_request() {
+        let mut ledger = Ledger::new(3);
+        let id = ledger.begin();
+        let response = Response::Links {
+            req_id: id,
+            page: 2,
+            links: vec![],
+            more: true,
+        };
+        assert_eq!(
+            ledger.accept(response.clone()),
+            Accepted::Event(Event::Links {
+                request: id,
+                page: 2,
+                links: vec![],
+                more: true
+            })
+        );
+        assert_eq!(ledger.accept(response), Accepted::Dropped);
     }
 
     #[test]

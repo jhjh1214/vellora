@@ -325,7 +325,8 @@ impl Host<'_> {
             Request::GetOutline { .. }
             | Request::GetOutlinePath { .. }
             | Request::GetPageLabels { .. }
-            | Request::FindPageLabel { .. } => (self.navigate(request), Flow::Continue),
+            | Request::FindPageLabel { .. }
+            | Request::GetLinks { .. } => (self.navigate(request), Flow::Continue),
         }
     }
 
