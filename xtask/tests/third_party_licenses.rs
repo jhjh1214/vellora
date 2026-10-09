@@ -18,11 +18,14 @@ fn root() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-/// `name version` of every package from a registry in the output of `cargo tree`.
-fn shipped_packages() -> BTreeSet<String> {
+/// Runs `cargo tree` for the normal dependencies of the workspace on every platform. It reads the
+/// manifest of every package in `Cargo.lock`, including build tools that a plain `cargo test` never
+/// downloads, so it goes offline when it can and lets cargo fetch what is missing otherwise.
+fn cargo_tree() -> String {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let output = Command::new(cargo)
-        .args([
+    let run = |offline: bool| {
+        let mut command = Command::new(&cargo);
+        command.args([
             "tree",
             "--workspace",
             "--edges",
@@ -34,18 +37,31 @@ fn shipped_packages() -> BTreeSet<String> {
             "--format",
             "{p}",
             "--locked",
-            "--offline",
-        ])
-        .current_dir(root())
-        .output()
-        .expect("cargo tree runs");
+        ]);
+        if offline {
+            command.arg("--offline");
+        }
+        command
+            .current_dir(root())
+            .output()
+            .expect("cargo tree runs")
+    };
+    let mut output = run(true);
+    if !output.status.success() {
+        output = run(false);
+    }
     assert!(
         output.status.success(),
         "cargo tree failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// `name version` of every package from a registry in the output of `cargo tree`.
+fn shipped_packages() -> BTreeSet<String> {
     let mut packages = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in cargo_tree().lines() {
         let mut parts = line.split_whitespace();
         let (Some(name), Some(version)) = (parts.next(), parts.next()) else {
             continue;
