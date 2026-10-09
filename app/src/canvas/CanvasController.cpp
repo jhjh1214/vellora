@@ -18,7 +18,17 @@ int bucketIndex(float scale) {
     return static_cast<int>(std::lround(std::log2(scale) * 4.0));
 }
 
+int quarterTurns(int turns) {
+    return ((turns % 4) + 4) % 4;
+}
+
 } // namespace
+
+const QVector<double>& CanvasController::zoomPresets() {
+    static const QVector<double> presets = {0.25, 0.5, 0.75, 1.0,  1.25, 1.5, 2.0,
+                                            3.0,  4.0, 8.0,  16.0, 32.0, 64.0};
+    return presets;
+}
 
 CanvasController::CanvasController(EngineSession* session, QObject* parent)
     : QObject(parent), m_session(session) {
@@ -36,11 +46,20 @@ void CanvasController::reset() {
     m_inFlight.clear();
     m_failed.clear();
     m_scroll = {};
+    m_row = 0;
     m_zoom = 1.0;
     m_reportedPage = std::numeric_limits<quint32>::max();
+    setZoomMode(ZoomMode::Custom);
     emit zoomChanged(m_zoom);
     emit contentChanged();
     emit viewChanged();
+}
+
+void CanvasController::setZoomMode(ZoomMode mode) {
+    if (mode != m_zoomMode) {
+        m_zoomMode = mode;
+        emit zoomModeChanged(mode);
+    }
 }
 
 void CanvasController::setViewportSize(QSize logicalSize) {
@@ -48,6 +67,7 @@ void CanvasController::setViewportSize(QSize logicalSize) {
         return;
     }
     m_viewport = logicalSize;
+    applyFit();
     m_scroll = clampedScroll(m_scroll);
     emit contentChanged();
     emit viewChanged();
@@ -64,9 +84,12 @@ void CanvasController::setDevicePixelRatio(double ratio) {
     schedule();
 }
 
+// ---- geometry ----
+
 double CanvasController::contentWidth() const {
-    return std::max(static_cast<double>(m_viewport.width()),
-                    m_layout.maxPageWidth() * m_zoom + 2.0 * PageLayout::kGap);
+    const double needed = 2.0 * (m_layout.halfWidthPoints() * m_zoom + m_layout.halfFixedWidth()) +
+                          2.0 * PageLayout::kGap;
+    return std::max(static_cast<double>(m_viewport.width()), needed);
 }
 
 QSizeF CanvasController::contentSize() const {
@@ -74,11 +97,26 @@ QSizeF CanvasController::contentSize() const {
             std::max(static_cast<double>(m_viewport.height()), m_layout.totalHeight(m_zoom))};
 }
 
+CanvasController::VerticalRange CanvasController::verticalRange() const {
+    const double view = m_viewport.height();
+    if (m_layout.rowCount() == 0) {
+        return {};
+    }
+    if (m_mode.continuous) {
+        return {0.0, std::max(0.0, contentSize().height() - view)};
+    }
+    // One row at a time: from just above the row to just below it.
+    const quint32 row = std::min(m_row, m_layout.rowCount() - 1);
+    const double top = m_layout.rowTop(row, m_zoom) - PageLayout::kGap;
+    const double bottom =
+        m_layout.rowTop(row, m_zoom) + m_layout.rowHeight(row, m_zoom) + PageLayout::kGap;
+    return {top, std::max(top, bottom - view)};
+}
+
 QPointF CanvasController::clampedScroll(QPointF position) const {
-    const QSizeF content = contentSize();
-    const double maxX = std::max(0.0, content.width() - m_viewport.width());
-    const double maxY = std::max(0.0, content.height() - m_viewport.height());
-    return {std::clamp(position.x(), 0.0, maxX), std::clamp(position.y(), 0.0, maxY)};
+    const double maxX = std::max(0.0, contentWidth() - m_viewport.width());
+    const VerticalRange range = verticalRange();
+    return {std::clamp(position.x(), 0.0, maxX), std::clamp(position.y(), range.min, range.max)};
 }
 
 void CanvasController::setScrollPosition(QPointF position) {
@@ -92,50 +130,170 @@ void CanvasController::setScrollPosition(QPointF position) {
     noteCurrentPage();
 }
 
-double CanvasController::pageLeft(quint32 page) const {
-    const double width = m_layout.pageSize(page).width() * m_zoom;
-    return (contentWidth() - width) / 2.0 - m_scroll.x();
+void CanvasController::scrollBy(QPointF delta) {
+    if (m_mode.continuous || m_layout.rowCount() == 0) {
+        setScrollPosition(m_scroll + delta);
+        return;
+    }
+    const VerticalRange range = verticalRange();
+    const double target = m_scroll.y() + delta.y();
+    constexpr double kEdge = 0.5;
+    if (delta.y() > 0.0 && target > range.max && m_row + 1 < m_layout.rowCount()) {
+        if (m_scroll.y() >= range.max - kEdge) {
+            showRow(m_row + 1, false);
+            return;
+        }
+    } else if (delta.y() < 0.0 && target < range.min && m_row > 0) {
+        if (m_scroll.y() <= range.min + kEdge) {
+            showRow(m_row - 1, true);
+            return;
+        }
+    }
+    setScrollPosition(QPointF(m_scroll.x() + delta.x(), target));
+}
+
+QRectF CanvasController::pageScreenRect(quint32 page) const {
+    return m_layout.pageRect(page, m_zoom)
+        .translated(contentWidth() / 2.0 - m_scroll.x(), -m_scroll.y());
+}
+
+PageLayout::Range CanvasController::visibleRows(double top, double bottom) const {
+    if (m_layout.rowCount() == 0) {
+        return {};
+    }
+    if (!m_mode.continuous) {
+        return {std::min(m_row, m_layout.rowCount() - 1), 1};
+    }
+    return m_layout.rowsIn(m_scroll.y() + top, m_scroll.y() + bottom, m_zoom);
 }
 
 quint32 CanvasController::currentPage() const {
+    if (m_layout.rowCount() == 0) {
+        return 0;
+    }
+    if (!m_mode.continuous) {
+        return m_layout.firstPageOf(std::min(m_row, m_layout.rowCount() - 1));
+    }
     return m_layout.pageAt(m_scroll.y() + m_viewport.height() / 2.0, m_zoom);
 }
+
+// ---- view mode ----
+
+void CanvasController::setViewMode(ViewMode mode) {
+    mode.rotation = quarterTurns(mode.rotation);
+    if (mode == m_mode) {
+        return;
+    }
+    const quint32 page = currentPage();
+    m_mode = mode;
+    m_layout.setArrangement(mode.spread, mode.rotation);
+    applyArrangement();
+    // A zoom that follows the window follows the new shape of the pages too.
+    applyFit();
+    goToPage(page);
+    emit viewModeChanged(m_mode);
+}
+
+void CanvasController::setContinuous(bool continuous) {
+    ViewMode mode = m_mode;
+    mode.continuous = continuous;
+    setViewMode(mode);
+}
+
+void CanvasController::setSpread(PageLayout::Spread spread) {
+    ViewMode mode = m_mode;
+    mode.spread = spread;
+    setViewMode(mode);
+}
+
+void CanvasController::rotateBy(int turns) {
+    setRotation(m_mode.rotation + turns);
+}
+
+void CanvasController::setRotation(int turns) {
+    ViewMode mode = m_mode;
+    mode.rotation = turns;
+    setViewMode(mode);
+}
+
+void CanvasController::applyArrangement() {
+    m_row = m_layout.rowCount() == 0 ? 0 : std::min(m_row, m_layout.rowCount() - 1);
+    emit contentChanged();
+    emit viewChanged();
+}
+
+// ---- zoom ----
 
 void CanvasController::zoomBy(double factor, QPointF anchor) {
     setZoom(m_zoom * factor, anchor);
 }
 
 void CanvasController::setZoom(double zoom, QPointF anchor) {
+    setZoomMode(ZoomMode::Custom);
     applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), anchor);
 }
 
-void CanvasController::restoreView(PageLayout::Anchor anchor, double zoom) {
-    if (!std::isfinite(zoom) || !std::isfinite(anchor.offsetPoints)) {
-        return;
-    }
-    applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), QPointF(0.0, 0.0));
-    anchor.page = std::min(anchor.page, m_layout.pageCount() == 0 ? 0 : m_layout.pageCount() - 1);
-    setScrollPosition({m_scroll.x(), m_layout.yOf(anchor, m_zoom)});
-}
-
 void CanvasController::actualSize() {
+    setZoomMode(ZoomMode::Custom);
     applyZoom(1.0, QPointF(m_viewport.width() / 2.0, m_viewport.height() / 2.0));
 }
 
 void CanvasController::fitWidth() {
-    const double width = m_layout.maxPageWidth();
-    if (width <= 0.0 || m_viewport.width() <= 0) {
+    setZoomMode(ZoomMode::FitWidth);
+    applyFit();
+}
+
+void CanvasController::fitPage() {
+    setZoomMode(ZoomMode::FitPage);
+    applyFit();
+}
+
+void CanvasController::applyFit() {
+    if (m_zoomMode == ZoomMode::Custom || m_layout.rowCount() == 0 || m_viewport.isEmpty()) {
         return;
     }
-    const double zoom = (m_viewport.width() - 2.0 * PageLayout::kGap) / width;
-    applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), QPointF(0.0, 0.0));
+    const double gap = PageLayout::kGap;
+    double zoom = 0.0;
+    if (m_zoomMode == ZoomMode::FitWidth) {
+        const double width = 2.0 * m_layout.halfWidthPoints();
+        if (width <= 0.0) {
+            return;
+        }
+        zoom = (m_viewport.width() - 2.0 * gap - 2.0 * m_layout.halfFixedWidth()) / width;
+    } else {
+        const quint32 row = m_mode.continuous
+                                ? m_layout.rowAt(m_scroll.y() + m_viewport.height() / 2.0, m_zoom)
+                                : std::min(m_row, m_layout.rowCount() - 1);
+        const double width = m_layout.rowWidthPoints(row);
+        const double height = m_layout.rowHeightPoints(row);
+        if (width <= 0.0 || height <= 0.0) {
+            return;
+        }
+        zoom = std::min((m_viewport.width() - 2.0 * gap - m_layout.rowFixedWidth(row)) / width,
+                        (m_viewport.height() - 2.0 * gap) / height);
+        // The row fills the window: show it from the top.
+        applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), QPointF(0.0, 0.0));
+        setScrollPosition({m_scroll.x(), m_layout.rowTop(row, m_zoom) - gap});
+        return;
+    }
+    if (std::isfinite(zoom) && zoom > 0.0) {
+        applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), QPointF(0.0, 0.0));
+    }
 }
 
 void CanvasController::applyZoom(double zoom, QPointF anchor) {
-    if (zoom == m_zoom) {
+    if (zoom == m_zoom || !std::isfinite(zoom)) {
         return;
     }
-    const PageLayout::Anchor spot = m_layout.anchorAt(m_scroll.y() + anchor.y(), m_zoom);
+    // The place in the document under the anchor, kept there through the change of scale.
+    PageLayout::Anchor spot;
+    if (m_mode.continuous || m_layout.rowCount() == 0) {
+        spot = m_layout.anchorAt(m_scroll.y() + anchor.y(), m_zoom);
+    } else {
+        const quint32 row = std::min(m_row, m_layout.rowCount() - 1);
+        spot = {m_layout.firstPageOf(row),
+                (m_scroll.y() + anchor.y() - m_layout.rowTop(row, m_zoom)) / m_zoom};
+    }
     const double fractionX = (m_scroll.x() + anchor.x()) / contentWidth();
     m_zoom = zoom;
     m_scroll = clampedScroll(
@@ -146,6 +304,92 @@ void CanvasController::applyZoom(double zoom, QPointF anchor) {
     schedule();
     noteCurrentPage();
 }
+
+void CanvasController::zoomToRect(const QRectF& rect) {
+    if (m_viewport.isEmpty() || rect.width() < 1.0 || rect.height() < 1.0) {
+        return;
+    }
+    const double factor =
+        std::min(m_viewport.width() / rect.width(), m_viewport.height() / rect.height());
+    setZoomMode(ZoomMode::Custom);
+    const QPointF centre = rect.center();
+    applyZoom(std::clamp(m_zoom * factor, kMinZoom, kMaxZoom), centre);
+    // The spot under the middle of the rectangle stayed where it was; bring it to the middle.
+    setScrollPosition(m_scroll + centre -
+                      QPointF(m_viewport.width() / 2.0, m_viewport.height() / 2.0));
+}
+
+void CanvasController::restoreView(PageLayout::Anchor anchor, double zoom) {
+    if (!std::isfinite(zoom) || !std::isfinite(anchor.offsetPoints)) {
+        return;
+    }
+    setZoomMode(ZoomMode::Custom);
+    applyZoom(std::clamp(zoom, kMinZoom, kMaxZoom), QPointF(0.0, 0.0));
+    anchor.page = std::min(anchor.page, m_layout.pageCount() == 0 ? 0 : m_layout.pageCount() - 1);
+    if (!m_mode.continuous && m_layout.rowCount() > 0) {
+        m_row = m_layout.rowOf(anchor.page);
+        emit contentChanged();
+    }
+    setScrollPosition({m_scroll.x(), m_layout.yOf(anchor, m_zoom)});
+}
+
+// ---- navigation ----
+
+void CanvasController::showRow(quint32 row, bool fromBottom) {
+    if (m_layout.rowCount() == 0) {
+        return;
+    }
+    m_row = std::min(row, m_layout.rowCount() - 1);
+    const VerticalRange range = verticalRange();
+    m_scroll.setY(fromBottom ? range.max : range.min);
+    m_scroll = clampedScroll(m_scroll);
+    if (m_zoomMode == ZoomMode::FitPage) {
+        applyFit();
+    }
+    emit contentChanged();
+    emit viewChanged();
+    schedule();
+    noteCurrentPage();
+}
+
+void CanvasController::goToPage(quint32 page) {
+    if (m_layout.rowCount() == 0) {
+        return;
+    }
+    page = std::min(page, m_layout.pageCount() - 1);
+    const quint32 row = m_layout.rowOf(page);
+    if (m_mode.continuous) {
+        setScrollPosition({m_scroll.x(), m_layout.rowTop(row, m_zoom) - PageLayout::kGap});
+        if (m_zoomMode == ZoomMode::FitPage) {
+            applyFit();
+        }
+    } else {
+        showRow(row, false);
+    }
+    noteCurrentPage();
+}
+
+void CanvasController::nextPage() {
+    if (m_layout.rowCount() == 0) {
+        return;
+    }
+    const quint32 row = m_layout.rowOf(currentPage());
+    if (row + 1 < m_layout.rowCount()) {
+        goToPage(m_layout.firstPageOf(row + 1));
+    }
+}
+
+void CanvasController::previousPage() {
+    if (m_layout.rowCount() == 0) {
+        return;
+    }
+    const quint32 row = m_layout.rowOf(currentPage());
+    if (row > 0) {
+        goToPage(m_layout.firstPageOf(row - 1));
+    }
+}
+
+// ---- engine events ----
 
 void CanvasController::rebuildLayout() {
     const quint32 count = m_session->pageCount();
@@ -161,8 +405,10 @@ void CanvasController::rebuildLayout() {
 void CanvasController::onOpened() {
     // Also after an engine restart: same document, so the view stays where it was.
     rebuildLayout();
+    m_row = m_layout.rowCount() == 0 ? 0 : std::min(m_row, m_layout.rowCount() - 1);
     m_inFlight.clear();
     m_failed.clear();
+    applyFit();
     m_scroll = clampedScroll(m_scroll);
     emit contentChanged();
     emit viewChanged();
@@ -211,6 +457,8 @@ void CanvasController::noteCurrentPage() {
     emit currentPageChanged(page, count);
 }
 
+// ---- what is on screen ----
+
 QVector<TileDraw> CanvasController::tilesIn(double top, double bottom) const {
     QVector<TileDraw> tiles;
     if (m_layout.pageCount() == 0 || m_viewport.isEmpty()) {
@@ -224,48 +472,57 @@ QVector<TileDraw> CanvasController::tilesIn(double top, double bottom) const {
     }
     const int bucket = bucketIndex(scale);
     const double tilePts = static_cast<double>(EngineSession::tilePixels()) / scale;
+    const QRectF region(0.0, top, m_viewport.width(), bottom - top);
 
-    const PageLayout::Range range =
-        m_layout.pagesIn(m_scroll.y() + top, m_scroll.y() + bottom, zoom);
-    for (quint32 i = 0; i < range.count; ++i) {
-        const quint32 page = range.first + i;
-        const QSizeF size = m_layout.pageSize(page);
-        const double left = pageLeft(page);
-        const double pageTop = m_layout.pageTop(page, zoom) - m_scroll.y();
-
-        // The part of the page inside the region, in points.
-        const double x0 = std::max(0.0, -left / zoom);
-        const double x1 = std::min(size.width(), (m_viewport.width() - left) / zoom);
-        const double y0 = std::max(0.0, (top - pageTop) / zoom);
-        const double y1 = std::min(size.height(), (bottom - pageTop) / zoom);
-        if (x1 <= x0 || y1 <= y0) {
-            continue;
-        }
-        const auto firstX = static_cast<quint32>(std::floor(x0 / tilePts));
-        const auto lastX = static_cast<quint32>(std::ceil(x1 / tilePts)) - 1;
-        const auto firstY = static_cast<quint32>(std::floor(y0 / tilePts));
-        const auto lastY = static_cast<quint32>(std::ceil(y1 / tilePts)) - 1;
-        for (quint32 ty = firstY; ty <= lastY; ++ty) {
-            for (quint32 tx = firstX; tx <= lastX; ++tx) {
-                if (tiles.size() >= kMaxTilesPerPass) {
-                    return tiles;
+    const PageLayout::Range rows = visibleRows(top, bottom);
+    for (quint32 r = 0; r < rows.count; ++r) {
+        const quint32 row = rows.first + r;
+        const quint32 first = m_layout.firstPageOf(row);
+        for (quint32 i = 0; i < m_layout.pagesInRow(row); ++i) {
+            const quint32 page = first + i;
+            const QSizeF file = m_layout.pageSize(page);
+            const QRectF shownPage = pageScreenRect(page);
+            const QRectF visible = shownPage.intersected(region);
+            if (visible.isEmpty()) {
+                continue;
+            }
+            // The visible part of the page, in points of the page as it is in the file.
+            const QRectF wanted = PageLayout::toPage(visible.translated(-shownPage.topLeft()), file,
+                                                     m_mode.rotation, zoom)
+                                      .intersected(QRectF(QPointF(0.0, 0.0), file));
+            if (wanted.isEmpty()) {
+                continue;
+            }
+            const auto firstX = static_cast<quint32>(std::floor(wanted.left() / tilePts));
+            const auto lastX =
+                static_cast<quint32>(std::max(1.0, std::ceil(wanted.right() / tilePts))) - 1;
+            const auto firstY = static_cast<quint32>(std::floor(wanted.top() / tilePts));
+            const auto lastY =
+                static_cast<quint32>(std::max(1.0, std::ceil(wanted.bottom() / tilePts))) - 1;
+            for (quint32 ty = firstY; ty <= lastY; ++ty) {
+                for (quint32 tx = firstX; tx <= lastX; ++tx) {
+                    if (tiles.size() >= kMaxTilesPerPass) {
+                        return tiles;
+                    }
+                    const QRectF all(tx * tilePts, ty * tilePts, tilePts, tilePts);
+                    const QRectF shown = all.intersected(QRectF(QPointF(0.0, 0.0), file));
+                    if (shown.isEmpty()) {
+                        continue;
+                    }
+                    TileDraw tile;
+                    tile.page = page;
+                    tile.x = tx;
+                    tile.y = ty;
+                    tile.bucket = bucket;
+                    tile.scale = exact;
+                    tile.rotation = m_mode.rotation;
+                    tile.dest = PageLayout::toScreen(shown, file, m_mode.rotation, zoom)
+                                    .translated(shownPage.topLeft());
+                    tile.uv =
+                        QRectF((shown.x() - all.x()) / tilePts, (shown.y() - all.y()) / tilePts,
+                               shown.width() / tilePts, shown.height() / tilePts);
+                    tiles.append(tile);
                 }
-                const QRectF all(tx * tilePts, ty * tilePts, tilePts, tilePts);
-                const QRectF shown = all.intersected(QRectF(0.0, 0.0, size.width(), size.height()));
-                if (shown.isEmpty()) {
-                    continue;
-                }
-                TileDraw tile;
-                tile.page = page;
-                tile.x = tx;
-                tile.y = ty;
-                tile.bucket = bucket;
-                tile.scale = exact;
-                tile.dest = QRectF(left + shown.x() * zoom, pageTop + shown.y() * zoom,
-                                   shown.width() * zoom, shown.height() * zoom);
-                tile.uv = QRectF((shown.x() - all.x()) / tilePts, (shown.y() - all.y()) / tilePts,
-                                 shown.width() / tilePts, shown.height() / tilePts);
-                tiles.append(tile);
             }
         }
     }
@@ -277,19 +534,19 @@ Frame CanvasController::frame() const {
     if (m_layout.pageCount() == 0 || m_viewport.isEmpty()) {
         return frame;
     }
-    const PageLayout::Range range =
-        m_layout.pagesIn(m_scroll.y(), m_scroll.y() + m_viewport.height(), m_zoom);
-    for (quint32 i = 0; i < range.count; ++i) {
-        const quint32 page = range.first + i;
-        const QSizeF size = m_layout.pageSize(page);
-        frame.pages.append(
-            {page, QRectF(pageLeft(page), m_layout.pageTop(page, m_zoom) - m_scroll.y(),
-                          size.width() * m_zoom, size.height() * m_zoom)});
+    const PageLayout::Range rows = visibleRows(0.0, m_viewport.height());
+    for (quint32 r = 0; r < rows.count; ++r) {
+        const quint32 row = rows.first + r;
+        const quint32 first = m_layout.firstPageOf(row);
+        for (quint32 i = 0; i < m_layout.pagesInRow(row); ++i) {
+            const quint32 page = first + i;
+            frame.pages.append(
+                {page, pageScreenRect(page), m_layout.pageSize(page), m_mode.rotation, m_zoom});
+        }
     }
     frame.tiles = tilesIn(0.0, m_viewport.height());
     return frame;
 }
-
 void CanvasController::schedule() {
     if (!m_session->isOpen() || m_layout.pageCount() == 0 || m_viewport.isEmpty()) {
         return;

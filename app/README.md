@@ -22,7 +22,7 @@ app/
 │  ├─ settings/AppSettings.*    # recent files, geometry, per-document view state (QSettings)
 │  ├─ bridge/EngineSession.*    # QObject over the cxx bridge: polled events -> signals, tiles
 │  ├─ canvas/
-│  │  ├─ PageLayout.*           # page column geometry (pure)
+│  │  ├─ PageLayout.*           # page rows (one or two pages a row, rotation) and their geometry (pure)
 │  │  ├─ CanvasController.*     # what is on screen, which tiles to ask for / cancel, zoom anchoring
 │  │  ├─ CanvasWidget.*         # QRhiWidget: draws the controller's frame (shaders/ -> qsb)
 │  │  └─ CanvasView.*           # scroll area + wheel/keys around the widget

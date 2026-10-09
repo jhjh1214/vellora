@@ -65,6 +65,8 @@ signals:
     void statusChanged();
     // The file name (and so the tab title) changed.
     void titleChanged();
+    // The arrangement of the pages or the turn of the view changed.
+    void viewModeChanged();
     // A short message for the status bar; empty clears it.
     void message(const QString& text);
     // The tab wants the user's attention (a password prompt): show it.
@@ -82,6 +84,8 @@ private slots:
     void onZoomChanged(double zoom);
 
 private:
+    AppSettings::Layout currentLayout() const;
+    void applyLayout(const AppSettings::Layout& layout);
     void setDocumentStatus(const QString& text);
     void askForPassword(bool wrong, quint64 generation);
     void giveUp(const QString& status);
@@ -108,6 +112,7 @@ private:
     QString m_viewKey;
     std::optional<AppSettings::ViewState> m_savedView;
     bool m_opened = false;
+    bool m_applyingLayout = false;
 };
 
 } // namespace vellora

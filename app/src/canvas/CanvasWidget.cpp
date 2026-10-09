@@ -5,6 +5,7 @@
 #include <QMatrix4x4>
 #include <QtCore/qglobal.h>
 #include <algorithm>
+#include <cmath>
 #include <rhi/qrhi.h>
 
 namespace vellora {
@@ -25,8 +26,9 @@ QShader loadShader(const QString& name) {
     return QShader::fromSerialized(file.readAll());
 }
 
-// Two triangles for `rect` showing `uv` of a texture.
-void appendQuad(QVector<float>& vertices, const QRectF& rect, const QRectF& uv) {
+// Two triangles for `rect` showing `uv` of a texture, the texture turned `rotation` quarter turns
+// clockwise (the corners of the rectangle take the texture's corners in turn).
+void appendQuad(QVector<float>& vertices, const QRectF& rect, const QRectF& uv, int rotation = 0) {
     const auto x0 = static_cast<float>(rect.left());
     const auto y0 = static_cast<float>(rect.top());
     const auto x1 = static_cast<float>(rect.right());
@@ -35,10 +37,27 @@ void appendQuad(QVector<float>& vertices, const QRectF& rect, const QRectF& uv) 
     const auto v0 = static_cast<float>(uv.top());
     const auto u1 = static_cast<float>(uv.right());
     const auto v1 = static_cast<float>(uv.bottom());
-    vertices << x0 << y0 << u0 << v0 << x1 << y0 << u1 << v0 << x0 << y1 << u0 << v1;
-    vertices << x1 << y0 << u1 << v0 << x1 << y1 << u1 << v1 << x0 << y1 << u0 << v1;
+    // The texture's corners (top left, top right, bottom left, bottom right) and, for each quarter
+    // turn, which of them the rectangle's corners take.
+    const float corners[4][2] = {{u0, v0}, {u1, v0}, {u0, v1}, {u1, v1}};
+    static constexpr int kTakes[4][4] = {{0, 1, 2, 3}, {2, 0, 3, 1}, {3, 2, 1, 0}, {1, 3, 0, 2}};
+    const int* take = kTakes[((rotation % 4) + 4) % 4];
+    const float* tl = corners[take[0]];
+    const float* tr = corners[take[1]];
+    const float* bl = corners[take[2]];
+    const float* br = corners[take[3]];
+    vertices << x0 << y0 << tl[0] << tl[1] << x1 << y0 << tr[0] << tr[1] << x0 << y1 << bl[0]
+             << bl[1];
+    vertices << x1 << y0 << tr[0] << tr[1] << x1 << y1 << br[0] << br[1] << x0 << y1 << bl[0]
+             << bl[1];
 }
 
+// The part of the page, in points of the page as it is in the file, that a tile covers (the whole
+// tile, even where it hangs over the page edge: the texture is laid out from the tile's origin).
+QRectF tileOrigin(const TileId& id) {
+    const double points = kTilePixels / std::exp2(id.bucket / 4.0);
+    return {id.x * points, id.y * points, points, points};
+}
 std::optional<QRhiWidget::Api> apiFromEnvironment() {
     const QByteArray name = qgetenv("VELLORA_RHI").toLower();
     if (name == "null") {
@@ -196,40 +215,53 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
 
     const Frame frame = m_controller->frame();
 
-    // Pages first (white placeholders), then the tiles that are ready on top of them.
+    // Pages first (white placeholders), then old tiles of the same page scaled to stand in for the
+    // sharp ones that have not arrived (so a zoom never shows white), then the sharp tiles.
     struct Draw {
         QRhiShaderResourceBindings* bindings;
         int firstQuad;
     };
     QVector<Draw> draws;
     QVector<float> vertices;
+    const auto quadCount = [&] {
+        return static_cast<int>(vertices.size() / (kFloatsPerVertex * 6));
+    };
     const QRectF whole(0.0, 0.0, 1.0, 1.0);
+    QHash<quint32, const PageDraw*> pageOf;
     for (const PageDraw& page : frame.pages) {
+        pageOf.insert(page.page, &page);
         if (draws.size() >= kMaxQuads) {
             break;
         }
-        draws.append({m_whiteBindings, static_cast<int>(vertices.size() / (kFloatsPerVertex * 6))});
+        draws.append({m_whiteBindings, quadCount()});
         appendQuad(vertices, page.rect, whole);
     }
 
+    struct Quad {
+        QRhiShaderResourceBindings* bindings;
+        QRectF dest;
+        QRectF uv;
+        int rotation;
+    };
+    QVector<Quad> sharp;
+    QVector<const TileDraw*> missing;
     int uploads = 0;
     bool waiting = false;
     for (const TileDraw& tile : frame.tiles) {
-        if (draws.size() >= kMaxQuads) {
-            break;
-        }
         auto it = m_textures.find(tile.id());
         if (it == m_textures.end()) {
             // At least one upload per frame, so a slow machine still makes progress.
             if (uploads >= kUploadsPerFrame ||
                 (uploads > 0 && uploadNs >= static_cast<qint64>(kUploadBudgetMs * 1e6))) {
                 waiting = true;
+                missing.append(&tile);
                 continue;
             }
             QElapsedTimer uploadClock;
             uploadClock.start();
             if (!m_session->readTile(tile.page, tile.scale, tile.x, tile.y, m_scratch)) {
-                continue; // not rendered yet; the page stays white until tileReady
+                missing.append(&tile); // not rendered yet; tileReady will bring us back
+                continue;
             }
             GpuTile gpu;
             gpu.texture = rhi->newTexture(QRhiTexture::BGRA8, QSize(kTilePixels, kTilePixels));
@@ -246,8 +278,63 @@ void CanvasWidget::render(QRhiCommandBuffer* cb) {
             uploadNs += uploadClock.nsecsElapsed();
         }
         it->lastUsed = m_frames;
-        draws.append({it->bindings, static_cast<int>(vertices.size() / (kFloatsPerVertex * 6))});
-        appendQuad(vertices, tile.dest, tile.uv);
+        sharp.append({it->bindings, tile.dest, tile.uv, tile.rotation});
+    }
+
+    // Stand-ins for the tiles that are not there yet: whatever the GPU still holds of the same
+    // page at another scale, cut to the part of the page the missing tile would show. The tile
+    // whose scale is nearest goes last, on top.
+    for (const TileDraw* tile : missing) {
+        const auto page = pageOf.constFind(tile->page);
+        if (page == pageOf.constEnd()) {
+            continue;
+        }
+        const QRectF wanted =
+            tileOrigin(tile->id()).intersected(QRectF(QPointF(0.0, 0.0), (*page)->filePoints));
+        struct Stand {
+            int distance;
+            GpuTile* tile;
+            QRectF dest;
+            QRectF uv;
+        };
+        QVector<Stand> stands;
+        for (auto cached = m_textures.begin(); cached != m_textures.end(); ++cached) {
+            const TileId& id = cached.key();
+            if (id.page != tile->page || id.bucket == tile->bucket) {
+                continue;
+            }
+            const QRectF origin = tileOrigin(id);
+            const QRectF shared = wanted.intersected(origin);
+            if (shared.isEmpty()) {
+                continue;
+            }
+            stands.append(
+                {std::abs(id.bucket - tile->bucket), &cached.value(), (*page)->map(shared),
+                 QRectF((shared.x() - origin.x()) / origin.width(),
+                        (shared.y() - origin.y()) / origin.height(),
+                        shared.width() / origin.width(), shared.height() / origin.height())});
+        }
+        std::sort(stands.begin(), stands.end(),
+                  [](const Stand& a, const Stand& b) { return a.distance > b.distance; });
+        constexpr int kMostStandInsPerTile = 8;
+        if (stands.size() > kMostStandInsPerTile) {
+            stands.erase(stands.begin(), stands.end() - kMostStandInsPerTile);
+        }
+        for (const Stand& stand : stands) {
+            if (draws.size() >= kMaxQuads) {
+                break;
+            }
+            stand.tile->lastUsed = m_frames; // not worth evicting while it is on screen
+            draws.append({stand.tile->bindings, quadCount()});
+            appendQuad(vertices, stand.dest, stand.uv, tile->rotation);
+        }
+    }
+    for (const Quad& quad : sharp) {
+        if (draws.size() >= kMaxQuads) {
+            break;
+        }
+        draws.append({quad.bindings, quadCount()});
+        appendQuad(vertices, quad.dest, quad.uv, quad.rotation);
     }
     evictTextures();
 

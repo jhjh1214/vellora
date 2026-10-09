@@ -19,6 +19,7 @@
 #include <QMenuBar>
 #include <QMimeData>
 #include <QScreen>
+#include <QSignalBlocker>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabBar>
@@ -42,6 +43,11 @@ QLabel* plainLabel(QWidget* parent) {
 QString tabTitle(const QString& fileName) {
     QString title = fileName.isEmpty() ? QObject::tr("New Tab") : fileName;
     return title.replace(QLatin1Char('&'), QStringLiteral("&&"));
+}
+
+// The command id of the zoom preset (0.25 is "view.zoom.25").
+QString zoomPresetId(double preset) {
+    return QStringLiteral("view.zoom.%1").arg(qRound(preset * 100.0));
 }
 
 // The local files among the URLs of a drop.
@@ -109,9 +115,35 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
         m_recentFixedActions.append(m_commands.createAction(QString::fromLatin1(id), this));
     }
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
-    for (const char* id : {"view.zoomIn", "view.zoomOut", "view.actualSize", "view.fitWidth"}) {
-        viewMenu->addAction(m_commands.createAction(QString::fromLatin1(id), this));
+    const auto addView = [this](QMenu* menu, const char* id, bool checkable = false) {
+        QAction* action = m_commands.createAction(QString::fromLatin1(id), this);
+        action->setCheckable(checkable);
+        menu->addAction(action);
+        m_viewActions.insert(QString::fromLatin1(id), action);
+    };
+    auto* layoutMenu = viewMenu->addMenu(tr("Page &Layout"));
+    for (const char* id : {"view.layout.single", "view.layout.continuous", "view.layout.twoUp",
+                           "view.layout.twoUpContinuous"}) {
+        addView(layoutMenu, id, true);
     }
+    layoutMenu->addSeparator();
+    addView(layoutMenu, "view.layout.cover", true);
+    auto* zoomMenu = viewMenu->addMenu(tr("&Zoom"));
+    for (const char* id :
+         {"view.zoomIn", "view.zoomOut", "view.actualSize", "view.fitWidth", "view.fitPage"}) {
+        addView(zoomMenu, id);
+    }
+    zoomMenu->addSeparator();
+    for (const double preset : CanvasController::zoomPresets()) {
+        addView(zoomMenu, qPrintable(zoomPresetId(preset)));
+    }
+    viewMenu->addSeparator();
+    addView(viewMenu, "view.rotateClockwise");
+    addView(viewMenu, "view.rotateCounterclockwise");
+    addView(viewMenu, "view.zoomToSelection");
+    viewMenu->addSeparator();
+    addView(viewMenu, "view.nextPage");
+    addView(viewMenu, "view.previousPage");
     viewMenu->addSeparator();
     viewMenu->addAction(m_commands.createAction(QStringLiteral("palette.show"), this));
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));
@@ -175,6 +207,54 @@ void MainWindow::registerCommands() {
         [this] { canvas().actualSize(); });
     add("view.fitWidth", tr("Fit Width"), {QKeySequence(Qt::CTRL | Qt::Key_2)},
         [this] { canvas().fitWidth(); });
+    add("view.fitPage", tr("Fit Page"), {QKeySequence(Qt::CTRL | Qt::Key_0)},
+        [this] { canvas().fitPage(); });
+    for (const double preset : CanvasController::zoomPresets()) {
+        const QByteArray id = zoomPresetId(preset).toLatin1();
+        add(id.constData(), tr("Zoom %1%").arg(qRound(preset * 100.0)), {}, [this, preset] {
+            CanvasView& view = canvas();
+            view.controller()->setZoom(
+                preset, QPointF(view.viewport()->width() / 2.0, view.viewport()->height() / 2.0));
+        });
+    }
+    // Page layout: one command each, so that the menu, the palette and shortcuts agree.
+    const auto setLayout = [this](bool continuous, bool twoUp) {
+        const PageLayout::Spread spread =
+            !twoUp ? PageLayout::Spread::One
+                   : (m_coverInTwoUp ? PageLayout::Spread::TwoCover : PageLayout::Spread::Two);
+        CanvasController::ViewMode mode = canvas().controller()->viewMode();
+        mode.continuous = continuous;
+        mode.spread = spread;
+        canvas().controller()->setViewMode(mode);
+        updateViewActions();
+    };
+    add("view.layout.single", tr("Single Page"), {}, [setLayout] { setLayout(false, false); });
+    add("view.layout.continuous", tr("Continuous Scrolling"), {},
+        [setLayout] { setLayout(true, false); });
+    add("view.layout.twoUp", tr("Two Pages"), {}, [setLayout] { setLayout(false, true); });
+    add("view.layout.twoUpContinuous", tr("Two Pages, Continuous"), {},
+        [setLayout] { setLayout(true, true); });
+    add("view.layout.cover", tr("Cover Page in Two-Page View"), {}, [this] {
+        m_coverInTwoUp = !m_coverInTwoUp;
+        CanvasController* controller = canvas().controller();
+        if (controller->viewMode().spread != PageLayout::Spread::One) {
+            controller->setSpread(m_coverInTwoUp ? PageLayout::Spread::TwoCover
+                                                 : PageLayout::Spread::Two);
+        }
+        updateViewActions();
+    });
+    add("view.rotateClockwise", tr("Rotate Clockwise"),
+        {QKeySequence(Qt::CTRL | Qt::Key_BracketRight)},
+        [this] { canvas().controller()->rotateBy(1); });
+    add("view.rotateCounterclockwise", tr("Rotate Counterclockwise"),
+        {QKeySequence(Qt::CTRL | Qt::Key_BracketLeft)},
+        [this] { canvas().controller()->rotateBy(-1); });
+    add("view.zoomToSelection", tr("Zoom to Selection"), {},
+        [this] { canvas().armZoomRect(true); });
+    add("view.nextPage", tr("Next Page"), {QKeySequence(Qt::CTRL | Qt::Key_Down)},
+        [this] { canvas().controller()->nextPage(); });
+    add("view.previousPage", tr("Previous Page"), {QKeySequence(Qt::CTRL | Qt::Key_Up)},
+        [this] { canvas().controller()->previousPage(); });
     add("help.openLogFolder", tr("Open Log Folder"), {}, [this] { openLogFolder(); });
     add("help.about", tr("About Vellora"), {}, [this] { showAbout(); });
     add("palette.show", tr("Command Palette…"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)},
@@ -200,6 +280,11 @@ DocumentTab* MainWindow::addTab() {
         }
     });
     connect(tab, &DocumentTab::titleChanged, this, [this, tab] { updateTabTitle(tab); });
+    connect(tab, &DocumentTab::viewModeChanged, this, [this, tab] {
+        if (m_tabs->currentWidget() == tab) {
+            updateViewActions();
+        }
+    });
     connect(tab, &DocumentTab::message, this, [this, tab](const QString& text) {
         if (m_tabs->currentWidget() == tab) {
             if (text.isEmpty()) {
@@ -215,6 +300,28 @@ DocumentTab* MainWindow::addTab() {
     emit tabAdded(tab);
     updateChrome();
     return tab;
+}
+
+void MainWindow::updateViewActions() {
+    if (m_tabs->currentWidget() == nullptr) {
+        return;
+    }
+    const CanvasController::ViewMode mode = currentTab().canvas().controller()->viewMode();
+    const bool twoUp = mode.spread != PageLayout::Spread::One;
+    if (twoUp) {
+        m_coverInTwoUp = mode.spread == PageLayout::Spread::TwoCover;
+    }
+    const auto check = [this](const char* id, bool on) {
+        if (QAction* action = m_viewActions.value(QString::fromLatin1(id))) {
+            const QSignalBlocker blocker(action);
+            action->setChecked(on);
+        }
+    };
+    check("view.layout.single", !mode.continuous && !twoUp);
+    check("view.layout.continuous", mode.continuous && !twoUp);
+    check("view.layout.twoUp", !mode.continuous && twoUp);
+    check("view.layout.twoUpContinuous", mode.continuous && twoUp);
+    check("view.layout.cover", m_coverInTwoUp);
 }
 
 void MainWindow::updateTabTitle(DocumentTab* tab) {
@@ -237,6 +344,7 @@ void MainWindow::updateChrome() {
     m_pageStatus->setText(tab.pageStatus());
     m_zoomStatus->setText(tab.zoomStatus());
     statusBar()->clearMessage();
+    updateViewActions();
     setWindowTitle(!tab.isEmpty() && tab.session().isOpen() ? tr("%1 — Vellora").arg(tab.fileName())
                                                             : tr("Vellora"));
 }

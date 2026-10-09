@@ -15,9 +15,11 @@
 #include "commands/CommandRegistry.h"
 #include "settings/AppSettings.h"
 
+#include <QHash>
 #include <QMainWindow>
 #include <QStringList>
 
+class QAction;
 class QDialog;
 class QUrl;
 class QLabel;
@@ -112,6 +114,8 @@ private slots:
 private:
     DocumentTab* addTab();
     void registerCommands();
+    // Check marks of the page layout entries follow the current tab's arrangement.
+    void updateViewActions();
     void updateChrome();
     void updateTabTitle(DocumentTab* tab);
     void removeUnavailableRecent();
@@ -131,6 +135,9 @@ private:
     QDateTime m_crashSeenUntil;
     QStringList m_closedTabs; // most recent last
     QList<QAction*> m_recentFixedActions;
+    QHash<QString, QAction*> m_viewActions;
+    // Whether two-page layouts start with a cover page alone on the right.
+    bool m_coverInTwoUp = false;
 };
 
 } // namespace vellora

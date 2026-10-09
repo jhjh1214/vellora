@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- View modes: single page or continuous scrolling, one or two pages a row (with an optional cover page), the view can be turned in quarter turns (never written to the file), fit width, fit page, zoom presets from 25% to 6400%, zoom to a dragged rectangle (hold Z) and to the cursor (Ctrl+wheel). Old tiles stay on screen, scaled, until the sharp ones arrive. The arrangement is remembered for each document and for new ones.
 - Crash reports, all local: if the application crashes, a monitor process writes a minidump (the stacks of the threads, not the heap) into the crash folder, and the next start offers to open the folder or a prefilled GitHub issue (nothing is attached or uploaded). If the sandboxed engine crashes or panics, the app records what happened with the engine's last 200 log lines. See ADR-0019.
 - Logs: the application writes rotating log files (at most 10 MiB) to the platform's log folder, including the sandboxed engine's log lines, which the UI process now reads from the engine's standard error. Help → Open Log Folder shows the folder; `VELLORA_LOG_DIR` and `VELLORA_LOG` change where and how much.
 - Help → About Vellora: version, commit and build date, the MPL-2.0 license, the Qt LGPL notice with how to replace Qt, and a viewer for the licenses of every bundled component (Rust crates, PDFium and the libraries inside it, Qt). `cargo test` fails when `THIRD_PARTY_LICENSES` lacks a crate that is linked.

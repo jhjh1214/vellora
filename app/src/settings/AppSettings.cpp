@@ -13,6 +13,7 @@ namespace {
 constexpr auto kGeometry = "window/geometry";
 constexpr auto kLastDirectory = "files/lastDirectory";
 constexpr auto kCrashSeen = "crashes/seenUntilMs";
+constexpr auto kLayout = "view/layout";
 constexpr auto kRecent = "files/recent";
 constexpr auto kViewStates = "views";
 
@@ -42,6 +43,12 @@ QList<Entry> readEntries(QSettings& settings) {
         entry.state.page = page;
         entry.state.offsetPoints = settings.value(QStringLiteral("offset")).toDouble(&offsetOk);
         entry.state.zoom = settings.value(QStringLiteral("zoom")).toDouble(&zoomOk);
+        // Entries from before view modes have no arrangement: the usual one.
+        entry.state.layout.continuous = settings.value(QStringLiteral("continuous"), true).toBool();
+        entry.state.layout.spread =
+            std::clamp(settings.value(QStringLiteral("spread"), 0).toInt(), 0, 2);
+        entry.state.layout.rotation =
+            ((settings.value(QStringLiteral("rotation"), 0).toInt() % 4) + 4) % 4;
         // The file is the user's, but it is read back as untrusted: ignore what is not a number.
         if (!entry.key.isEmpty() && pageOk && offsetOk && zoomOk &&
             std::isfinite(entry.state.offsetPoints) && std::isfinite(entry.state.zoom)) {
@@ -90,6 +97,28 @@ QString AppSettings::lastDirectory() const {
 void AppSettings::setLastDirectory(const QString& directory) {
     if (m_settings) {
         m_settings->setValue(QLatin1String(kLastDirectory), directory);
+    }
+}
+
+AppSettings::Layout AppSettings::lastLayout() const {
+    Layout layout;
+    if (m_settings) {
+        const QStringList parts = m_settings->value(QLatin1String(kLayout)).toStringList();
+        if (parts.size() == 3) {
+            layout.continuous = parts.at(0) == QLatin1String("1");
+            layout.spread = std::clamp(parts.at(1).toInt(), 0, 2);
+            layout.rotation = ((parts.at(2).toInt() % 4) + 4) % 4;
+        }
+    }
+    return layout;
+}
+
+void AppSettings::setLastLayout(const Layout& layout) {
+    if (m_settings) {
+        m_settings->setValue(
+            QLatin1String(kLayout),
+            QStringList{layout.continuous ? QStringLiteral("1") : QStringLiteral("0"),
+                        QString::number(layout.spread), QString::number(layout.rotation)});
     }
 }
 
@@ -191,6 +220,9 @@ void AppSettings::setViewState(const QString& key, const ViewState& state) {
         m_settings->setValue(QStringLiteral("page"), entries.at(i).state.page);
         m_settings->setValue(QStringLiteral("offset"), entries.at(i).state.offsetPoints);
         m_settings->setValue(QStringLiteral("zoom"), entries.at(i).state.zoom);
+        m_settings->setValue(QStringLiteral("continuous"), entries.at(i).state.layout.continuous);
+        m_settings->setValue(QStringLiteral("spread"), entries.at(i).state.layout.spread);
+        m_settings->setValue(QStringLiteral("rotation"), entries.at(i).state.layout.rotation);
     }
     m_settings->endArray();
 }

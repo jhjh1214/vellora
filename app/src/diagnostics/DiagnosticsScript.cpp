@@ -51,10 +51,9 @@ void DiagnosticsScript::step() {
         m_controller->zoomBy(in ? m_options.zoomFactor : 1.0 / m_options.zoomFactor, centre);
         ++m_zooms;
     }
-    // The top of page `m_step`, at whatever zoom the script is at now.
-    m_controller->setScrollPosition(QPointF(
-        0.0, m_controller->layout().pageTop(static_cast<quint32>(m_step), m_controller->zoom()) -
-                 PageLayout::kGap));
+    // The top of page `m_step`, at whatever zoom the script is at now; in a view that shows one
+    // row at a time, that page turns up.
+    m_controller->goToPage(static_cast<quint32>(m_step));
 }
 
 } // namespace vellora
