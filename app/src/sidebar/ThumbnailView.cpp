@@ -263,6 +263,7 @@ void ThumbnailView::goToPage(quint32 page) {
         return;
     }
     select(page);
+    emit aboutToJump();
     m_jumping = true;
     m_controller->goToPage(m_selected);
     m_jumping = false;

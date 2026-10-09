@@ -96,6 +96,9 @@ public:
     quint64 paintCount() const { return m_paintCount; }
 
 signals:
+    // The view is about to move the canvas to a page the reader chose (a click or a key): the
+    // place being left can be recorded.
+    void aboutToJump();
     void thumbnailWidthChanged(int width);
     // The time one repaint took, for the frame-time measurements.
     void paintTimed(double ms);

@@ -161,6 +161,13 @@ public:
     // Scrolls so that the row of `page` starts at the top of the window; when the view shows one
     // row at a time, it shows that row.
     void goToPage(quint32 page);
+    // Follows a destination of the document: the page, and how it is shown. `Xyz` puts the point
+    // at the top edge of the window (at its zoom, if it has one); `Fit` shows the whole page,
+    // `FitH` its width, `FitR` fills the window with the rectangle. Coordinates are measured up
+    // from the bottom of the page as shown, which holds for the usual page whose box starts at
+    // the origin; in a turned view only the page is followed. The `B` variants are treated as the
+    // plain ones (the content box is not known here).
+    void goToDestination(const Destination& destination);
     void nextPage();
     void previousPage();
     const PageLayout& layout() const { return m_layout; }

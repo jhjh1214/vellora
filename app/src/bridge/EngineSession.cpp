@@ -16,6 +16,24 @@ QString toQString(const rust::String& text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
+OutlineItem toItem(const OutlineNode& node) {
+    OutlineItem item;
+    item.id = node.id;
+    item.title = toQString(node.title);
+    item.destination.page = node.page;
+    item.destination.fit = node.fit;
+    item.destination.left = static_cast<double>(node.left);
+    item.destination.top = static_cast<double>(node.top);
+    item.destination.right = static_cast<double>(node.right);
+    item.destination.bottom = static_cast<double>(node.bottom);
+    item.destination.zoom = static_cast<double>(node.zoom);
+    item.hasChildren = node.has_children;
+    item.open = node.open;
+    item.bold = node.bold;
+    item.italic = node.italic;
+    return item;
+}
+
 std::atomic<int> g_liveSessions{0};
 
 } // namespace
@@ -157,6 +175,54 @@ bool EngineSession::readThumbnail(quint32 page, float zoom, quint32 width, quint
     }
 }
 
+quint64 EngineSession::requestOutline(std::optional<quint32> parent, std::optional<quint32> after,
+                                      quint32 already, quint32 limit) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_outline(parent.value_or(0), parent.has_value(),
+                                            after.value_or(0), after.has_value(), already, limit);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+quint64 EngineSession::requestOutlinePath(quint32 page) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_outline_path(page);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+quint64 EngineSession::requestPageLabels(quint32 first, quint32 count) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_page_labels(first, count);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+quint64 EngineSession::findPageLabel(const QString& text) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        const QByteArray utf8 = text.toUtf8();
+        return (*m_client)->find_page_label(
+            rust::Str(utf8.constData(), static_cast<size_t>(utf8.size())));
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 void EngineSession::invalidatePage(quint32 page) {
     if (m_client) {
         (*m_client)->invalidate_page(page);
@@ -223,6 +289,36 @@ void EngineSession::dispatch(const EngineEvent& event) {
         break;
     case EventKind::DocumentChanged:
         emit documentChanged(event.file_replaced);
+        break;
+    case EventKind::Outline: {
+        QList<OutlineItem> items;
+        items.reserve(static_cast<qsizetype>(event.outline.size()));
+        for (const OutlineNode& node : event.outline) {
+            items.append(toItem(node));
+        }
+        emit outlineReady(event.request, items, event.more);
+        break;
+    }
+    case EventKind::OutlinePath: {
+        QList<quint32> path;
+        path.reserve(static_cast<qsizetype>(event.path.size()));
+        for (const uint32_t id : event.path) {
+            path.append(id);
+        }
+        emit outlinePathReady(event.request, path);
+        break;
+    }
+    case EventKind::PageLabels: {
+        QStringList labels;
+        labels.reserve(static_cast<qsizetype>(event.labels.size()));
+        for (const rust::String& label : event.labels) {
+            labels.append(toQString(label));
+        }
+        emit pageLabelsReady(event.request, event.first, event.labels_defined, labels);
+        break;
+    }
+    case EventKind::PageFound:
+        emit pageFound(event.request, event.found, event.found_page);
         break;
     }
 }

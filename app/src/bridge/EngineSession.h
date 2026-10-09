@@ -3,6 +3,7 @@
 // through here (ADR-0003, ADR-0004).
 #pragma once
 
+#include "bridge/Destination.h"
 #include "rust/cxx.h"
 #include "vellora-engine-client/src/bridge.rs.h"
 
@@ -65,6 +66,22 @@ public:
     // Fills `out` (RGB32, `width` x `height`) with a ready thumbnail; false if it is not ready.
     bool readThumbnail(quint32 page, float zoom, quint32 width, quint32 height, QImage& out);
 
+    // ---- navigation: the outline and the page labels ----
+    // Each returns the id its answer carries, or 0 if it could not be sent (no document, engine
+    // down, a value out of range). A failure of the engine arrives as `requestFailed`.
+    //
+    // One page of one level of the outline: the children of `parent` (the top level if empty),
+    // after the item `after` (from the first if empty), at most `limit` (1 to 128). `already` is
+    // how many items of the level the caller has.
+    quint64 requestOutline(std::optional<quint32> parent, std::optional<quint32> after,
+                           quint32 already, quint32 limit);
+    // The outline items that lead to the section `page` is in.
+    quint64 requestOutlinePath(quint32 page);
+    // The labels of `count` pages (1 to 1024) from `first`.
+    quint64 requestPageLabels(quint32 first, quint32 count);
+    // The page that has the label `text`.
+    quint64 findPageLabel(const QString& text);
+
     // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
     quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }
 
@@ -79,6 +96,13 @@ signals:
     // these two answers.
     void passwordRequested(bool wrong);
     void tileReady(quint64 request);
+    // Answers to the navigation requests above. `more`: the level goes on after the last item.
+    void outlineReady(quint64 request, const QList<vellora::OutlineItem>& items, bool more);
+    // Item ids from a top-level item down to the one that starts the section (empty if none does).
+    void outlinePathReady(quint64 request, const QList<quint32>& path);
+    // `defined`: the document has page labels; if not, `labels` are the page numbers.
+    void pageLabelsReady(quint64 request, quint32 first, bool defined, const QStringList& labels);
+    void pageFound(quint64 request, bool found, quint32 page);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);
     // Requests in `lost` will never be answered; ask again after `engineRestarted`.

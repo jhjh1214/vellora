@@ -73,6 +73,12 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
 
     connect(&m_session, &EngineSession::opened, this, &DocumentTab::onOpened);
     connect(&m_session, &EngineSession::requestFailed, this, &DocumentTab::onRequestFailed);
+    connect(&m_session, &EngineSession::pageLabelsReady, this, &DocumentTab::onPageLabels);
+    connect(&m_session, &EngineSession::pageFound, this, &DocumentTab::onPageFound);
+    connect(&m_history, &NavigationHistory::changed, this, &DocumentTab::historyChanged);
+    connect(&m_sidebar->outline(), &OutlineView::destinationActivated, this, &DocumentTab::jumpTo);
+    connect(&m_sidebar->thumbnails(), &ThumbnailView::aboutToJump, this,
+            [this] { m_history.recordJump(currentPlace()); });
     connect(&m_session, &EngineSession::passwordRequested, this, &DocumentTab::onPasswordRequested);
     connect(&m_session, &EngineSession::engineCrashed, this,
             [this](const QString& how, bool willRestart, const QList<quint64>&) {
@@ -130,6 +136,13 @@ bool DocumentTab::open(const QString& path) {
     saveViewState();
     m_canvas->reset();
     m_sidebar->reset();
+    m_history.clear();
+    m_labels.clear();
+    m_labelsDefined = false;
+    m_labelRequest = 0;
+    m_findRequest = 0;
+    m_page = 0;
+    m_pageCount = 0;
     m_pageStatus.clear();
     m_fileChanged = false;
     m_opened = false;
@@ -185,6 +198,7 @@ void DocumentTab::onOpened(quint32 pageCount, const QStringList& repairs) {
     emit message(QString());
     if (!m_opened) {
         m_opened = true;
+        requestLabels(0);
         // Only the first answer: after a restart the view is where the user left it.
         if (m_savedView) {
             applyLayout(m_savedView->layout);
@@ -208,6 +222,15 @@ void DocumentTab::onOpened(quint32 pageCount, const QStringList& repairs) {
 }
 
 void DocumentTab::onRequestFailed(quint64 request, const QString& message) {
+    if (request != 0 && request == m_labelRequest) {
+        m_labelRequest = 0; // the labels could not be read: pages keep their numbers
+        return;
+    }
+    if (request != 0 && request == m_findRequest) {
+        m_findRequest = 0;
+        goToPageNumber(m_findText);
+        return;
+    }
     // A failure that belongs to a request is the canvas's business; one that belongs to no
     // request is the document (for example, the engine could not read the file).
     if (request == 0) {
@@ -297,8 +320,131 @@ void DocumentTab::onDocumentChanged(bool replaced) {
 }
 
 void DocumentTab::onPageChanged(quint32 page, quint32 pageCount) {
-    m_pageStatus = pageCount == 0 ? QString() : tr("Page %1 / %2").arg(page + 1).arg(pageCount);
+    m_page = page;
+    m_pageCount = pageCount;
+    refreshPageStatus();
+}
+
+void DocumentTab::refreshPageStatus() {
+    if (m_pageCount == 0) {
+        m_pageStatus.clear();
+    } else if (m_labelsDefined && pageLabel(m_page) != QString::number(m_page + 1)) {
+        m_pageStatus =
+            tr("Page %1 (%2 / %3)").arg(pageLabel(m_page)).arg(m_page + 1).arg(m_pageCount);
+    } else {
+        m_pageStatus = tr("Page %1 / %2").arg(m_page + 1).arg(m_pageCount);
+    }
     emit statusChanged();
+}
+
+QString DocumentTab::pageLabel(quint32 page) const {
+    return m_sidebar->thumbnails().labelFor(page);
+}
+
+// ---- page labels ----
+
+void DocumentTab::requestLabels(quint32 first) {
+    m_labelRequest = m_session.requestPageLabels(first, kLabelsPerRequest);
+}
+
+void DocumentTab::onPageLabels(quint64 request, quint32 first, bool defined,
+                               const QStringList& labels) {
+    if (request == 0 || request != m_labelRequest) {
+        return;
+    }
+    m_labelRequest = 0;
+    if (!defined) {
+        return; // the labels are the page numbers, which is what the sidebar shows anyway
+    }
+    // The windows arrive in order; a window that does not continue the list is not trusted.
+    if (static_cast<quint32>(m_labels.size()) != first) {
+        return;
+    }
+    m_labels.append(labels);
+    m_labelsDefined = true;
+    const quint32 next = first + static_cast<quint32>(labels.size());
+    if (labels.size() == static_cast<qsizetype>(kLabelsPerRequest) && next < kMaxLabelledPages) {
+        requestLabels(next);
+        return;
+    }
+    m_sidebar->thumbnails().setPageLabels(m_labels);
+    refreshPageStatus();
+}
+
+// ---- jumps ----
+
+NavigationHistory::Place DocumentTab::currentPlace() const {
+    const CanvasController* controller = m_canvas->controller();
+    const PageLayout::Anchor top = controller->topAnchor();
+    return {top.page, top.offsetPoints, controller->zoom()};
+}
+
+void DocumentTab::jumpTo(const Destination& destination) {
+    m_history.recordJump(currentPlace());
+    m_canvas->controller()->goToDestination(destination);
+}
+
+void DocumentTab::jumpToPage(quint32 page) {
+    m_history.recordJump(currentPlace());
+    m_canvas->controller()->goToPage(page);
+}
+
+bool DocumentTab::goBack() {
+    const auto place = m_history.back(currentPlace());
+    if (!place) {
+        return false;
+    }
+    m_canvas->controller()->restoreView({place->page, place->offsetPoints}, place->zoom);
+    return true;
+}
+
+bool DocumentTab::goForward() {
+    const auto place = m_history.forward(currentPlace());
+    if (!place) {
+        return false;
+    }
+    m_canvas->controller()->restoreView({place->page, place->offsetPoints}, place->zoom);
+    return true;
+}
+
+void DocumentTab::goToPageText(const QString& text) {
+    const QString wanted = text.trimmed();
+    if (wanted.isEmpty() || m_pageCount == 0) {
+        return;
+    }
+    m_findText = wanted;
+    // The engine knows the labels, including beyond what has been read here.
+    m_findRequest = m_session.findPageLabel(wanted);
+    if (m_findRequest == 0) {
+        goToPageNumber(wanted);
+    }
+}
+
+void DocumentTab::onPageFound(quint64 request, bool found, quint32 page) {
+    if (request == 0 || request != m_findRequest) {
+        return;
+    }
+    m_findRequest = 0;
+    if (found) {
+        jumpToPage(page);
+    } else {
+        goToPageNumber(m_findText);
+    }
+}
+
+void DocumentTab::goToPageNumber(const QString& text) {
+    bool ok = false;
+    const quint32 number = text.toUInt(&ok);
+    if (ok && number >= 1 && number <= m_pageCount) {
+        jumpToPage(number - 1);
+        return;
+    }
+    emit message(tr("This document has no page \"%1\".").arg(text));
+}
+
+void DocumentTab::showOutline() {
+    setSidebarVisible(true);
+    m_sidebar->setCurrentTab(ThumbnailSidebar::Tab::Outline);
 }
 
 void DocumentTab::onZoomChanged(double zoom) {
