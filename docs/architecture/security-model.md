@@ -35,7 +35,7 @@
 ## Privacy
 
 - **No telemetry.** No automatic crash upload. The update check is opt-in.
-- Crash dumps are written locally. The user decides whether to attach them to an issue.
+- Crash dumps are written locally by a monitor process ([ADR-0019](../adr/0019-local-crash-dumps-with-crash-handler-and-minidumper.md)): the stacks of the threads, not the heap. After a crash the app offers to show the folder or open an issue form; nothing is attached or uploaded, and the user decides what to attach. The dialog says that issues are public.
 - Logs never contain document text at `info` level or above, and never a password. They are rotating files in the user's own log folder, at most 10 MiB in all (Help → Open Log Folder). The engine cannot write files; the UI process reads its standard error and treats it as untrusted data (cut, sanitised, size-capped).
 
 ## Sandbox status tracker

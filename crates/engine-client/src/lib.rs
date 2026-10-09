@@ -19,7 +19,7 @@
 //! `cxx` bridge ([`bridge`]); task 21 added the tile cache ([`cache`]); task 22a wired it into the
 //! client and bridge (`docs/milestones/M0.md`). M1 task 2 added the client's own deadlines (engine
 //! start-up and stalled tiles) and the write-deny open of the document ([`document`]). Task 9b added
-//! the log files ([`logging`]) and the capture of the engine's log lines (`capture`).
+//! the log files ([`logging`]) and the capture of the engine's log lines (`capture`); task 9c the local crash reports ([`crash`], ADR-0019).
 //!
 //! **`unsafe`:** denied crate-wide. Only the bridge module allows it, for the glue the `cxx` macro
 //! generates, and the small OS modules in [`limits`] and [`document`] (every block has a
@@ -29,6 +29,8 @@ pub mod bridge;
 pub mod cache;
 mod capture;
 pub mod client;
+#[allow(unsafe_code)]
+pub mod crash;
 mod document;
 pub mod limits;
 pub mod logging;

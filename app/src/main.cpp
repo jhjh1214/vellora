@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "SingleInstance.h"
 #include "diagnostics/Application.h"
+#include "diagnostics/CrashReports.h"
 #include "diagnostics/DiagnosticsScript.h"
 #include "diagnostics/Logging.h"
 #include "diagnostics/UiWatchdog.h"
@@ -11,8 +12,16 @@
 #include <QDir>
 #include <QSettings>
 #include <QTextStream>
+#include <QTimer>
+#include <cstring>
 
 int main(int argc, char** argv) {
+    // The crash monitor is this same executable started by a running instance (ADR-0019): no
+    // windows, no Qt application, it only writes the dump if the instance crashes.
+    if (argc > 1 && std::strcmp(argv[1], vellora::CrashReports::kMonitorFlag) == 0) {
+        return vellora::CrashReports::runMonitor();
+    }
+
     vellora::Application app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Vellora"));
     QApplication::setOrganizationName(QStringLiteral("Vellora"));
@@ -29,10 +38,18 @@ int main(int argc, char** argv) {
                                     QStringLiteral("name"));
     scriptOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(scriptOption);
+    // Hidden: installs crash reporting and then crashes on purpose (the crash-report tests).
+    QCommandLineOption crashOption(QStringLiteral("crash-test"),
+                                   QStringLiteral("Crash on purpose, to test crash reports."));
+    crashOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(crashOption);
     parser.process(app);
     const QStringList files = parser.positionalArguments();
     const QString scriptName = parser.value(scriptOption);
     const bool scripted = parser.isSet(scriptOption);
+    const bool crashTest = parser.isSet(crashOption);
+    // A measurement or a test run stands alone: no other instance, none of the user's settings.
+    const bool isolated = scripted || crashTest;
 
     QTextStream err(stderr);
     if (scripted && !vellora::DiagnosticsScript::isScenario(scriptName)) {
@@ -62,6 +79,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Crash dumps of this process, written by a monitor process (ADR-0019). Not for a measurement
+    // run, which must not start extra processes.
+    if (!scripted) {
+        const QString problem = vellora::CrashReports::install();
+        if (!problem.isEmpty()) {
+            qWarning("crash dumps are not available: %s", qPrintable(problem));
+        }
+    }
+
     // Files are given relative to where the command was run; a running instance has another
     // working directory.
     const QStringList paths = vellora::resolvePaths(files, QDir::currentPath());
@@ -69,7 +95,7 @@ int main(int argc, char** argv) {
     // One instance per user: a second launch hands its files to the first and leaves. A scripted
     // session is a measurement and always runs on its own.
     vellora::SingleInstance instance;
-    if (!scripted) {
+    if (!isolated) {
         if (instance.forward(paths)) {
             return 0;
         }
@@ -80,7 +106,7 @@ int main(int argc, char** argv) {
     // application touches them, and a scripted session does not either.
     QSettings nativeSettings;
     vellora::AppSettings settings(&nativeSettings);
-    vellora::MainWindow window(scripted ? nullptr : &settings);
+    vellora::MainWindow window(isolated ? nullptr : &settings);
     QObject::connect(
         &window, &vellora::MainWindow::tabAdded, &window,
         [&watchdog](vellora::DocumentTab* tab) { watchdog.watch(tab->canvas().canvas()); });
@@ -100,6 +126,13 @@ int main(int argc, char** argv) {
     // `vellora a.pdf b.pdf` opens each file in a tab.
     for (const QString& failed : window.openDocuments(paths)) {
         err << "vellora: cannot open " << failed << '\n';
+    }
+
+    if (crashTest) {
+        QTimer::singleShot(200, &app, [] { vellora::CrashReports::crashNow(); });
+    } else if (!scripted) {
+        // Crash reports written since the user last looked: offer to show them.
+        window.checkForCrashReports();
     }
 
     vellora::DiagnosticsScript script(window.canvas().controller());
@@ -125,6 +158,7 @@ int main(int argc, char** argv) {
         });
     }
     const int result = QApplication::exec();
+    vellora::CrashReports::uninstall();
     vellora::Logging::stop();
     return result;
 }

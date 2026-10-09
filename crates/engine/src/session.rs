@@ -295,10 +295,14 @@ impl Host<'_> {
                 rect,
                 slot,
                 priority,
-            } => (
-                self.enqueue(req_id, page, scale, rect, slot, priority),
-                Flow::Continue,
-            ),
+            } => {
+                #[cfg(debug_assertions)]
+                forced_failure();
+                (
+                    self.enqueue(req_id, page, scale, rect, slot, priority),
+                    Flow::Continue,
+                )
+            }
             // No answer either way: what was queued is dropped, what is rendering is not sent.
             Request::Cancel { req_id } => {
                 let found = self.queue.cancel(req_id);
@@ -458,6 +462,23 @@ fn render_tile(region: &mut TileRegion, req_id: RequestId, job: &TileJob) -> Res
             tracing::warn!(page = job.page, %error, "tile could not be rendered");
             error_response(Some(req_id), ErrorKind::RenderFailed, &error)
         }
+    }
+}
+
+/// Debug builds only: lets a test make the engine fail the way a real failure would, to check what
+/// the UI records. `VELLORA_TEST_ENGINE_CRASH=panic` panics while handling a tile request (the
+/// session catches it and answers with an internal error); `abort` ends the process. Release
+/// builds do not contain this.
+#[cfg(debug_assertions)]
+#[allow(clippy::panic)] // the point of the function
+fn forced_failure() {
+    match std::env::var("VELLORA_TEST_ENGINE_CRASH").as_deref() {
+        Ok("panic") => panic!("forced engine panic (VELLORA_TEST_ENGINE_CRASH)"),
+        Ok("abort") => {
+            tracing::error!("forced engine abort (VELLORA_TEST_ENGINE_CRASH)");
+            std::process::abort();
+        }
+        _ => {}
     }
 }
 

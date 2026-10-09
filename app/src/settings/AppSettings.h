@@ -8,6 +8,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QSettings>
 #include <QString>
@@ -37,6 +38,10 @@ public:
 
     QString lastDirectory() const;
     void setLastDirectory(const QString& directory);
+
+    // Crash reports modified before this have been shown to the user (null: none yet).
+    QDateTime crashReportsSeenUntil() const;
+    void setCrashReportsSeenUntil(const QDateTime& when);
 
     // Most recent first, at most `kMaxRecentFiles`, absolute and cleaned paths.
     QStringList recentFiles() const;

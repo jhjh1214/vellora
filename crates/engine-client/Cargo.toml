@@ -24,6 +24,9 @@ cxx = { workspace = true }
 # The UI process's log (task 9b): events from the client, and the engine's log lines.
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Local minidumps of the UI process (ADR-0019).
+crash-handler = { workspace = true }
+minidumper = { workspace = true }
 
 [build-dependencies]
 cxx-build = { workspace = true }

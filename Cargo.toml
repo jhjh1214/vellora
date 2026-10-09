@@ -64,6 +64,10 @@ libloading = "0.9"
 memmap2 = "0.9"
 tempfile = "3"
 libc = "0.2"
+# `vellora-engine-client` only (ADR-0019): a crash handler in the UI process and a monitor process that
+# writes the minidump, all local.
+crash-handler = "0.8"
+minidumper = "0.11"
 # `vellora-engine` on Linux only (ADR-0018): Landlock file-system rules and the seccomp-bpf filter.
 landlock = "0.4"
 seccompiler = "0.5"

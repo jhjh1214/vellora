@@ -19,6 +19,7 @@
 #include <QStringList>
 
 class QDialog;
+class QUrl;
 class QLabel;
 class QMenu;
 class QTabWidget;
@@ -73,6 +74,15 @@ public:
     // What shows a folder; the default asks the desktop (tests replace it).
     using FolderOpener = std::function<bool(const QString& folder)>;
     void setFolderOpener(FolderOpener opener) { m_folderOpener = std::move(opener); }
+    // What opens a web address (the issue form of the crash dialog); tests replace it.
+    using UrlOpener = std::function<bool(const QUrl& url)>;
+    void setUrlOpener(UrlOpener opener) { m_urlOpener = std::move(opener); }
+
+    // If crash reports were written in `directory` (the crash folder if empty) since the user last
+    // looked, opens the dialog that offers to show the folder or open the issue form, and returns
+    // it. Null when there is nothing new. Whatever the user chooses, these reports are not shown
+    // again. Nothing is uploaded.
+    QDialog* checkForCrashReports(const QString& directory = {});
 
     // What the window asks when a document needs a password (all tabs, present and future).
     void setPasswordProvider(PasswordProvider provider);
@@ -116,6 +126,9 @@ private:
     QLabel* m_zoomStatus = nullptr;
     PasswordProvider m_passwordProvider;
     FolderOpener m_folderOpener;
+    UrlOpener m_urlOpener;
+    // Used when there are no settings to keep it in.
+    QDateTime m_crashSeenUntil;
     QStringList m_closedTabs; // most recent last
     QList<QAction*> m_recentFixedActions;
 };

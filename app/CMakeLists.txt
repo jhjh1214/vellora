@@ -48,6 +48,11 @@ if(VELLORA_CARGO_TOML MATCHES "\\[workspace\\.package\\][^\\[]*[\r\n]version = \
 else()
   message(FATAL_ERROR "no [workspace.package] version in ${VELLORA_ROOT}/Cargo.toml")
 endif()
+if(VELLORA_CARGO_TOML MATCHES "\\[workspace\\.package\\][^\\[]*[\r\n]repository = \"([^\"]+)\"")
+  set(VELLORA_REPOSITORY "${CMAKE_MATCH_1}")
+else()
+  message(FATAL_ERROR "no [workspace.package] repository in ${VELLORA_ROOT}/Cargo.toml")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELLORA_ROOT}/Cargo.toml")
 set(VELLORA_COMMIT "unknown")
 find_package(Git QUIET)
@@ -83,6 +88,8 @@ corrosion_set_env_vars(vellora_engine_client "VELLORA_CXXBRIDGE_DIR=${VELLORA_CX
 add_library(vellora_shell STATIC
   src/AboutDialog.cpp
   src/AboutDialog.h
+  src/CrashDialog.cpp
+  src/CrashDialog.h
   src/DocumentTab.cpp
   src/DocumentTab.h
   src/LicensesDialog.cpp
@@ -112,6 +119,8 @@ add_library(vellora_shell STATIC
   src/diagnostics/Application.cpp
   src/diagnostics/Application.h
   src/diagnostics/DiagnosticsScript.cpp
+  src/diagnostics/CrashReports.cpp
+  src/diagnostics/CrashReports.h
   src/diagnostics/DiagnosticsScript.h
   src/diagnostics/Logging.cpp
   src/diagnostics/Logging.h

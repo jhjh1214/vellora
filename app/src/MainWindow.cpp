@@ -1,7 +1,9 @@
 #include "MainWindow.h"
 
 #include "AboutDialog.h"
+#include "CrashDialog.h"
 #include "RepairBar.h"
+#include "diagnostics/CrashReports.h"
 #include "diagnostics/Logging.h"
 
 #include <QAction>
@@ -274,6 +276,45 @@ bool MainWindow::openLogFolder() {
         return m_folderOpener(folder);
     }
     return QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+}
+
+QDialog* MainWindow::checkForCrashReports(const QString& directory) {
+    const QString folder = directory.isEmpty() ? CrashReports::directory() : directory;
+    const QDateTime seen =
+        m_settings != nullptr ? m_settings->crashReportsSeenUntil() : m_crashSeenUntil;
+    const QList<CrashReports::Report> reports = CrashReports::pending(folder, seen);
+    if (reports.isEmpty()) {
+        return nullptr;
+    }
+    // The newest report is the mark: later ones are new, these are not shown again.
+    const QDateTime newest = reports.first().modified;
+    auto* dialog = new CrashDialog(reports, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &CrashDialog::chosen, this,
+            [this, folder, reports, newest](CrashDialog::Choice choice) {
+                if (m_settings != nullptr) {
+                    m_settings->setCrashReportsSeenUntil(newest);
+                    m_settings->sync();
+                } else {
+                    m_crashSeenUntil = newest;
+                }
+                if (choice == CrashDialog::Choice::OpenFolder) {
+                    if (m_folderOpener) {
+                        m_folderOpener(folder);
+                    } else {
+                        QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+                    }
+                } else if (choice == CrashDialog::Choice::Report) {
+                    const QUrl url = CrashReports::issueUrl(reports);
+                    if (m_urlOpener) {
+                        m_urlOpener(url);
+                    } else {
+                        QDesktopServices::openUrl(url);
+                    }
+                }
+            });
+    dialog->open();
+    return dialog;
 }
 
 void MainWindow::setPasswordProvider(PasswordProvider provider) {

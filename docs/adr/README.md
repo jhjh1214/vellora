@@ -24,3 +24,4 @@ We record every significant architectural decision as an ADR ([MADR](https://adr
 | [0016](0016-re-open-after-commit-strategy.md) | Re-open-after-commit strategy: keep ADR-0002's re-open of the new revision | Accepted |
 | [0017](0017-engine-sandbox-on-windows.md) | Engine sandbox on Windows: AppContainer, handle list, jailed before it runs | Accepted |
 | [0018](0018-engine-sandbox-on-linux.md) | Engine sandbox on Linux: Landlock, seccomp deny list, sealed tile region | Accepted |
+| [0019](0019-local-crash-dumps-with-crash-handler-and-minidumper.md) | Local crash dumps with `crash-handler` and `minidumper`, written by a monitor process | Accepted |
