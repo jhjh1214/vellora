@@ -6,6 +6,7 @@
 |---|---|---|---|
 | **UI** (`vellora` desktop app) | C++/Qt + Rust client staticlib | Trusted. Never parses PDF bytes. | Windows, user file access (dialogs), OS key stores (signing, later), network (opt-in features only), crash-dump writing |
 | **Engine** (`vellora-engine`), one per open document | Rust + PDFium | **Untrusted**: assume compromise is possible | Document session, parsing, rendering, analysis, serialisation of new revisions |
+| **Crash monitor** (`vellora --crash-monitor`) | Rust | Trusted (it is the same executable) | Writes the minidump of the UI process when it crashes, then exits ([ADR-0019](../adr/0019-local-crash-dumps-with-crash-handler-and-minidumper.md)). No windows, no network. |
 | Render helpers (later) | Rust + PDFium | Untrusted | Extra read-only PDFium instances for parallel tiles |
 | OCR worker (Phase 10) | Rust + Tesseract | Untrusted | OCR jobs |
 | CLI (`vellora`) | Rust | Runs pure-Rust core in-process; spawns an engine for rendering | — |

@@ -12,6 +12,7 @@ namespace {
 
 constexpr auto kGeometry = "window/geometry";
 constexpr auto kLastDirectory = "files/lastDirectory";
+constexpr auto kCrashSeen = "crashes/seenUntilMs";
 constexpr auto kRecent = "files/recent";
 constexpr auto kViewStates = "views";
 
@@ -89,6 +90,21 @@ QString AppSettings::lastDirectory() const {
 void AppSettings::setLastDirectory(const QString& directory) {
     if (m_settings) {
         m_settings->setValue(QLatin1String(kLastDirectory), directory);
+    }
+}
+
+QDateTime AppSettings::crashReportsSeenUntil() const {
+    if (!m_settings) {
+        return {};
+    }
+    bool ok = false;
+    const qint64 ms = m_settings->value(QLatin1String(kCrashSeen)).toLongLong(&ok);
+    return ok && ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms) : QDateTime();
+}
+
+void AppSettings::setCrashReportsSeenUntil(const QDateTime& when) {
+    if (m_settings && when.isValid()) {
+        m_settings->setValue(QLatin1String(kCrashSeen), when.toMSecsSinceEpoch());
     }
 }
 

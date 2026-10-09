@@ -10,5 +10,7 @@ inline constexpr const char* kVersion = "@VELLORA_VERSION@";
 inline constexpr const char* kCommit = "@VELLORA_COMMIT@";
 // The day CMake ran, UTC (or SOURCE_DATE_EPOCH, for reproducible builds).
 inline constexpr const char* kBuildDate = "@VELLORA_BUILD_DATE@";
+// The project's home on GitHub (Cargo.toml), where bug reports go.
+inline constexpr const char* kRepository = "@VELLORA_REPOSITORY@";
 
 } // namespace vellora::buildinfo

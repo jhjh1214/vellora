@@ -14,6 +14,7 @@ app/
 ├─ src/
 │  ├─ main.cpp
 │  ├─ MainWindow.{h,cpp}        # menu bar, tabs, File -> Open / Open Recent, status bar
+│  ├─ diagnostics/CrashReports.*, CrashDialog.*  # crash dumps (monitor process), the next-start dialog
 │  ├─ diagnostics/Logging.*          # Qt messages -> the application log (rotating files)
 │  ├─ AboutDialog.*, LicensesDialog.*   # Help -> About, third-party licenses (embedded THIRD_PARTY_LICENSES)
 │  ├─ DocumentTab.{h,cpp}       # one document: engine session, canvas, repair bar, password prompt

@@ -76,7 +76,11 @@ fn read_line(input: &mut impl BufRead) -> Option<Vec<u8>> {
 /// while there are bytes left in the budget, into the log (or to this process's standard error when
 /// logging is not set up, as before the pipe existed, so that development runs and tests still show
 /// the engine's output).
-pub(crate) fn spawn_reader(pid: u32, stderr: File, tail: Arc<LineRing>) {
+pub(crate) fn spawn_reader(
+    pid: u32,
+    stderr: File,
+    tail: Arc<LineRing>,
+) -> Option<thread::JoinHandle<()>> {
     let spawned = thread::Builder::new()
         .name("vellora-engine-log".into())
         .spawn(move || {
@@ -109,10 +113,14 @@ pub(crate) fn spawn_reader(pid: u32, stderr: File, tail: Arc<LineRing>) {
                 tail.push(format!("[engine {pid}] {line}"));
             }
         });
-    if let Err(error) = spawned {
-        // Without the thread nobody drains the pipe; the engine will stall at its next log line,
-        // which the client's deadlines turn into a restart.
-        tracing::error!(%error, "cannot start the thread that reads the engine's log");
+    match spawned {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            // Without the thread nobody drains the pipe; the engine will stall at its next log
+            // line, which the client's deadlines turn into a restart.
+            tracing::error!(%error, "cannot start the thread that reads the engine's log");
+            None
+        }
     }
 }
 

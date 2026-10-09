@@ -98,6 +98,12 @@ pub const DEFAULT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default time from the engine's `Hello` to its answer to `Open`.
 pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The least time between two engine incident reports.
+const INCIDENT_SPACING: Duration = Duration::from_secs(10);
+
+/// How long a crashed engine's last log lines are waited for before the report is written.
+const LOG_DRAIN_PATIENCE: Duration = Duration::from_millis(500);
+
 /// The environment variable that sets the engine's log level (`error` ... `trace`).
 const LOG_LEVEL_ENV: &str = "VELLORA_LOG";
 
@@ -136,6 +142,9 @@ pub struct ClientConfig {
     /// How long the engine may take to answer `Open` after its `Hello` before it is killed
     /// ([`Stage::Open`]).
     pub open_timeout: Duration,
+    /// Where to record engine incidents (it ended unasked, or reported an internal error) with
+    /// the last lines it printed ([`crate::crash::write_engine_report`]); `None` records nothing.
+    pub crash_dir: Option<PathBuf>,
 }
 
 impl ClientConfig {
@@ -153,6 +162,7 @@ impl ClientConfig {
             cache_budget_bytes: DEFAULT_BUDGET_BYTES,
             hello_timeout: DEFAULT_HELLO_TIMEOUT,
             open_timeout: DEFAULT_OPEN_TIMEOUT,
+            crash_dir: None,
         }
     }
 }
@@ -417,6 +427,8 @@ struct State {
     events: VecDeque<Event>,
     ledger: Ledger,
     process: Option<EngineProcess>,
+    /// The thread that reads the current engine's log lines; it ends when the engine does.
+    log_reader: Option<thread::JoinHandle<()>>,
     opened: Option<OpenedInfo>,
     /// The password the user gave, while the engine is taking it or has accepted it. Kept so that
     /// an engine that is restarted after a crash can open the document again without asking; it is
@@ -523,6 +535,8 @@ struct Shared {
     sink: Mutex<Sink>,
     /// The last lines the engines printed, for a crash report.
     engine_log: Arc<LineRing>,
+    /// When an incident was last recorded, so that a crash loop does not flood the folder.
+    last_incident: Mutex<Option<Instant>>,
     /// Signals events to [`Client::wait_events`].
     wake: Condvar,
     /// Signals the watchdog that a deadline may have changed.
@@ -530,6 +544,29 @@ struct Shared {
 }
 
 impl Shared {
+    /// Records that the engine ended unasked or reported an internal error, with the last lines it
+    /// printed, if [`ClientConfig::crash_dir`] says where. At most one every [`INCIDENT_SPACING`].
+    fn record_incident(&self, what: &str, details: &str) {
+        let Some(dir) = &self.config.crash_dir else {
+            return;
+        };
+        {
+            let mut last = self
+                .last_incident
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let now = Instant::now();
+            if last.is_some_and(|at| now.duration_since(at) < INCIDENT_SPACING) {
+                return;
+            }
+            *last = Some(now);
+        }
+        match crate::crash::write_engine_report(dir, what, details, &self.engine_log.tail()) {
+            Ok(path) => tracing::warn!(what, report = %path.display(), "engine incident recorded"),
+            Err(error) => tracing::error!(%error, "cannot record the engine incident"),
+        }
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         // A poisoned lock only means another thread panicked; the state stays consistent
         // because every critical section is a few plain assignments.
@@ -560,6 +597,7 @@ enum End {
 /// A freshly started engine, not yet installed.
 struct Launched {
     process: EngineProcess,
+    log_reader: Option<thread::JoinHandle<()>>,
     writer: BufWriter<File>,
     stdout: File,
 }
@@ -592,6 +630,7 @@ impl Client {
                 events: VecDeque::new(),
                 ledger: Ledger::new(config.max_restarts),
                 process: None,
+                log_reader: None,
                 opened: None,
                 password: None,
                 cache: TileCache::new(config.geometry, config.cache_budget_bytes),
@@ -603,6 +642,7 @@ impl Client {
             }),
             sink: Mutex::new(Sink(None)),
             engine_log: Arc::new(LineRing::new(crate::capture::TAIL_LINES)),
+            last_incident: Mutex::new(None),
             wake: Condvar::new(),
             watch: Condvar::new(),
             config,
@@ -983,9 +1023,9 @@ fn launch(shared: &Shared) -> Result<Launched, ClientError> {
         return Err(ClientError::EngineUnavailable);
     };
     // The engine's log lines: someone must read them, or its next log line would block.
-    if let Some(stderr) = process.take_stderr() {
-        crate::capture::spawn_reader(process.id(), stderr, Arc::clone(&shared.engine_log));
-    }
+    let log_reader = process.take_stderr().and_then(|stderr| {
+        crate::capture::spawn_reader(process.id(), stderr, Arc::clone(&shared.engine_log))
+    });
     tracing::info!(pid = process.id(), "engine started");
     let mut writer = BufWriter::new(stdin);
     // The engine says `Hello` first and reads ours afterwards, but a pipe holds both of our
@@ -1007,6 +1047,7 @@ fn launch(shared: &Shared) -> Result<Launched, ClientError> {
     )?;
     Ok(Launched {
         process,
+        log_reader,
         writer,
         stdout,
     })
@@ -1017,6 +1058,7 @@ fn launch(shared: &Shared) -> Result<Launched, ClientError> {
 fn install(shared: &Arc<Shared>, launched: Launched, restarted: bool) -> Result<(), ClientError> {
     let Launched {
         process,
+        log_reader,
         writer,
         stdout,
     } = launched;
@@ -1034,6 +1076,7 @@ fn install(shared: &Arc<Shared>, launched: Launched, restarted: bool) -> Result<
         .spawn(move || read_responses(&reader_shared, generation, stdout))
         .map_err(ClientError::Thread)?;
     state.process = Some(process);
+    state.log_reader = log_reader;
     state.phase = Phase::Running;
     let now = Instant::now();
     state.startup = Some((Stage::Hello, now + shared.config.hello_timeout));
@@ -1077,8 +1120,18 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
                     return;
                 }
                 state.activity = Instant::now();
+                let mut incident = None;
                 match state.ledger.accept(response) {
                     Accepted::Event(event) => {
+                        if let Event::RequestFailed {
+                            kind: ErrorKind::Internal,
+                            message,
+                            ..
+                        } = &event
+                        {
+                            // A panic the engine caught, or another failure of its own.
+                            incident = Some(message.clone());
+                        }
                         // `Open` is answered, if only with a refusal.
                         if matches!(
                             event,
@@ -1113,6 +1166,19 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
                     Accepted::Dropped => {}
                     Accepted::Violation => break End::Violation,
                 }
+                drop(state);
+                if let Some(message) = incident {
+                    // The engine prints a panic's message just before it answers; give the log
+                    // reader a moment to take it, without holding up this thread.
+                    let shared = Arc::clone(shared);
+                    let _ = thread::Builder::new()
+                        .name("vellora-incident".into())
+                        .spawn(move || {
+                            thread::sleep(Duration::from_millis(150));
+                            shared
+                                .record_incident("the engine reported an internal error", &message);
+                        });
+                }
             }
             Ok(None) | Err(vellora_ipc::Error::Io(_)) => break End::Eof,
             Err(_) => break End::Violation,
@@ -1130,8 +1196,9 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
             return;
         }
         state.phase = Phase::Restarting;
-        state.process.take()
+        (state.process.take(), state.log_reader.take())
     };
+    let (process, log_reader) = process;
     let Some(mut process) = process else { return };
     if end == End::Violation {
         process.kill();
@@ -1139,6 +1206,18 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
     let crash = process.crash(CRASH_GRACE);
     tracing::warn!(?crash, "engine ended without being asked");
     drop(process);
+    // The process is gone, so its log pipe ends: let the reader take the last lines (a panic
+    // message, say) before the report copies them.
+    if let Some(reader) = &log_reader {
+        let deadline = Instant::now() + LOG_DRAIN_PATIENCE;
+        while !reader.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    shared.record_incident(
+        "the engine ended without being asked",
+        &format!("{crash:?}"),
+    );
     // Dropped only now: a write blocked on the dying engine's pipe fails when the process is gone.
     shared.sink().0 = None;
 

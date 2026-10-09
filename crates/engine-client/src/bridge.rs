@@ -30,6 +30,7 @@ use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId};
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
 use crate::client::{Client, ClientConfig, ClientError, Event, Stage, TILE_PIXELS, TileLookup};
+use crate::crash::{self, CrashError, CrashGuard};
 use crate::document::Change;
 use crate::logging::{self, LogConfig, LogError, LogGuard};
 
@@ -168,6 +169,31 @@ mod ffi {
     }
 
     extern "Rust" {
+        /// Crash reporting (task 9c, ADR-0019); `stop` detaches the handler and ends the monitor.
+        type CrashHandle;
+
+        /// The folder crash reports go to (`VELLORA_CRASH_DIR` overrides it).
+        fn default_crash_directory() -> String;
+
+        /// Starts the crash monitor (`monitor_exe` run with `--crash-monitor`) and attaches the
+        /// crash handler to this process. `info` (version, commit, system) goes beside every dump.
+        /// Throws if the monitor cannot be started: the application then runs without dumps.
+        fn install_crash_handler(
+            directory: &str,
+            monitor_exe: &str,
+            info: &str,
+        ) -> Result<Box<CrashHandle>>;
+
+        /// Detaches the handler and ends the monitor. Safe to call twice.
+        fn stop(self: &mut CrashHandle);
+
+        /// The monitor: serves the application until it goes away or crashes, writing the dump
+        /// into the folder it was told. Returns the process exit code. Called instead of starting
+        /// the application, when it was started with `--crash-monitor <socket> <folder>`. It reads
+        /// its own command line, because a Windows `argv` loses the characters outside the code
+        /// page (user names!).
+        fn run_crash_monitor() -> i32;
+
         /// The running log (task 9b); `stop` writes what is queued and ends it.
         type LogHandle;
 
@@ -263,6 +289,58 @@ pub use ffi::{
     TileTicket, TimeoutStage,
 };
 
+/// Crash reporting behind the bridge's opaque handle. `None` after `stop`.
+#[derive(Debug)]
+pub struct CrashHandle {
+    guard: Option<CrashGuard>,
+}
+
+/// The default crash folder as text (the bridge's `default_crash_directory`).
+#[must_use]
+pub fn default_crash_directory() -> String {
+    crash::default_crash_dir().to_string_lossy().into_owned()
+}
+
+/// Starts crash reporting; see the bridge's `install_crash_handler`.
+///
+/// # Errors
+///
+/// [`CrashError`], which the bridge turns into an exception.
+pub fn install_crash_handler(
+    directory: &str,
+    monitor_exe: &str,
+    info: &str,
+) -> Result<Box<CrashHandle>, CrashError> {
+    let dir = if directory.is_empty() {
+        crash::default_crash_dir()
+    } else {
+        PathBuf::from(directory)
+    };
+    Ok(Box::new(CrashHandle {
+        guard: Some(crash::install(&dir, Path::new(monitor_exe), info)?),
+    }))
+}
+
+impl CrashHandle {
+    /// Detaches the handler and ends the monitor.
+    pub fn stop(&mut self) {
+        self.guard = None;
+    }
+}
+
+/// Runs the crash monitor with the process's own command line; see the bridge's
+/// `run_crash_monitor`. Exit code 2 if the command line is not `--crash-monitor <socket> <folder>`.
+#[must_use]
+pub fn run_crash_monitor() -> i32 {
+    let mut args = env::args_os().skip(1);
+    match (args.next(), args.next(), args.next(), args.next()) {
+        (Some(flag), Some(socket), Some(dir), None) if flag == crash::MONITOR_FLAG => {
+            crash::run_monitor(Path::new(&socket), Path::new(&dir))
+        }
+        _ => 2,
+    }
+}
+
 /// The running log behind the bridge's opaque handle. `None` after `stop`.
 #[derive(Debug)]
 pub struct LogHandle {
@@ -338,7 +416,9 @@ pub struct EngineClient {
 /// [`ClientError`], which the bridge turns into an exception.
 pub fn open(path: &str) -> Result<Box<EngineClient>, ClientError> {
     let geometry = TileCache::geometry_for_budget(DEFAULT_BUDGET_BYTES)?;
-    let config = ClientConfig::new(engine_executable(), geometry);
+    let mut config = ClientConfig::new(engine_executable(), geometry);
+    // The application records engine incidents; library users and tests choose for themselves.
+    config.crash_dir = Some(crash::default_crash_dir());
     open_with(config, Path::new(path))
 }
 
