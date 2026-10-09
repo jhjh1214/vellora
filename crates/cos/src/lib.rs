@@ -38,27 +38,38 @@
 //!   (task 11)
 //! - the writers in [`write`]: canonical object serialisation, incremental updates and full
 //!   rewrites (task 12)
+//! - for navigation (M1 task 12a): text strings in [`textstring`], name and number trees in
+//!   [`trees`], destinations in [`dest`], the outline a level at a time in [`outline`] and page
+//!   labels in [`labels`]
 
 pub mod crypt;
+pub mod dest;
 pub mod error;
 pub mod filter;
+pub mod labels;
 pub mod lexer;
 pub mod limits;
 pub mod object;
 pub mod objstm;
+pub mod outline;
 pub mod pages;
 pub mod parser;
 pub mod recovery;
 pub mod source;
 pub mod store;
+pub mod textstring;
+pub mod trees;
 pub mod write;
 pub mod xref;
 
 pub use crypt::{CryptMethod, Decryptor, Encryption, EncryptionInfo, PasswordRole};
+pub use dest::{Destination, DestinationResolver, Fit, PageIndex};
 pub use error::{EncryptionError, Error, Result, SyntaxKind, WriteError};
+pub use labels::PageLabels;
 pub use limits::{DecodeBudget, LimitKind, Limits, ScanBudget};
 pub use object::{Dict, DictEntry, IndirectObject, ObjRef, Object, ObjectKind, Recovery, Stream};
 pub use objstm::ObjectStream;
+pub use outline::{Outline, OutlineItem, OutlinePage, TitleStyle};
 pub use pages::{Inherited, Page, Pages};
 pub use parser::{LengthResolver, Parser};
 pub use recovery::{RepairReason, object_header_at, rebuild};

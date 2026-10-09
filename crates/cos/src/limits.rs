@@ -39,6 +39,8 @@ pub enum LimitKind {
     ReferenceDepth,
     /// Bytes searched for `endstream` while recovering stream lengths ([`ScanBudget`]).
     ScanBytes,
+    /// Nodes visited in one walk of a name tree, a number tree or an outline.
+    TreeNodes,
 }
 
 impl LimitKind {
@@ -58,6 +60,7 @@ impl LimitKind {
             Self::Revisions => "revision count",
             Self::ReferenceDepth => "reference chain length",
             Self::ScanBytes => "stream recovery scan budget",
+            Self::TreeNodes => "tree node count",
         }
     }
 }
@@ -107,6 +110,9 @@ pub struct Limits {
     /// The per-document `endstream` search budget is this many times the file size, if that is
     /// more than [`min_scan_bytes`](Self::min_scan_bytes). Default 4.
     pub scan_bytes_per_file_byte: u64,
+    /// Maximum nodes one walk of a name tree, a number tree or an outline may visit, and the most
+    /// entries it may collect. Default 262,144.
+    pub max_tree_nodes: u64,
 }
 
 impl Default for Limits {
@@ -126,6 +132,7 @@ impl Default for Limits {
             max_cache_bytes: 64 * 1024 * 1024,
             min_scan_bytes: 64 * 1024 * 1024,
             scan_bytes_per_file_byte: 4,
+            max_tree_nodes: 1 << 18,
         }
     }
 }
@@ -150,6 +157,7 @@ impl Limits {
             LimitKind::Revisions => self.max_revisions,
             LimitKind::ReferenceDepth => u64::from(self.max_reference_depth),
             LimitKind::ScanBytes => self.min_scan_bytes,
+            LimitKind::TreeNodes => self.max_tree_nodes,
         }
     }
 
@@ -299,7 +307,7 @@ impl ScanBudget {
 mod tests {
     use super::*;
 
-    const ALL: [LimitKind; 12] = [
+    const ALL: [LimitKind; 13] = [
         LimitKind::DecodedStreamBytes,
         LimitKind::TotalDecodeBytes,
         LimitKind::DecompressionRatio,
@@ -312,6 +320,7 @@ mod tests {
         LimitKind::Revisions,
         LimitKind::ReferenceDepth,
         LimitKind::ScanBytes,
+        LimitKind::TreeNodes,
     ];
 
     #[test]
@@ -331,6 +340,7 @@ mod tests {
         assert_eq!(l.max_cache_bytes, 64 * 1024 * 1024);
         assert_eq!(l.min_scan_bytes, 64 * 1024 * 1024);
         assert_eq!(l.scan_bytes_per_file_byte, 4);
+        assert_eq!(l.max_tree_nodes, 262_144);
     }
 
     #[test]
