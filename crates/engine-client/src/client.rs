@@ -73,8 +73,8 @@ use std::time::{Duration, Instant};
 
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
-    ErrorKind, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request, RequestId,
-    Response, SlotId, TileRect, check_version, read_frame, write_frame,
+    ErrorKind, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
+    RequestId, Response, SlotId, TileRect, check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
 
@@ -277,6 +277,41 @@ pub enum Event {
         /// The slot that now holds the pixels.
         slot: SlotId,
     },
+    /// The answer to [`Client::request_outline`].
+    Outline {
+        /// The request it answers.
+        request: RequestId,
+        /// The items of the level, in order (at most 128).
+        items: Vec<OutlineEntry>,
+        /// The level goes on: ask again with `after` set to the last item.
+        more: bool,
+    },
+    /// The answer to [`Client::request_outline_path`].
+    OutlinePath {
+        /// The request it answers.
+        request: RequestId,
+        /// Item ids from a top-level item down to the item that starts the section; empty if no
+        /// item starts at or before the page.
+        path: Vec<u32>,
+    },
+    /// The answer to [`Client::request_page_labels`].
+    PageLabels {
+        /// The request it answers.
+        request: RequestId,
+        /// Zero-based index of the first page labelled.
+        first: u32,
+        /// Whether the document defines page labels; if not, `labels` are the page numbers.
+        defined: bool,
+        /// One label per page from `first`.
+        labels: Vec<String>,
+    },
+    /// The answer to [`Client::find_page_label`].
+    PageFound {
+        /// The request it answers.
+        request: RequestId,
+        /// The zero-based page that has the label, if one does.
+        page: Option<u32>,
+    },
     /// A request failed, or the engine reported a problem of its own (`request` is `None`).
     RequestFailed {
         /// The failed request.
@@ -407,6 +442,48 @@ impl Ledger {
                     Accepted::Dropped
                 }
             }
+            // The answers to navigation requests. A cancelled request may still be answered, and
+            // the caller was told it is gone.
+            Response::Outline {
+                req_id,
+                items,
+                more,
+            } => self.answered(
+                req_id,
+                Event::Outline {
+                    request: req_id,
+                    items,
+                    more,
+                },
+            ),
+            Response::OutlinePath { req_id, path } => self.answered(
+                req_id,
+                Event::OutlinePath {
+                    request: req_id,
+                    path,
+                },
+            ),
+            Response::PageLabels {
+                req_id,
+                first,
+                defined,
+                labels,
+            } => self.answered(
+                req_id,
+                Event::PageLabels {
+                    request: req_id,
+                    first,
+                    defined,
+                    labels,
+                },
+            ),
+            Response::PageFound { req_id, page } => self.answered(
+                req_id,
+                Event::PageFound {
+                    request: req_id,
+                    page,
+                },
+            ),
             Response::Error {
                 req_id,
                 kind,
@@ -419,6 +496,16 @@ impl Ledger {
                     message,
                 }),
             },
+        }
+    }
+
+    /// `event` if `id` is in flight (and so no longer), else the answer to a request nobody waits
+    /// for. Unlike a tile, it does not count as progress for the restart budget.
+    fn answered(&mut self, id: RequestId, event: Event) -> Accepted {
+        if self.pending.remove(&id) {
+            Accepted::Event(event)
+        } else {
+            Accepted::Dropped
         }
     }
 
@@ -995,6 +1082,99 @@ impl Client {
     #[must_use]
     pub fn cached_thumbnails(&self) -> usize {
         self.shared.state().thumbnails.len()
+    }
+
+    /// Asks for one page of one level of the outline: the children of `parent` (the top level for
+    /// `None`), after the item `after` (from the first for `None`), at most `limit` of them
+    /// (1 to 128). `already` is how many items of the level the caller has, which bounds a level
+    /// whose links go round in a circle. The answer is [`Event::Outline`]; when it says `more`,
+    /// ask again with `after` set to its last item. Opening the children of an item is the same
+    /// call with that item as `parent`.
+    ///
+    /// The engine answers from a thread of its own, so this never waits behind tiles; `cancel`
+    /// only stops the client from reporting the answer.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for a `limit` out of
+    /// range.
+    pub fn request_outline(
+        &self,
+        parent: Option<u32>,
+        after: Option<u32>,
+        already: u32,
+        limit: u32,
+    ) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetOutline {
+            req_id,
+            parent,
+            after,
+            already,
+            limit,
+        })
+    }
+
+    /// Asks which outline items lead to the section that `page` (zero-based) is in, to expand the
+    /// tree to it. The answer is [`Event::OutlinePath`]. The first call reads the whole outline
+    /// (bounded by the engine's limits); later ones are quick.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile).
+    pub fn request_outline_path(&self, page: u32) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetOutlinePath { req_id, page })
+    }
+
+    /// Asks for the labels of `count` pages (1 to 1024) from `first` (zero-based). The answer is
+    /// [`Event::PageLabels`]; it stops at the last page.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for a `count` out of
+    /// range.
+    pub fn request_page_labels(&self, first: u32, count: u32) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetPageLabels {
+            req_id,
+            first,
+            count,
+        })
+    }
+
+    /// Asks which page has the label `text` ("iv", "A-3"; an exact match, else one that differs
+    /// in case). The answer is [`Event::PageFound`]. A document without labels has no page with
+    /// any label, so the caller falls back to reading `text` as a page number.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for text over 320 bytes.
+    pub fn find_page_label(&self, text: &str) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::FindPageLabel {
+            req_id,
+            text: text.to_owned(),
+        })
+    }
+
+    /// Registers a request, sends it, and forgets it again if it could not be sent.
+    fn request_navigation(
+        &self,
+        make: impl FnOnce(RequestId) -> Request,
+    ) -> Result<RequestId, ClientError> {
+        let id = {
+            let mut state = self.shared.state();
+            Self::check_running(&state)?;
+            state.begin_request(Instant::now())
+        };
+        self.shared.watch.notify_all();
+        let request = make(id);
+        let sent = match self.shared.sink().0.as_mut() {
+            Some(writer) => write_frame(writer, &request).map_err(ClientError::from),
+            None => Err(ClientError::EngineUnavailable),
+        };
+        if let Err(error) = sent {
+            self.shared.state().ledger.forget(id);
+            return Err(error);
+        }
+        Ok(id)
     }
 
     /// Withdraws a request. Queued work is dropped by the engine; a render already running
@@ -1597,6 +1777,86 @@ mod tests {
             }) if r == id
         ));
         assert!(ledger.pending.is_empty());
+    }
+
+    #[test]
+    fn navigation_answers_clear_their_request_and_are_not_progress() {
+        let mut ledger = Ledger::new(1);
+        assert!(ledger.crashed().1);
+        let (a, b, c, d) = (
+            ledger.begin(),
+            ledger.begin(),
+            ledger.begin(),
+            ledger.begin(),
+        );
+        assert_eq!(
+            ledger.accept(Response::Outline {
+                req_id: a,
+                items: vec![],
+                more: true
+            }),
+            Accepted::Event(Event::Outline {
+                request: a,
+                items: vec![],
+                more: true
+            })
+        );
+        assert_eq!(
+            ledger.accept(Response::OutlinePath {
+                req_id: b,
+                path: vec![3, 4]
+            }),
+            Accepted::Event(Event::OutlinePath {
+                request: b,
+                path: vec![3, 4]
+            })
+        );
+        assert_eq!(
+            ledger.accept(Response::PageLabels {
+                req_id: c,
+                first: 2,
+                defined: true,
+                labels: vec!["iii".into()]
+            }),
+            Accepted::Event(Event::PageLabels {
+                request: c,
+                first: 2,
+                defined: true,
+                labels: vec!["iii".into()]
+            })
+        );
+        assert_eq!(
+            ledger.accept(Response::PageFound {
+                req_id: d,
+                page: Some(4)
+            }),
+            Accepted::Event(Event::PageFound {
+                request: d,
+                page: Some(4)
+            })
+        );
+        assert!(ledger.pending.is_empty());
+        // Four answers in, but no tile: the budget of one restart is still spent.
+        assert!(!ledger.crashed().1);
+    }
+
+    #[test]
+    fn a_navigation_answer_nobody_waits_for_is_dropped() {
+        let mut ledger = Ledger::new(3);
+        let id = ledger.begin();
+        assert!(ledger.forget(id));
+        let late = Response::PageFound {
+            req_id: id,
+            page: None,
+        };
+        assert_eq!(ledger.accept(late), Accepted::Dropped);
+        assert_eq!(
+            ledger.accept(Response::OutlinePath {
+                req_id: RequestId(99),
+                path: vec![]
+            }),
+            Accepted::Dropped
+        );
     }
 
     #[test]

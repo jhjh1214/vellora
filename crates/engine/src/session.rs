@@ -1,13 +1,15 @@
 //! The request loop: one conversation with the UI over a pair of byte streams.
 //!
 //! The engine speaks first (`Hello`), reads the UI's `Hello`, and then serves requests until the
-//! UI says `Close` or goes away. Two threads share the conversation:
+//! UI says `Close` or goes away. Three threads share the conversation:
 //!
 //! - the **reader** (the calling thread) reads and validates requests, answers `Open` and every
 //!   refusal itself, and puts `RenderTile` requests on the priority [`Queue`]; `Cancel` removes
 //!   queued work or marks the running tile so that its result is dropped;
 //! - the **worker** takes tiles in priority order, renders them one at a time into their shared
-//!   memory slots and sends `TileReady`.
+//!   memory slots and sends `TileReady`;
+//! - the **navigator** ([`crate::navigation`]) answers outline, page label and section requests,
+//!   which the reader hands over once the document is open.
 //!
 //! A [`Watchdog`] thread times the tile being rendered against the [`Deadlines`]. Responses can
 //! therefore arrive in a different order than their requests; each carries its `req_id`.
@@ -15,6 +17,7 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -26,6 +29,7 @@ use vellora_render::{self as render, Renderer, TileRect, TileRequest};
 use vellora_shm::{HandleToken, TileRegion};
 
 use crate::document::Document;
+use crate::navigation::{self, OpenDocument};
 use crate::scheduler::{Deadlines, Queue, Watchdog};
 
 /// How a conversation ended without an error.
@@ -163,6 +167,7 @@ impl Engine {
         let slot_bytes = u64::from(region.geometry().slot_bytes());
         let queue = Queue::new();
         let watchdog = Watchdog::new();
+        let (to_navigator, navigator_inbox) = mpsc::channel();
         let mut host = Host {
             renderer,
             file,
@@ -171,15 +176,20 @@ impl Engine {
             slot_bytes,
             document,
             queue: &queue,
+            navigator: Some(to_navigator),
         };
 
         thread::scope(|scope| {
             scope.spawn(|| worker(&queue, &watchdog, region, &output));
             scope.spawn(|| watchdog.run(*deadlines, &**on_hard_deadline));
-            let result = host.read_loop(&mut input, &output);
-            // Wakes the worker and the watchdog; the scope then waits for both to finish.
+            let output = &output;
+            scope.spawn(move || navigation::run(&navigator_inbox, output));
+            let result = host.read_loop(&mut input, output);
+            // Wakes the worker, the watchdog and the navigator; the scope then waits for all three
+            // to finish.
             queue.close();
             watchdog.close();
+            host.navigator = None;
             result
         })
     }
@@ -194,6 +204,8 @@ struct Host<'a> {
     slot_bytes: u64,
     document: &'a mut Option<Arc<Document>>,
     queue: &'a Queue<TileJob>,
+    /// The navigator's inbox; dropped when the conversation ends, which ends that thread.
+    navigator: Option<Sender<navigation::Message>>,
 }
 
 /// A validated tile request waiting for the worker.
@@ -256,7 +268,7 @@ impl Host<'_> {
     fn handle_guarded(&mut self, request: &Request) -> (Option<Response>, Flow) {
         let req_id = match request {
             Request::RenderTile { req_id, .. } => Some(*req_id),
-            _ => None,
+            other => navigation::request_id(other),
         };
         catch_unwind(AssertUnwindSafe(|| self.handle(request))).unwrap_or_else(|_| {
             tracing::error!("a request handler panicked");
@@ -310,7 +322,30 @@ impl Host<'_> {
                 (None, Flow::Continue)
             }
             Request::Close => (None, Flow::Stop),
+            Request::GetOutline { .. }
+            | Request::GetOutlinePath { .. }
+            | Request::GetPageLabels { .. }
+            | Request::FindPageLabel { .. } => (self.navigate(request), Flow::Continue),
         }
+    }
+
+    /// Hands a navigation request to the navigator, which answers it. `Some` is a refusal to send
+    /// at once.
+    fn navigate(&self, request: &Request) -> Option<Response> {
+        let req_id = navigation::request_id(request);
+        if self.document.is_none() {
+            return Some(error_response(
+                req_id,
+                ErrorKind::InvalidRequest,
+                &"no document is open",
+            ));
+        }
+        let sent = self.navigator.as_ref().is_some_and(|inbox| {
+            inbox
+                .send(navigation::Message::Ask(request.clone()))
+                .is_ok()
+        });
+        (!sent).then(|| error_response(req_id, ErrorKind::Internal, &"navigation is not available"))
     }
 
     fn open(&mut self, handle_token: u64, password: Option<&Password>) -> Response {
@@ -329,12 +364,21 @@ impl Host<'_> {
             );
         }
         match Document::open(self.renderer, self.file, self.max_document_bytes, password) {
-            Ok(document) => {
+            Ok(mut document) => {
                 let response = Response::Opened {
                     page_count: document.page_count,
                     page_sizes: document.page_sizes.clone(),
                     repairs: document.repairs.clone(),
                 };
+                // Before the answer goes out, so that a navigation request sent on seeing
+                // `Opened` finds the navigator told. A closed inbox shows up in `navigate`.
+                if let Some(inbox) = &self.navigator {
+                    let _ = inbox.send(navigation::Message::Open(OpenDocument {
+                        mapped: Arc::clone(&document.mapped),
+                        page_count: document.page_count,
+                        unlock: std::mem::take(&mut document.unlock),
+                    }));
+                }
                 *self.document = Some(Arc::new(document));
                 response
             }
@@ -504,7 +548,7 @@ impl From<vellora_shm::Error> for SlotFailure {
 }
 
 /// An `Error` response, with the message cut to the protocol's limit on a character boundary.
-fn error_response(
+pub(crate) fn error_response(
     req_id: Option<RequestId>,
     kind: ErrorKind,
     message: &dyn std::fmt::Display,
@@ -537,7 +581,7 @@ fn send<W: Write>(output: &mut W, response: &Response) -> Result<bool, vellora_i
 }
 
 /// [`send`] on the output the reader and the worker share, so that frames never interleave.
-fn send_shared<W: Write>(
+pub(crate) fn send_shared<W: Write>(
     output: &Mutex<W>,
     response: &Response,
 ) -> Result<bool, vellora_ipc::Error> {
