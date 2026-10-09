@@ -15,6 +15,7 @@
 #include <QHash>
 #include <QSet>
 #include <QStringList>
+#include <QTimer>
 #include <QVector>
 
 namespace vellora {
@@ -33,6 +34,9 @@ public:
     static constexpr int kMaxWanted = 40;
     // Requests sent in one pass; the rest follow as answers come in.
     static constexpr int kMaxNewPerPass = 12;
+    // A scroll step of at least half a window is a fling: nothing new is asked for until the list
+    // has been still for this long (thumbnails of pages flying past are never looked at).
+    static constexpr int kSettleMs = 80;
     // The cells above and below the screen that are asked for once the ones on screen are.
     static constexpr int kMargin = 8;
 
@@ -105,6 +109,8 @@ protected:
     void scrollContentsBy(int dx, int dy) override;
     void focusInEvent(QFocusEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onOpened();
@@ -151,6 +157,9 @@ private:
     // A jump we made is in progress: the canvas's answer must not move the selection.
     bool m_jumping = false;
     bool m_scheduleQueued = false;
+    // The list is being flung: requests wait for `m_settle`.
+    bool m_flinging = false;
+    QTimer m_settle;
 
     QHash<quint64, Key> m_inFlight;
     QSet<Key> m_failed;

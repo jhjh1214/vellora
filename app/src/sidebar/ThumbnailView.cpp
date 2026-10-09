@@ -2,14 +2,17 @@
 
 #include <QElapsedTimer>
 #include <QFocusEvent>
+#include <QHideEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace vellora {
 
@@ -34,6 +37,12 @@ ThumbnailView::ThumbnailView(EngineSession* session, CanvasController* controlle
     viewport()->setBackgroundRole(QPalette::Base);
     viewport()->setAutoFillBackground(true);
     verticalScrollBar()->setSingleStep(kSingleStep);
+    m_settle.setSingleShot(true);
+    m_settle.setInterval(kSettleMs);
+    connect(&m_settle, &QTimer::timeout, this, [this] {
+        m_flinging = false;
+        scheduleSoon();
+    });
 
     connect(m_session, &EngineSession::opened, this, &ThumbnailView::onOpened);
     connect(m_session, &EngineSession::tileReady, this, &ThumbnailView::onTileReady);
@@ -311,7 +320,8 @@ void ThumbnailView::scheduleSoon() {
 
 void ThumbnailView::schedule() {
     m_scheduleQueued = false;
-    if (!m_session->isOpen() || m_pageCount == 0 || viewport()->height() <= 0) {
+    // A hidden sidebar (or the sidebar of a tab in the background) asks for nothing.
+    if (!isVisible() || !m_session->isOpen() || m_pageCount == 0 || viewport()->height() <= 0) {
         return;
     }
     // Wanted: the cells on screen, then a few below and above them, nearest first.
@@ -349,6 +359,9 @@ void ThumbnailView::schedule() {
         }
     }
 
+    if (m_flinging) {
+        return; // asked for once the list has settled
+    }
     int sent = 0;
     for (qsizetype i = 0; i < wanted.size(); ++i) {
         const quint32 page = wanted.at(i);
@@ -442,9 +455,29 @@ void ThumbnailView::resizeEvent(QResizeEvent* event) {
     scheduleSoon();
 }
 
-void ThumbnailView::scrollContentsBy(int, int) {
+void ThumbnailView::scrollContentsBy(int, int dy) {
+    if (std::abs(dy) >= viewport()->height() / 2) {
+        m_flinging = true;
+    }
+    if (m_flinging) {
+        m_settle.start(); // still moving: wait for it to stop
+    }
     viewport()->update();
     scheduleSoon();
+}
+
+void ThumbnailView::showEvent(QShowEvent* event) {
+    QAbstractScrollArea::showEvent(event);
+    scheduleSoon();
+}
+
+void ThumbnailView::hideEvent(QHideEvent* event) {
+    QAbstractScrollArea::hideEvent(event);
+    // Nobody sees the answers: withdraw the requests the engine has not started.
+    for (auto it = m_inFlight.constBegin(); it != m_inFlight.constEnd(); ++it) {
+        m_session->cancel(it.key());
+    }
+    m_inFlight.clear();
 }
 
 void ThumbnailView::mousePressEvent(QMouseEvent* event) {

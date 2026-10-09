@@ -257,6 +257,32 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(f.view.thumbnailsInFlight() == 0, kWaitMs);
     }
 
+    void aHiddenSidebarAsksForNothing() {
+        EngineSession session;
+        CanvasController controller(&session);
+        ThumbnailView view(&session, &controller);
+        view.resize(200, 500);
+        QSignalSpy opened(&session, &EngineSession::opened);
+        QVERIFY(session.open(QStringLiteral(VELLORA_GOLDEN_PDF)).isEmpty());
+        QVERIFY(opened.wait(kWaitMs));
+        QTest::qWait(300); // time enough for a request to have been sent
+        QCOMPARE(view.requestsSent(), 0U);
+        QCOMPARE(view.thumbnailsInFlight(), 0);
+
+        view.show();
+        QTRY_VERIFY_WITH_TIMEOUT(view.hasThumbnail(0), kWaitMs);
+        QVERIFY(view.requestsSent() > 0);
+
+        // Hidden again, it asks for nothing even when something changes that would make it ask.
+        view.hide();
+        QCOMPARE(view.thumbnailsInFlight(), 0);
+        const quint64 sent = view.requestsSent();
+        view.setThumbnailWidth(200);
+        QTest::qWait(300);
+        QCOMPARE(view.requestsSent(), sent);
+        QCOMPARE(view.thumbnailsInFlight(), 0);
+    }
+
     void aDocumentWithoutAnEngineHasNoCells() {
         EngineSession session;
         CanvasController controller(&session);
@@ -341,7 +367,9 @@ private slots:
         fling.start();
         QTRY_VERIFY_WITH_TIMEOUT(done, 120'000);
         fling.stop();
-        // Let the engine and the view settle, so that the measurement includes the tail.
+        // Let the list settle and the engine answer, so that the measurement includes the tail: the
+        // thumbnails of the last screen are asked for once the list is still, and drawn.
+        QTRY_VERIFY_WITH_TIMEOUT(view.hasThumbnail(view.visiblePages().first), kWaitMs);
         QTRY_VERIFY_WITH_TIMEOUT(view.thumbnailsInFlight() == 0, kWaitMs);
         watchdog.stop();
         application->setWatchdog(nullptr);
@@ -354,9 +382,9 @@ private slots:
         QVERIFY2(watchdog.handlers().samples >= 1'400, qPrintable(watchdog.summary()));
         QVERIFY2(watchdog.frames().overBudget == 0, qPrintable(watchdog.summary()));
         QVERIFY2(watchdog.handlers().overBudget == 0, qPrintable(watchdog.summary()));
-        // The last cells are drawn from real thumbnails, and nothing is left asking for more.
-        QTRY_VERIFY_WITH_TIMEOUT(view.hasThumbnail(view.visiblePages().first), kWaitMs);
-        QVERIFY(view.requestsSent() < 20'000);
+        // Nothing was asked for while the list was flying: only before it moved and after it
+        // stopped (the first screen, and the last one).
+        QVERIFY2(view.requestsSent() < 200, qPrintable(QString::number(view.requestsSent())));
     }
 };
 
