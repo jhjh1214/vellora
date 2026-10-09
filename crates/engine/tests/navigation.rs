@@ -730,3 +730,140 @@ fn describing_links_makes_no_network_connection() {
         other => panic!("the engine connected to a link target: {other:?}"),
     }
 }
+
+// ---- text (task 14a) ----
+
+fn get_text(
+    engine: &mut Session,
+    page: u32,
+    skip: u32,
+    limit: u32,
+) -> (Vec<vellora_ipc::TextChar>, u32, u32) {
+    engine.send(&Request::GetTextPage {
+        req_id: id(30),
+        page,
+        skip,
+        limit,
+    });
+    match engine.recv() {
+        Response::TextPage {
+            req_id,
+            page: answered,
+            skip: from,
+            total,
+            chars,
+        } => {
+            assert_eq!((req_id, answered), (id(30), page));
+            (chars, from, total)
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+/// A first page with two lines of text in Helvetica.
+fn texted() -> Vec<u8> {
+    let content = "BT /F1 12 Tf 10 80 Td (Hello World) Tj 0 -20 Td (Second line) Tj ET";
+    let stream = format!(
+        "<< /Length {} >>\nstream\n{content}\nendstream",
+        content.len()
+    );
+    let page = format!(
+        "/Contents {FIRST_FREE} 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 \
+         /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >>"
+    );
+    pdf_with_first_page("", &page, &[stream])
+}
+
+fn string_of(chars: &[vellora_ipc::TextChar]) -> String {
+    chars.iter().map(|c| c.ch).collect()
+}
+
+#[test]
+fn the_text_of_a_page_comes_with_boxes_words_and_lines() {
+    let mut engine = opened(&texted());
+    let (chars, from, total) = get_text(&mut engine, 0, 0, 8192);
+    assert_eq!(from, 0);
+    assert_eq!(usize::try_from(total).unwrap(), chars.len());
+    let text = string_of(&chars).replace("\r\n", "\n");
+    assert!(text.starts_with("Hello World\nSecond line"), "{text:?}");
+
+    let at = |c: char, nth: usize| {
+        *chars
+            .iter()
+            .filter(|x| x.ch == c)
+            .nth(nth)
+            .unwrap_or_else(|| panic!("no {c:?}"))
+    };
+    let (h, w, s) = (at('H', 0), at('W', 0), at('S', 0));
+    assert_eq!((h.word, h.line), (0, 0));
+    assert_eq!((w.word, w.line), (1, 0));
+    assert_eq!((s.word, s.line), (2, 1));
+    // 'H' is 10 points from the left; the second line is lower on the page.
+    assert!((h.rect[0] - 10.0).abs() < 1.0, "{:?}", h.rect);
+    assert!(h.rect[2] > h.rect[0] && h.rect[3] > h.rect[1]);
+    assert!(s.rect[1] > h.rect[1] + 10.0);
+    assert!((h.size - 12.0).abs() < 0.01);
+    // The break between the lines was inserted by PDFium: flagged, no box.
+    let generated: Vec<_> = chars
+        .iter()
+        .filter(|c| c.flags & vellora_ipc::TEXT_GENERATED != 0)
+        .collect();
+    assert_ne!(generated.len(), 0);
+    assert!(
+        generated
+            .iter()
+            .all(|c| c.rect.iter().all(|v| v.abs() < 1e-6))
+    );
+}
+
+#[test]
+fn text_comes_in_windows_and_other_pages_have_none() {
+    let mut engine = opened(&texted());
+    let (all, _, total) = get_text(&mut engine, 0, 0, 8192);
+    let (head, from, same_total) = get_text(&mut engine, 0, 0, 5);
+    assert_eq!((head.len(), from, same_total), (5, 0, total));
+    assert_eq!(head[..], all[..5]);
+    let (mid, from, _) = get_text(&mut engine, 0, 5, 4);
+    assert_eq!((from, &mid[..]), (5, &all[5..9]));
+    let (tail, from, _) = get_text(&mut engine, 0, total - 2, 100);
+    assert_eq!((from, tail.len()), (total - 2, 2));
+    // Past the end: nothing, and the answer says where the text ends.
+    let (none, from, same_total) = get_text(&mut engine, 0, total + 50, 10);
+    assert_eq!((none.len(), from, same_total), (0, total, total));
+
+    let (blank, _, blank_total) = get_text(&mut engine, 3, 0, 100);
+    assert_eq!((blank.len(), blank_total), (0, 0));
+
+    engine.send(&Request::GetTextPage {
+        req_id: id(31),
+        page: PAGES,
+        skip: 0,
+        limit: 1,
+    });
+    match engine.recv() {
+        Response::Error { req_id, kind, .. } => {
+            assert_eq!((req_id, kind), (Some(id(31)), ErrorKind::InvalidRequest));
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    // Reading text does not disturb rendering.
+    engine.send(&tile_request(1));
+    assert!(matches!(engine.recv(), Response::TileReady { .. }));
+}
+
+#[test]
+fn text_is_refused_before_a_document_is_open() {
+    let mut engine = started(&texted());
+    engine.send(&Request::GetTextPage {
+        req_id: id(32),
+        page: 0,
+        skip: 0,
+        limit: 1,
+    });
+    match engine.recv() {
+        Response::Error { req_id, kind, .. } => {
+            assert_eq!((req_id, kind), (Some(id(32)), ErrorKind::InvalidRequest));
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}

@@ -326,7 +326,8 @@ impl Host<'_> {
             | Request::GetOutlinePath { .. }
             | Request::GetPageLabels { .. }
             | Request::FindPageLabel { .. }
-            | Request::GetLinks { .. } => (self.navigate(request), Flow::Continue),
+            | Request::GetLinks { .. }
+            | Request::GetTextPage { .. } => (self.navigate(request), Flow::Continue),
         }
     }
 
@@ -373,14 +374,16 @@ impl Host<'_> {
                 };
                 // Before the answer goes out, so that a navigation request sent on seeing
                 // `Opened` finds the navigator told. A closed inbox shows up in `navigate`.
+                let unlock = std::mem::take(&mut document.unlock);
+                let document = Arc::new(document);
                 if let Some(inbox) = &self.navigator {
                     let _ = inbox.send(navigation::Message::Open(OpenDocument {
-                        mapped: Arc::clone(&document.mapped),
+                        document: Arc::clone(&document),
                         page_count: document.page_count,
-                        unlock: std::mem::take(&mut document.unlock),
+                        unlock,
                     }));
                 }
-                *self.document = Some(Arc::new(document));
+                *self.document = Some(document);
                 response
             }
             // The file stays available, so the UI may try again: with a password, or after a fix.

@@ -358,6 +358,8 @@ void EngineSession::dispatch(const EngineEvent& event) {
         emit linksReady(event.request, event.links_page, links, event.more);
         break;
     }
+    case EventKind::TextPage:
+        break; // the shell asks for text in task 14b
     }
 }
 

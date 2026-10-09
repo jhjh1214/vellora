@@ -130,6 +130,8 @@ struct NavigationRun {
     labelled: bool,
     /// Some outline item starts at or before the last page.
     sectioned: bool,
+    /// Characters of the first page's text read (the first window), over all documents.
+    text_chars: usize,
     /// Links on the first page, and how many of them are of a kind that is never run.
     links: usize,
     inert_links: usize,
@@ -148,6 +150,7 @@ struct NavigationTotals {
     unreadable: usize,
     links: usize,
     inert_links: usize,
+    text_chars: usize,
 }
 
 impl NavigationTotals {
@@ -156,6 +159,7 @@ impl NavigationTotals {
         self.items += run.items;
         self.labelled += usize::from(run.labelled);
         self.sectioned += usize::from(run.sectioned);
+        self.text_chars += run.text_chars;
         self.links += run.links;
         self.inert_links += run.inert_links;
         self.unreadable += run.unreadable.len();
@@ -172,12 +176,13 @@ impl std::fmt::Display for NavigationTotals {
         write!(
             f,
             "navigation: {} outline items read, {} documents with page labels, {} with a section \
-             at the last page, {} links on first pages ({} of kinds never run), {} answered ReadFailed",
+             at the last page, {} links on first pages ({} of kinds never run), {} characters of first-page text, {} answered ReadFailed",
             self.items,
             self.labelled,
             self.sectioned,
             self.links,
             self.inert_links,
+            self.text_chars,
             self.unreadable
         )
     }
@@ -237,12 +242,7 @@ impl Walk<'_> {
             }
             Event::Outline { request, items, .. } if self.navigation.pending.remove(&request) => {
                 self.navigation.items += items.len();
-                if !self.navigation.drilled
-                    && let Some(parent) = items.iter().find(|item| item.has_children)
-                {
-                    self.navigation.drilled = true;
-                    self.ask(|client| client.request_outline(Some(parent.id), None, 0, 128));
-                }
+                self.drill_into(&items);
                 self.navigation_step()
             }
             Event::OutlinePath { request, path } if self.navigation.pending.remove(&request) => {
@@ -253,6 +253,10 @@ impl Walk<'_> {
                 request, defined, ..
             } if self.navigation.pending.remove(&request) => {
                 self.navigation.labelled |= defined;
+                self.navigation_step()
+            }
+            Event::TextPage { request, chars, .. } if self.navigation.pending.remove(&request) => {
+                self.navigation.text_chars += chars.len();
                 self.navigation_step()
             }
             Event::Links { request, links, .. } if self.navigation.pending.remove(&request) => {
@@ -320,6 +324,18 @@ impl Walk<'_> {
         }
     }
 
+    /// Asks, once per document, for the children of the first outline item that has any.
+    fn drill_into(&mut self, items: &[vellora_ipc::OutlineEntry]) {
+        if self.navigation.drilled {
+            return;
+        }
+        if let Some(parent) = items.iter().find(|item| item.has_children) {
+            self.navigation.drilled = true;
+            let id = parent.id;
+            self.ask(|client| client.request_outline(Some(id), None, 0, 128));
+        }
+    }
+
     /// Sends one navigation request and waits for its answer; a request that cannot be sent is a
     /// problem.
     fn ask(&mut self, send: impl FnOnce(&Client) -> Result<RequestId, ClientError>) {
@@ -342,6 +358,7 @@ impl Walk<'_> {
         // A document with no pages has no first page to ask about.
         if self.page_count > 0 {
             self.ask(|client| client.request_links(0, 0, 256));
+            self.ask(|client| client.request_text_page(0, 0, 8192));
         }
         self.navigation_step()
     }

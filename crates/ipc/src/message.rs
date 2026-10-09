@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
 /// revision 6 password and 32 of an older one, so this is generous.
@@ -45,6 +45,13 @@ pub const MAX_LINKS_PER_MESSAGE: usize = 256;
 pub const MAX_URI_BYTES: usize = 2048;
 /// Longest name of an inert action, in bytes.
 pub const MAX_LINK_KIND_BYTES: usize = 64;
+/// Most characters one `TextPage` may carry.
+pub const MAX_TEXT_CHARS_PER_MESSAGE: usize = 8192;
+/// [`TextChar::flags`] bit: PDFium inserted this character (the space between two words, the break
+/// between two lines); it is not in the content stream and its box is empty.
+pub const TEXT_GENERATED: u8 = 1;
+/// [`TextChar::flags`] bit: a hyphen that breaks a word at the end of a line.
+pub const TEXT_HYPHEN: u8 = 2;
 /// Largest accepted tile scale (device pixels per point).
 pub const MAX_TILE_SCALE: f32 = 64.0;
 /// Longest accepted tile side in device pixels.
@@ -228,6 +235,24 @@ pub struct Link {
     pub action: LinkAction,
 }
 
+/// One character of a page's text, in reading order as PDFium extracts it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextChar {
+    /// The character. A ligature is already expanded into its letters, which share its box.
+    pub ch: char,
+    /// `[left, top, right, bottom]` in points of the page as shown (crop box and `/Rotate`
+    /// applied), origin at the top left. All zero for a generated character.
+    pub rect: [f32; 4],
+    /// Font size in points; 0 when unknown.
+    pub size: f32,
+    /// [`TEXT_GENERATED`] and [`TEXT_HYPHEN`].
+    pub flags: u8,
+    /// Index of the word on the page, counting from 0. White space belongs to the word before it.
+    pub word: u32,
+    /// Index of the line on the page, counting from 0. A line break belongs to the line it ends.
+    pub line: u32,
+}
+
 /// A document password as the user typed it (UTF-8 text).
 ///
 /// The text is overwritten with zeros when the value is dropped, and `Debug` never shows it, so a
@@ -408,6 +433,17 @@ pub enum Request {
         /// Most links wanted, in `1..=`[`MAX_LINKS_PER_MESSAGE`].
         limit: u32,
     },
+    /// The characters of a page, a window of them. Answered with `TextPage`.
+    GetTextPage {
+        /// Correlation id.
+        req_id: RequestId,
+        /// Zero-based page index.
+        page: u32,
+        /// How many characters of the page to skip (the ones already received).
+        skip: u32,
+        /// Most characters wanted, in `1..=`[`MAX_TEXT_CHARS_PER_MESSAGE`].
+        limit: u32,
+    },
 }
 
 /// Messages from the engine to the UI.
@@ -493,6 +529,20 @@ pub enum Response {
         /// More links follow: ask again with `skip` advanced by `links.len()`.
         more: bool,
     },
+    /// The answer to `GetTextPage`.
+    TextPage {
+        /// The request it answers.
+        req_id: RequestId,
+        /// The page the characters are on.
+        page: u32,
+        /// Index of the first character returned (the requested `skip`, or the end of the text if
+        /// that was past it).
+        skip: u32,
+        /// How many characters the page has in all (at most what the engine extracts).
+        total: u32,
+        /// The characters from `skip`, at most [`MAX_TEXT_CHARS_PER_MESSAGE`].
+        chars: Vec<TextChar>,
+    },
 }
 
 /// Rules a decoded message must satisfy beyond being well-formed `postcard`.
@@ -575,6 +625,13 @@ impl Validate for Request {
             Request::FindPageLabel { text, .. } => {
                 if text.len() > MAX_LABEL_BYTES {
                     return Err(Error::Invalid("page label too long"));
+                }
+                Ok(())
+            }
+            Request::GetTextPage { limit, .. } => {
+                let wanted = usize::try_from(*limit).unwrap_or(usize::MAX);
+                if wanted == 0 || wanted > MAX_TEXT_CHARS_PER_MESSAGE {
+                    return Err(Error::Invalid("text limit must be 1..=8192"));
                 }
                 Ok(())
             }
@@ -663,32 +720,56 @@ impl Validate for Response {
                 }
                 Ok(())
             }
-            Response::Links { links, .. } => {
-                if links.len() > MAX_LINKS_PER_MESSAGE {
-                    return Err(Error::Invalid("too many links in one message"));
-                }
-                for link in links {
-                    if !link.rect.iter().all(|v| v.is_finite()) {
-                        return Err(Error::Invalid("link rectangle must be finite"));
-                    }
-                    match &link.action {
-                        LinkAction::Uri(uri) if uri.len() > MAX_URI_BYTES => {
-                            return Err(Error::Invalid("link address too long"));
-                        }
-                        LinkAction::Inert(kind) if kind.len() > MAX_LINK_KIND_BYTES => {
-                            return Err(Error::Invalid("link action name too long"));
-                        }
-                        LinkAction::GoTo(destination) if !destination.fit.is_finite() => {
-                            return Err(Error::Invalid("destination numbers must be finite"));
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(())
-            }
+            Response::TextPage {
+                chars, skip, total, ..
+            } => validate_text(chars, *skip, *total),
+            Response::Links { links, .. } => validate_links(links),
             Response::Hello { .. } | Response::TileReady { .. } | Response::PageFound { .. } => {
                 Ok(())
             }
         }
     }
+}
+
+/// The rules of a `Links` message.
+fn validate_links(links: &[Link]) -> Result<(), Error> {
+    if links.len() > MAX_LINKS_PER_MESSAGE {
+        return Err(Error::Invalid("too many links in one message"));
+    }
+    for link in links {
+        if !link.rect.iter().all(|v| v.is_finite()) {
+            return Err(Error::Invalid("link rectangle must be finite"));
+        }
+        match &link.action {
+            LinkAction::Uri(uri) if uri.len() > MAX_URI_BYTES => {
+                return Err(Error::Invalid("link address too long"));
+            }
+            LinkAction::Inert(kind) if kind.len() > MAX_LINK_KIND_BYTES => {
+                return Err(Error::Invalid("link action name too long"));
+            }
+            LinkAction::GoTo(destination) if !destination.fit.is_finite() => {
+                return Err(Error::Invalid("destination numbers must be finite"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The rules of a `TextPage` message.
+fn validate_text(chars: &[TextChar], skip: u32, total: u32) -> Result<(), Error> {
+    if chars.len() > MAX_TEXT_CHARS_PER_MESSAGE {
+        return Err(Error::Invalid("too many characters in one message"));
+    }
+    let end = u64::from(skip) + chars.len() as u64;
+    if end > u64::from(total) {
+        return Err(Error::Invalid("characters beyond the page's total"));
+    }
+    if chars
+        .iter()
+        .any(|c| !(c.rect.iter().all(|v| v.is_finite()) && c.size.is_finite()))
+    {
+        return Err(Error::Invalid("character box must be finite"));
+    }
+    Ok(())
 }

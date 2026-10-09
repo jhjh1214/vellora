@@ -36,6 +36,7 @@ mod navigation;
 pub mod sandbox;
 mod scheduler;
 mod session;
+mod text;
 
 pub use args::{ArgsError, DEFAULT_MAX_DOCUMENT_BYTES, Invocation, LaunchArgs};
 pub use scheduler::Deadlines;
