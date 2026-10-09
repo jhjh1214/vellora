@@ -153,6 +153,19 @@ jobs:
       - run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Qt Test reports of what failed
+        # Qt Test's console output does not reach CTest on Windows; each test also writes
+        # `build/test-logs/<name>.log` (app/tests/CMakeLists.txt).
+        if: failure()
+        shell: bash
+        run: |
+          for f in build/test-logs/*.log; do
+            if grep -q '^FAIL!' "$f"; then
+              echo "::group::$f"
+              grep -E '^(FAIL!|Totals)|Loc:|Actual|Expected|vellora.watchdog|QINFO' "$f" | head -120
+              echo "::endgroup::"
+            fi
+          done
 
   deny:
     name: cargo-deny (licenses, advisories, sources)
