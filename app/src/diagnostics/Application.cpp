@@ -2,6 +2,7 @@
 
 #include "diagnostics/UiWatchdog.h"
 
+#include <QAbstractEventDispatcher>
 #include <QElapsedTimer>
 #include <QThread>
 
@@ -18,6 +19,13 @@ bool containsPresent(QEvent::Type type) {
 } // namespace
 
 bool Application::notify(QObject* receiver, QEvent* event) {
+    // The event loop's own pump (on Windows, a timer event for the dispatcher that delivers the
+    // posted events) is not a handler: whatever it runs is delivered through notify() again, and
+    // each of those is timed on its own. Timing the pump would charge the whole batch to one
+    // handler.
+    if (qobject_cast<QAbstractEventDispatcher*>(receiver) != nullptr) {
+        return QApplication::notify(receiver, event);
+    }
     const bool timed = m_watchdog != nullptr && m_watchdog->running() && m_depth == 0 &&
                        !containsPresent(event->type()) && receiver->thread() == thread();
     ++m_depth;
