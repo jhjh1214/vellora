@@ -97,6 +97,8 @@ mod ffi {
         PasswordRequired,
         /// The password given does not open the document.
         WrongPassword,
+        /// The outline or the page labels could not be read; the document stays usable.
+        ReadFailed,
     }
 
     /// How serious a line from the Qt side is.
@@ -630,7 +632,7 @@ impl EngineClient {
             .map(Client::poll_events)
             .unwrap_or_default()
             .into_iter()
-            .map(EngineEvent::from)
+            .filter_map(|event| EngineEvent::try_from(event).ok())
             .collect()
     }
 
@@ -685,6 +687,7 @@ impl From<ErrorKind> for FailureKind {
             ErrorKind::Internal => Self::Internal,
             ErrorKind::PasswordRequired => Self::PasswordRequired,
             ErrorKind::WrongPassword => Self::WrongPassword,
+            ErrorKind::ReadFailed => Self::ReadFailed,
         }
     }
 }
@@ -708,9 +711,13 @@ impl EngineEvent {
     }
 }
 
-impl From<Event> for EngineEvent {
-    fn from(event: Event) -> Self {
-        match event {
+/// The answers to navigation requests have no place here yet: the C++ side cannot make those
+/// requests until task 12c, so none arrive, and one that did would be dropped by `poll_events`.
+impl TryFrom<Event> for EngineEvent {
+    type Error = Event;
+
+    fn try_from(event: Event) -> Result<Self, Event> {
+        Ok(match event {
             Event::Opened {
                 page_count,
                 repairs,
@@ -772,7 +779,11 @@ impl From<Event> for EngineEvent {
                 file_replaced: change == Change::Replaced,
                 ..Self::empty(EventKind::DocumentChanged)
             },
-        }
+            answer @ (Event::Outline { .. }
+            | Event::OutlinePath { .. }
+            | Event::PageLabels { .. }
+            | Event::PageFound { .. }) => return Err(answer),
+        })
     }
 }
 
@@ -784,6 +795,10 @@ mod tests {
 
     use super::*;
     use crate::process::{Crash, Termination};
+
+    fn bridged(event: Event) -> EngineEvent {
+        EngineEvent::try_from(event).expect("an event the bridge carries")
+    }
 
     #[test]
     fn the_header_is_generated_in_the_build() {
@@ -814,7 +829,7 @@ mod tests {
 
     #[test]
     fn events_convert_field_by_field() {
-        let tile = EngineEvent::from(Event::TileReady {
+        let tile = bridged(Event::TileReady {
             request: RequestId(7),
             slot: SlotId(3),
         });
@@ -823,7 +838,7 @@ mod tests {
             (EventKind::TileReady, 7, true, 3)
         );
 
-        let failed = EngineEvent::from(Event::RequestFailed {
+        let failed = bridged(Event::RequestFailed {
             request: None,
             kind: ErrorKind::OpenFailed,
             message: "no pages".into(),
@@ -837,8 +852,9 @@ mod tests {
         for (kind, expected) in [
             (ErrorKind::PasswordRequired, FailureKind::PasswordRequired),
             (ErrorKind::WrongPassword, FailureKind::WrongPassword),
+            (ErrorKind::ReadFailed, FailureKind::ReadFailed),
         ] {
-            let refused = EngineEvent::from(Event::RequestFailed {
+            let refused = bridged(Event::RequestFailed {
                 request: None,
                 kind,
                 message: "password required".into(),
@@ -846,7 +862,14 @@ mod tests {
             assert_eq!((refused.has_request, refused.failure), (false, expected));
         }
 
-        let crashed = EngineEvent::from(Event::EngineCrashed {
+        // Navigation answers are the client's own until task 12c bridges them.
+        let answer = Event::PageFound {
+            request: RequestId(4),
+            page: Some(1),
+        };
+        assert_eq!(EngineEvent::try_from(answer.clone()).err(), Some(answer));
+
+        let crashed = bridged(Event::EngineCrashed {
             crash: Crash {
                 termination: Termination::Failure(3),
                 killed_by_client: false,
@@ -863,7 +886,7 @@ mod tests {
             crashed.message
         );
 
-        let opened = EngineEvent::from(Event::Opened {
+        let opened = bridged(Event::Opened {
             page_count: 10_000,
             page_sizes: Vec::new(),
             repairs: vec![Repair {

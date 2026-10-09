@@ -18,6 +18,7 @@
 
 mod support;
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,8 +26,8 @@ use std::time::{Duration, Instant};
 
 use support::pdfium_path;
 use vellora_cos::{Limits, ObjectStore};
-use vellora_engine_client::{Client, ClientConfig, Event, TileRequest};
-use vellora_ipc::{ErrorKind, Priority, Repair, SlotId, TileRect};
+use vellora_engine_client::{Client, ClientConfig, ClientError, Event, TileRequest};
+use vellora_ipc::{ErrorKind, Priority, Repair, RequestId, SlotId, TileRect};
 use vellora_shm::SlotGeometry;
 
 /// How long one file may take from open to its first tile.
@@ -114,12 +115,69 @@ struct PasswordSteps {
     right_refused: bool,
 }
 
+/// M1 task 12b: what the navigation requests, asked once the first tile is in, came to. Each is
+/// answered or fails with a typed error; `ReadFailed` (a damaged or over-limit outline) is allowed
+/// and counted, anything else is a problem of the gate.
+#[derive(Debug, Default)]
+struct NavigationRun {
+    /// Requests sent and not yet answered.
+    pending: HashSet<RequestId>,
+    /// The children of one outline item were asked for.
+    drilled: bool,
+    /// Outline items received, top level and the one level drilled into.
+    items: usize,
+    /// The document defines page labels.
+    labelled: bool,
+    /// Some outline item starts at or before the last page.
+    sectioned: bool,
+    /// What the `ReadFailed` answers said.
+    unreadable: Vec<String>,
+    /// Answers that were neither a typed answer nor `ReadFailed`.
+    problems: Vec<String>,
+}
+
+/// [`NavigationRun`]s added up over the corpus.
+#[derive(Debug, Default)]
+struct NavigationTotals {
+    items: usize,
+    labelled: usize,
+    sectioned: usize,
+    unreadable: usize,
+}
+
+impl NavigationTotals {
+    /// Adds one document's run; its problems go to `problems` under the document's `id`.
+    fn add(&mut self, id: &str, run: NavigationRun, problems: &mut Vec<String>) {
+        self.items += run.items;
+        self.labelled += usize::from(run.labelled);
+        self.sectioned += usize::from(run.sectioned);
+        self.unreadable += run.unreadable.len();
+        problems.extend(
+            run.problems
+                .into_iter()
+                .map(|problem| format!("{id}: navigation: {problem}")),
+        );
+    }
+}
+
+impl std::fmt::Display for NavigationTotals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "navigation: {} outline items read, {} documents with page labels, {} with a section \
+             at the last page, {} answered ReadFailed",
+            self.items, self.labelled, self.sectioned, self.unreadable
+        )
+    }
+}
+
 /// What the engine made of one file: how it went, and what it said about repairs when it opened.
 struct Run {
     outcome: Outcome,
     password: PasswordSteps,
     /// `None` when the document never opened.
     repairs: Option<Vec<Repair>>,
+    navigation: NavigationRun,
 }
 
 /// One document being walked through the gate: the client that stands in for the UI, and what has
@@ -132,6 +190,8 @@ struct Walk<'a> {
     steps: PasswordSteps,
     /// The tile of page 1 that was asked for once the document opened.
     requested: Option<vellora_ipc::RequestId>,
+    page_count: u32,
+    navigation: NavigationRun,
 }
 
 impl Walk<'_> {
@@ -144,13 +204,51 @@ impl Walk<'_> {
                 repairs,
             } => {
                 self.repairs = Some(repairs);
+                self.page_count = page_count;
                 let Some(size) = page_sizes.first().filter(|_| page_count > 0) else {
-                    return Some(Outcome::Rendered);
+                    return self.begin_navigation();
                 };
                 self.request_first_tile(size.width, size.height)
             }
             Event::TileReady { request, .. } if Some(request) == self.requested => {
-                Some(Outcome::Rendered)
+                self.begin_navigation()
+            }
+            Event::Outline { request, items, .. } if self.navigation.pending.remove(&request) => {
+                self.navigation.items += items.len();
+                if !self.navigation.drilled
+                    && let Some(parent) = items.iter().find(|item| item.has_children)
+                {
+                    self.navigation.drilled = true;
+                    self.ask(|client| client.request_outline(Some(parent.id), None, 0, 128));
+                }
+                self.navigation_step()
+            }
+            Event::OutlinePath { request, path } if self.navigation.pending.remove(&request) => {
+                self.navigation.sectioned |= !path.is_empty();
+                self.navigation_step()
+            }
+            Event::PageLabels {
+                request, defined, ..
+            } if self.navigation.pending.remove(&request) => {
+                self.navigation.labelled |= defined;
+                self.navigation_step()
+            }
+            Event::PageFound { request, .. } if self.navigation.pending.remove(&request) => {
+                self.navigation_step()
+            }
+            Event::RequestFailed {
+                request: Some(request),
+                kind,
+                message,
+            } if self.navigation.pending.remove(&request) => {
+                if kind == ErrorKind::ReadFailed {
+                    self.navigation.unreadable.push(message);
+                } else {
+                    self.navigation
+                        .problems
+                        .push(format!("{kind:?}: {message}"));
+                }
+                self.navigation_step()
             }
             // The two password answers drive the gate: first a wrong password, which must be
             // refused without ending the session, then the manifest's.
@@ -194,6 +292,36 @@ impl Walk<'_> {
             Event::Failed { reason } => Some(classify_refusal(ErrorKind::Internal, reason)),
             _ => None,
         }
+    }
+
+    /// Sends one navigation request and waits for its answer; a request that cannot be sent is a
+    /// problem.
+    fn ask(&mut self, send: impl FnOnce(&Client) -> Result<RequestId, ClientError>) {
+        match send(self.client) {
+            Ok(id) => {
+                self.navigation.pending.insert(id);
+            }
+            Err(e) => self.navigation.problems.push(format!("not sent: {e}")),
+        }
+    }
+
+    /// The document is open and its first page rendered: asks for the top of the outline, the
+    /// labels of the first 1,024 pages, the section of the last page and a label.
+    fn begin_navigation(&mut self) -> Option<Outcome> {
+        let last = self.page_count.saturating_sub(1);
+        self.ask(|client| client.request_outline(None, None, 0, 128));
+        self.ask(|client| client.request_page_labels(0, 1024));
+        self.ask(|client| client.request_outline_path(last));
+        self.ask(|client| client.find_page_label("1"));
+        self.navigation_step()
+    }
+
+    /// Ends the walk once every navigation request is answered.
+    fn navigation_step(&self) -> Option<Outcome> {
+        self.navigation
+            .pending
+            .is_empty()
+            .then_some(Outcome::Rendered)
     }
 
     fn submit(&self, password: &str) -> Option<Outcome> {
@@ -248,6 +376,7 @@ fn run_one(path: &Path, password: Option<&str>) -> Run {
                 outcome: Outcome::Rejected(format!("client: {e}")),
                 password: PasswordSteps::default(),
                 repairs: None,
+                navigation: NavigationRun::default(),
             };
         }
     };
@@ -257,6 +386,8 @@ fn run_one(path: &Path, password: Option<&str>) -> Run {
         repairs: None,
         steps: PasswordSteps::default(),
         requested: None,
+        page_count: 0,
+        navigation: NavigationRun::default(),
     };
     let deadline = Instant::now() + PATIENCE;
     let outcome = loop {
@@ -271,12 +402,18 @@ fn run_one(path: &Path, password: Option<&str>) -> Run {
             break outcome;
         }
     };
-    let Walk { repairs, steps, .. } = walk;
+    let Walk {
+        repairs,
+        steps,
+        navigation,
+        ..
+    } = walk;
     client.close();
     Run {
         outcome,
         password: steps,
         repairs,
+        navigation,
     }
 }
 
@@ -379,6 +516,7 @@ fn corpus_opens_without_crashing() {
     // M1 task 6: the repair notice appears for every file cos repairs and for no other.
     let (mut notices, mut disagreements) = (0, 0);
     let mut notice_mismatches = Vec::new();
+    let mut nav_totals = NavigationTotals::default();
     for path in &files {
         let id = path.file_stem().unwrap().to_string_lossy().into_owned();
         let is_malformed = malformed.contains(&id);
@@ -388,13 +526,22 @@ fn corpus_opens_without_crashing() {
             outcome,
             password: steps,
             repairs,
+            navigation,
         } = run_one(path, password.as_deref());
         let ms = started.elapsed().as_millis();
         println!(
-            "{id}: {outcome:?} ({ms} ms){}{}",
+            "{id}: {outcome:?} ({ms} ms){}{}{}",
             if is_malformed { " [malformed]" } else { "" },
             if steps.asked { " [password]" } else { "" },
+            if navigation.unreadable.is_empty() {
+                ""
+            } else {
+                " [navigation unreadable]"
+            },
         );
+        for reason in &navigation.unreadable {
+            println!("    {id}: ReadFailed: {reason}");
+        }
         if let Some(repairs) = &repairs {
             let from_cos = repairs
                 .iter()
@@ -409,6 +556,7 @@ fn corpus_opens_without_crashing() {
                 ));
             }
         }
+        nav_totals.add(&id, navigation, &mut problems);
         protected += usize::from(password.is_some() && steps.asked);
         problems.extend(password_problem(&id, password.as_deref(), &steps));
         problems.extend(outcome_problem(&id, &outcome, is_malformed));
@@ -440,9 +588,10 @@ fn corpus_opens_without_crashing() {
     println!(
         "repair notice for {notices} documents; {disagreements} more only because PDFium and cos disagree"
     );
+    println!("{nav_totals}");
     assert!(
         problems.is_empty(),
-        "engine crashed or hung, or the password steps failed: {problems:#?}"
+        "engine crashed or hung, or the password or navigation steps failed: {problems:#?}"
     );
     assert!(
         notice_mismatches.is_empty(),

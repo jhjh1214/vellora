@@ -26,10 +26,12 @@
 //! **Status:** M0 task 19 (host, handshake, open with cross-check, scheduled tile serving,
 //! deadlines that end the process). A reader thread validates requests and queues tiles by
 //! priority; one worker renders them, so answers can arrive in a different order than the
-//! requests.
+//! requests. M1 task 12b adds a third thread that answers the outline, page label and section
+//! requests from its own `cos` view of the document, so a slow outline never delays a tile.
 
 pub mod args;
 mod document;
+mod navigation;
 #[cfg(target_os = "linux")]
 pub mod sandbox;
 mod scheduler;

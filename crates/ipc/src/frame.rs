@@ -184,7 +184,48 @@ mod tests {
                 req_id: RequestId(u64::MAX),
             },
             Request::Close,
+            Request::GetOutline {
+                req_id: RequestId(10),
+                parent: None,
+                after: None,
+                already: 0,
+                limit: 128,
+            },
+            Request::GetOutline {
+                req_id: RequestId(11),
+                parent: Some(u32::MAX),
+                after: Some(7),
+                already: u32::MAX,
+                limit: 1,
+            },
+            Request::GetOutlinePath {
+                req_id: RequestId(12),
+                page: 4_000,
+            },
+            Request::GetPageLabels {
+                req_id: RequestId(13),
+                first: 9_000,
+                count: 1024,
+            },
+            Request::FindPageLabel {
+                req_id: RequestId(14),
+                text: "A-3 é".into(),
+            },
         ]
+    }
+
+    fn entry(title: &str, destination: Option<Destination>) -> OutlineEntry {
+        OutlineEntry {
+            id: 42,
+            title: title.into(),
+            destination,
+            has_children: true,
+            open: false,
+            style: TitleStyle {
+                bold: true,
+                italic: false,
+            },
+        }
     }
 
     fn responses() -> Vec<Response> {
@@ -227,6 +268,59 @@ mod tests {
                 req_id: None,
                 kind: ErrorKind::VersionMismatch,
                 message: String::new(),
+            },
+            Response::Outline {
+                req_id: RequestId(10),
+                items: vec![
+                    entry(
+                        "Chapter 1",
+                        Some(Destination {
+                            page: 3,
+                            fit: Fit::Xyz {
+                                left: Some(72.0),
+                                top: None,
+                                zoom: Some(1.5),
+                            },
+                        }),
+                    ),
+                    entry("", None),
+                    entry(
+                        "Figure",
+                        Some(Destination {
+                            page: 0,
+                            fit: Fit::FitR {
+                                left: 0.0,
+                                bottom: 1.0,
+                                right: 2.0,
+                                top: 3.0,
+                            },
+                        }),
+                    ),
+                ],
+                more: true,
+            },
+            Response::Outline {
+                req_id: RequestId(11),
+                items: vec![],
+                more: false,
+            },
+            Response::OutlinePath {
+                req_id: RequestId(12),
+                path: vec![5, 9, 31],
+            },
+            Response::PageLabels {
+                req_id: RequestId(13),
+                first: 2,
+                defined: true,
+                labels: vec!["iii".into(), "A-1".into()],
+            },
+            Response::PageFound {
+                req_id: RequestId(14),
+                page: Some(8),
+            },
+            Response::PageFound {
+                req_id: RequestId(15),
+                page: None,
             },
         ]
     }
@@ -609,6 +703,7 @@ mod tests {
             ErrorKind::Internal,
             ErrorKind::PasswordRequired,
             ErrorKind::WrongPassword,
+            ErrorKind::ReadFailed,
         ];
         for (index, kind) in kinds.into_iter().enumerate() {
             let mut wire = Vec::new();
@@ -695,6 +790,260 @@ mod tests {
                 Err(Error::Invalid(_))
             ));
         }
+    }
+
+    /// Navigation messages came with version 4: they go after the older variants, which keep their
+    /// numbers (`Close` is request 4, `Error` response 3).
+    #[test]
+    fn navigation_messages_follow_the_older_variants_on_the_wire() {
+        let request = |message: &Request| {
+            let mut wire = Vec::new();
+            write_frame(&mut wire, message).unwrap();
+            wire[4]
+        };
+        assert_eq!(request(&Request::Close), 4);
+        assert_eq!(
+            request(&Request::GetOutline {
+                req_id: RequestId(1),
+                parent: None,
+                after: None,
+                already: 0,
+                limit: 1
+            }),
+            5
+        );
+        assert_eq!(
+            request(&Request::GetOutlinePath {
+                req_id: RequestId(1),
+                page: 0
+            }),
+            6
+        );
+        assert_eq!(
+            request(&Request::GetPageLabels {
+                req_id: RequestId(1),
+                first: 0,
+                count: 1
+            }),
+            7
+        );
+        assert_eq!(
+            request(&Request::FindPageLabel {
+                req_id: RequestId(1),
+                text: String::new()
+            }),
+            8
+        );
+        let response = |message: &Response| {
+            let mut wire = Vec::new();
+            write_frame(&mut wire, message).unwrap();
+            wire[4]
+        };
+        assert_eq!(
+            response(&Response::Error {
+                req_id: None,
+                kind: ErrorKind::Internal,
+                message: String::new()
+            }),
+            3
+        );
+        assert_eq!(
+            response(&Response::Outline {
+                req_id: RequestId(1),
+                items: vec![],
+                more: false
+            }),
+            4
+        );
+        assert_eq!(
+            response(&Response::OutlinePath {
+                req_id: RequestId(1),
+                path: vec![]
+            }),
+            5
+        );
+        assert_eq!(
+            response(&Response::PageLabels {
+                req_id: RequestId(1),
+                first: 0,
+                defined: false,
+                labels: vec![]
+            }),
+            6
+        );
+        assert_eq!(
+            response(&Response::PageFound {
+                req_id: RequestId(1),
+                page: None
+            }),
+            7
+        );
+    }
+
+    #[test]
+    fn navigation_request_limits_are_enforced_on_both_sides_of_the_wire() {
+        let outline = |limit| Request::GetOutline {
+            req_id: RequestId(1),
+            parent: None,
+            after: None,
+            already: 0,
+            limit,
+        };
+        let labels = |count| Request::GetPageLabels {
+            req_id: RequestId(1),
+            first: 0,
+            count,
+        };
+        let find = |text: String| Request::FindPageLabel {
+            req_id: RequestId(1),
+            text,
+        };
+        let limit = u32::try_from(MAX_OUTLINE_ITEMS_PER_MESSAGE).unwrap();
+        let count = u32::try_from(MAX_LABELS_PER_MESSAGE).unwrap();
+        for good in [
+            outline(1),
+            outline(limit),
+            labels(1),
+            labels(count),
+            find("x".repeat(MAX_LABEL_BYTES)),
+        ] {
+            assert_eq!(round_trip(&good), good);
+        }
+        for bad in [
+            outline(0),
+            outline(limit + 1),
+            outline(u32::MAX),
+            labels(0),
+            labels(count + 1),
+            find("x".repeat(MAX_LABEL_BYTES + 1)),
+        ] {
+            assert!(matches!(bad.validate(), Err(Error::Invalid(_))), "{bad:?}");
+            let mut wire = Vec::new();
+            assert!(matches!(
+                write_frame(&mut wire, &bad),
+                Err(Error::Invalid(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn navigation_response_limits_are_enforced() {
+        let at = |page| {
+            Some(Destination {
+                page,
+                fit: Fit::Fit,
+            })
+        };
+        let item = || entry("t", at(1));
+        let outline = |items| Response::Outline {
+            req_id: RequestId(1),
+            items,
+            more: false,
+        };
+        let bad = [
+            outline(vec![item(); MAX_OUTLINE_ITEMS_PER_MESSAGE + 1]),
+            outline(vec![entry(&"t".repeat(MAX_OUTLINE_TITLE_BYTES + 1), None)]),
+            outline(vec![entry(
+                "t",
+                Some(Destination {
+                    page: 0,
+                    fit: Fit::Xyz {
+                        left: Some(f32::NAN),
+                        top: None,
+                        zoom: None,
+                    },
+                }),
+            )]),
+            outline(vec![entry(
+                "t",
+                Some(Destination {
+                    page: 0,
+                    fit: Fit::FitR {
+                        left: 0.0,
+                        bottom: 0.0,
+                        right: f32::INFINITY,
+                        top: 0.0,
+                    },
+                }),
+            )]),
+            Response::OutlinePath {
+                req_id: RequestId(1),
+                path: vec![1; MAX_OUTLINE_PATH + 1],
+            },
+            Response::PageLabels {
+                req_id: RequestId(1),
+                first: 0,
+                defined: true,
+                labels: vec!["a".into(); MAX_LABELS_PER_MESSAGE + 1],
+            },
+            Response::PageLabels {
+                req_id: RequestId(1),
+                first: 0,
+                defined: true,
+                labels: vec!["a".repeat(MAX_LABEL_BYTES + 1)],
+            },
+        ];
+        for message in &bad {
+            assert!(
+                matches!(message.validate(), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+        }
+        // The same sizes minus one are fine.
+        for good in [
+            outline(vec![item(); MAX_OUTLINE_ITEMS_PER_MESSAGE]),
+            outline(vec![entry(&"t".repeat(MAX_OUTLINE_TITLE_BYTES), None)]),
+            Response::OutlinePath {
+                req_id: RequestId(1),
+                path: vec![1; MAX_OUTLINE_PATH],
+            },
+            Response::PageLabels {
+                req_id: RequestId(1),
+                first: 0,
+                defined: true,
+                labels: vec!["a".repeat(MAX_LABEL_BYTES); MAX_LABELS_PER_MESSAGE],
+            },
+        ] {
+            assert_eq!(round_trip(&good), good);
+        }
+    }
+
+    #[test]
+    fn the_largest_outline_and_label_messages_fit_in_one_frame() {
+        let full = Response::Outline {
+            req_id: RequestId(u64::MAX),
+            items: vec![
+                OutlineEntry {
+                    id: u32::MAX,
+                    title: "é".repeat(MAX_OUTLINE_TITLE_BYTES / 2),
+                    destination: Some(Destination {
+                        page: u32::MAX,
+                        fit: Fit::FitR {
+                            left: 1.0,
+                            bottom: 1.0,
+                            right: 1.0,
+                            top: 1.0,
+                        },
+                    }),
+                    has_children: true,
+                    open: true,
+                    style: TitleStyle {
+                        bold: true,
+                        italic: true,
+                    },
+                };
+                MAX_OUTLINE_ITEMS_PER_MESSAGE
+            ],
+            more: true,
+        };
+        assert_eq!(round_trip(&full), full);
+        let labels = Response::PageLabels {
+            req_id: RequestId(u64::MAX),
+            first: u32::MAX,
+            defined: true,
+            labels: vec!["é".repeat(MAX_LABEL_BYTES / 2); MAX_LABELS_PER_MESSAGE],
+        };
+        assert_eq!(round_trip(&labels), labels);
     }
 
     fn repair(code: &str, message: &str) -> Repair {

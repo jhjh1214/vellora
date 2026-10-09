@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
 /// revision 6 password and 32 of an older one, so this is generous.
@@ -26,6 +26,17 @@ pub const MAX_REPAIRS: usize = 32;
 pub const MAX_REPAIR_CODE_BYTES: usize = 48;
 /// Longest [`Repair::message`] in bytes.
 pub const MAX_REPAIR_MESSAGE_BYTES: usize = 256;
+/// Most outline items one `Outline` may carry. With titles of at most
+/// [`MAX_OUTLINE_TITLE_BYTES`] this stays far below the frame limit.
+pub const MAX_OUTLINE_ITEMS_PER_MESSAGE: usize = 128;
+/// Longest outline item title in bytes.
+pub const MAX_OUTLINE_TITLE_BYTES: usize = 4096;
+/// Most ids one `OutlinePath` may carry (the engine's nesting limit is 64).
+pub const MAX_OUTLINE_PATH: usize = 64;
+/// Most labels one `PageLabels` may carry.
+pub const MAX_LABELS_PER_MESSAGE: usize = 1024;
+/// Longest page label in bytes (a prefix of 64 characters and a number).
+pub const MAX_LABEL_BYTES: usize = 320;
 /// Largest accepted tile scale (device pixels per point).
 pub const MAX_TILE_SCALE: f32 = 64.0;
 /// Longest accepted tile side in device pixels.
@@ -63,6 +74,110 @@ pub struct Repair {
     pub code: String,
     /// One line for the user, at most [`MAX_REPAIR_MESSAGE_BYTES`] bytes.
     pub message: String,
+}
+
+/// How a page is shown when a destination is followed (ISO 32000-2 Table 151). Coordinates are in
+/// default user space units of the page; `None` leaves that value as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Fit {
+    /// `/XYZ`: the point (`left`, `top`) at the top left of the window, at `zoom` (1.0 is 100%).
+    Xyz {
+        /// Left edge.
+        left: Option<f32>,
+        /// Top edge.
+        top: Option<f32>,
+        /// Magnification, greater than zero.
+        zoom: Option<f32>,
+    },
+    /// `/Fit`: the whole page.
+    Fit,
+    /// `/FitH`: the page's width, `top` at the top.
+    FitH {
+        /// Top edge.
+        top: Option<f32>,
+    },
+    /// `/FitV`: the page's height, `left` at the left.
+    FitV {
+        /// Left edge.
+        left: Option<f32>,
+    },
+    /// `/FitR`: the rectangle.
+    FitR {
+        /// Left edge.
+        left: f32,
+        /// Bottom edge.
+        bottom: f32,
+        /// Right edge.
+        right: f32,
+        /// Top edge.
+        top: f32,
+    },
+    /// `/FitB`: the page's bounding box.
+    FitB,
+    /// `/FitBH`: the bounding box's width.
+    FitBH {
+        /// Top edge.
+        top: Option<f32>,
+    },
+    /// `/FitBV`: the bounding box's height.
+    FitBV {
+        /// Left edge.
+        left: Option<f32>,
+    },
+}
+
+impl Fit {
+    /// Whether every number in it is finite.
+    fn is_finite(&self) -> bool {
+        let all = |values: &[Option<f32>]| values.iter().flatten().all(|v| v.is_finite());
+        match *self {
+            Fit::Xyz { left, top, zoom } => all(&[left, top, zoom]),
+            Fit::FitH { top } | Fit::FitBH { top } => all(&[top]),
+            Fit::FitV { left } | Fit::FitBV { left } => all(&[left]),
+            Fit::FitR {
+                left,
+                bottom,
+                right,
+                top,
+            } => [left, bottom, right, top].iter().all(|v| v.is_finite()),
+            Fit::Fit | Fit::FitB => true,
+        }
+    }
+}
+
+/// Where an outline item goes: a page of the document and how to show it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Destination {
+    /// Zero-based page index.
+    pub page: u32,
+    /// How to show the page.
+    pub fit: Fit,
+}
+
+/// One item of the document outline (the bookmarks).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OutlineEntry {
+    /// Names the item in later requests (`parent`, `after`). Only meaningful for this document.
+    pub id: u32,
+    /// The title as plain text, at most [`MAX_OUTLINE_TITLE_BYTES`] bytes; empty if it has none.
+    pub title: String,
+    /// Where the item goes; `None` when it has no destination the viewer can follow.
+    pub destination: Option<Destination>,
+    /// Whether the item has children to ask for.
+    pub has_children: bool,
+    /// Whether the document asks for the children to be shown when it is opened.
+    pub open: bool,
+    /// How the title is drawn.
+    pub style: TitleStyle,
+}
+
+/// How an outline item's title is drawn (the item's `/F` flags).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitleStyle {
+    /// Bold.
+    pub bold: bool,
+    /// Italic.
+    pub italic: bool,
 }
 
 /// A document password as the user typed it (UTF-8 text).
@@ -147,6 +262,9 @@ pub enum ErrorKind {
     PasswordRequired,
     /// The password sent with `Open` does not open the document. `Open` may be sent again.
     WrongPassword,
+    /// The outline or the page labels could not be read (damaged, or past a limit). Answers a
+    /// navigation request; the document itself stays usable.
+    ReadFailed,
 }
 
 /// Messages from the UI to the engine.
@@ -190,6 +308,46 @@ pub enum Request {
     },
     /// Close the document (and let the engine exit).
     Close,
+    /// One page of one level of the outline. Answered with `Outline`. Navigation requests are
+    /// read by a thread of their own, so a slow outline never delays a tile; `Cancel` does not
+    /// apply to them.
+    GetOutline {
+        /// Correlation id.
+        req_id: RequestId,
+        /// The item whose children are wanted; `None` for the top level.
+        parent: Option<u32>,
+        /// Continue after this item of the level (the last one received); `None` starts the level.
+        after: Option<u32>,
+        /// How many items of this level the caller already has. It bounds a level whose links
+        /// go round in a circle.
+        already: u32,
+        /// Most items wanted, in `1..=`[`MAX_OUTLINE_ITEMS_PER_MESSAGE`].
+        limit: u32,
+    },
+    /// The outline items that lead to the section `page` is in, to expand the tree to it.
+    /// Answered with `OutlinePath`.
+    GetOutlinePath {
+        /// Correlation id.
+        req_id: RequestId,
+        /// Zero-based page index.
+        page: u32,
+    },
+    /// The labels of a run of pages. Answered with `PageLabels`.
+    GetPageLabels {
+        /// Correlation id.
+        req_id: RequestId,
+        /// Zero-based index of the first page.
+        first: u32,
+        /// How many pages, in `1..=`[`MAX_LABELS_PER_MESSAGE`].
+        count: u32,
+    },
+    /// The page that a label names ("iv", "A-3"). Answered with `PageFound`.
+    FindPageLabel {
+        /// Correlation id.
+        req_id: RequestId,
+        /// The label as typed, at most [`MAX_LABEL_BYTES`] bytes.
+        text: String,
+    },
 }
 
 /// Messages from the engine to the UI.
@@ -226,6 +384,43 @@ pub enum Response {
         kind: ErrorKind,
         /// Human-readable detail, at most [`MAX_ERROR_MESSAGE_BYTES`] bytes.
         message: String,
+    },
+    /// The answer to `GetOutline`.
+    Outline {
+        /// The request it answers.
+        req_id: RequestId,
+        /// The items in order, at most [`MAX_OUTLINE_ITEMS_PER_MESSAGE`]; empty when the document
+        /// has no outline or the parent has no children.
+        items: Vec<OutlineEntry>,
+        /// The level goes on after the last item: ask again with `after` set to it.
+        more: bool,
+    },
+    /// The answer to `GetOutlinePath`.
+    OutlinePath {
+        /// The request it answers.
+        req_id: RequestId,
+        /// Ids from a top-level item down to the item that starts the section, at most
+        /// [`MAX_OUTLINE_PATH`]; empty when no item starts at or before the page.
+        path: Vec<u32>,
+    },
+    /// The answer to `GetPageLabels`.
+    PageLabels {
+        /// The request it answers.
+        req_id: RequestId,
+        /// Zero-based index of the first page labelled.
+        first: u32,
+        /// Whether the document defines page labels. If not, `labels` hold the page numbers.
+        defined: bool,
+        /// One label per page from `first`, up to the last page. A page without a label gets its
+        /// number (counting from 1). At most [`MAX_LABELS_PER_MESSAGE`].
+        labels: Vec<String>,
+    },
+    /// The answer to `FindPageLabel`.
+    PageFound {
+        /// The request it answers.
+        req_id: RequestId,
+        /// The zero-based page, or `None` if no page has that label.
+        page: Option<u32>,
     },
 }
 
@@ -292,10 +487,31 @@ impl Validate for Request {
                 }
                 Ok(())
             }
+            Request::GetOutline { limit, .. } => {
+                let wanted = usize::try_from(*limit).unwrap_or(usize::MAX);
+                if wanted == 0 || wanted > MAX_OUTLINE_ITEMS_PER_MESSAGE {
+                    return Err(Error::Invalid("outline limit must be 1..=128"));
+                }
+                Ok(())
+            }
+            Request::GetPageLabels { count, .. } => {
+                let wanted = usize::try_from(*count).unwrap_or(usize::MAX);
+                if wanted == 0 || wanted > MAX_LABELS_PER_MESSAGE {
+                    return Err(Error::Invalid("label count must be 1..=1024"));
+                }
+                Ok(())
+            }
+            Request::FindPageLabel { text, .. } => {
+                if text.len() > MAX_LABEL_BYTES {
+                    return Err(Error::Invalid("page label too long"));
+                }
+                Ok(())
+            }
             Request::Hello { .. }
             | Request::Open { .. }
             | Request::Cancel { .. }
-            | Request::Close => Ok(()),
+            | Request::Close
+            | Request::GetOutlinePath { .. } => Ok(()),
         }
     }
 }
@@ -335,7 +551,43 @@ impl Validate for Response {
                 }
                 Ok(())
             }
-            Response::Hello { .. } | Response::TileReady { .. } => Ok(()),
+            Response::Outline { items, .. } => {
+                if items.len() > MAX_OUTLINE_ITEMS_PER_MESSAGE {
+                    return Err(Error::Invalid("too many outline items in one message"));
+                }
+                if items
+                    .iter()
+                    .any(|i| i.title.len() > MAX_OUTLINE_TITLE_BYTES)
+                {
+                    return Err(Error::Invalid("outline title too long"));
+                }
+                if items
+                    .iter()
+                    .filter_map(|i| i.destination)
+                    .any(|d| !d.fit.is_finite())
+                {
+                    return Err(Error::Invalid("destination numbers must be finite"));
+                }
+                Ok(())
+            }
+            Response::OutlinePath { path, .. } => {
+                if path.len() > MAX_OUTLINE_PATH {
+                    return Err(Error::Invalid("outline path too long"));
+                }
+                Ok(())
+            }
+            Response::PageLabels { labels, .. } => {
+                if labels.len() > MAX_LABELS_PER_MESSAGE {
+                    return Err(Error::Invalid("too many labels in one message"));
+                }
+                if labels.iter().any(|l| l.len() > MAX_LABEL_BYTES) {
+                    return Err(Error::Invalid("page label too long"));
+                }
+                Ok(())
+            }
+            Response::Hello { .. } | Response::TileReady { .. } | Response::PageFound { .. } => {
+                Ok(())
+            }
         }
     }
 }

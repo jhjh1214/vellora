@@ -72,11 +72,17 @@ pub(crate) struct Document {
     pub(crate) page_sizes: Vec<PageSize>,
     /// Why the document counts as repaired; empty when it does not.
     pub(crate) repairs: Vec<Repair>,
+    /// The file's bytes, which the navigation thread reads with `cos` while PDFium renders.
+    pub(crate) mapped: Arc<MappedFile>,
+    /// The forms of the password the user typed, until the session hands them to the navigation
+    /// thread (`std::mem::take`); empty when none was given. Wiped when dropped.
+    pub(crate) unlock: Vec<Zeroizing<Vec<u8>>>,
 }
 
 impl Document {
     /// Maps `file`, opens it in PDFium (with `password` if there is one), checks it against `cos`
-    /// and measures the first pages. The password is not kept.
+    /// and measures the first pages. The password itself is not kept; its forms stay in
+    /// [`Self::unlock`] for the navigation thread to take.
     pub(crate) fn open(
         renderer: &Renderer,
         file: &File,
@@ -130,6 +136,8 @@ impl Document {
             page_count,
             page_sizes,
             repairs,
+            mapped,
+            unlock: candidates.unwrap_or_default(),
         })
     }
 }
