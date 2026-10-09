@@ -585,10 +585,10 @@ QVector<TileDraw> CanvasController::tilesIn(double top, double bottom) const {
     return tiles;
 }
 
-Frame CanvasController::frame() const {
-    Frame frame;
+QVector<PageDraw> CanvasController::visiblePages() const {
+    QVector<PageDraw> pages;
     if (m_layout.pageCount() == 0 || m_viewport.isEmpty()) {
-        return frame;
+        return pages;
     }
     const PageLayout::Range rows = visibleRows(0.0, m_viewport.height());
     for (quint32 r = 0; r < rows.count; ++r) {
@@ -596,13 +596,22 @@ Frame CanvasController::frame() const {
         const quint32 first = m_layout.firstPageOf(row);
         for (quint32 i = 0; i < m_layout.pagesInRow(row); ++i) {
             const quint32 page = first + i;
-            frame.pages.append(
+            pages.append(
                 {page, pageScreenRect(page), m_layout.pageSize(page), m_mode.rotation, m_zoom});
         }
     }
-    frame.tiles = tilesIn(0.0, m_viewport.height());
+    return pages;
+}
+
+Frame CanvasController::frame() const {
+    Frame frame;
+    frame.pages = visiblePages();
+    if (!frame.pages.isEmpty()) {
+        frame.tiles = tilesIn(0.0, m_viewport.height());
+    }
     return frame;
 }
+
 void CanvasController::schedule() {
     if (!m_session->isOpen() || m_layout.pageCount() == 0 || m_viewport.isEmpty()) {
         return;

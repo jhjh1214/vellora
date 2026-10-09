@@ -35,7 +35,7 @@ void LinkLayer::viewMoved() {
 
 const QVector<PageDraw>& LinkLayer::visiblePages() const {
     if (m_dirty) {
-        m_visible = m_controller->frame().pages;
+        m_visible = m_controller->visiblePages();
         m_dirty = false;
     }
     return m_visible;

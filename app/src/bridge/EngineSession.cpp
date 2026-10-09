@@ -28,6 +28,19 @@ Destination toDestination(const OutlineNode& node) {
     return destination;
 }
 
+TextChar toChar(const TextGlyph& glyph) {
+    TextChar c;
+    c.ch = static_cast<char32_t>(glyph.ch);
+    c.rect = QRectF(QPointF(static_cast<double>(glyph.left), static_cast<double>(glyph.top)),
+                    QPointF(static_cast<double>(glyph.right), static_cast<double>(glyph.bottom)))
+                 .normalized();
+    c.size = glyph.size;
+    c.flags = static_cast<quint8>(glyph.flags);
+    c.word = glyph.word;
+    c.line = glyph.line;
+    return c;
+}
+
 Link toLink(const LinkNode& node) {
     Link link;
     link.rect = QRectF(QPointF(static_cast<double>(node.left), static_cast<double>(node.top)),
@@ -217,6 +230,17 @@ quint64 EngineSession::requestLinks(quint32 page, quint32 skip, quint32 limit) {
     }
 }
 
+quint64 EngineSession::requestTextPage(quint32 page, quint32 skip, quint32 limit) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_text_page(page, skip, limit);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 quint64 EngineSession::requestOutlinePath(quint32 page) {
     if (!m_client) {
         return 0;
@@ -358,8 +382,15 @@ void EngineSession::dispatch(const EngineEvent& event) {
         emit linksReady(event.request, event.links_page, links, event.more);
         break;
     }
-    case EventKind::TextPage:
-        break; // the shell asks for text in task 14b
+    case EventKind::TextPage: {
+        QList<TextChar> chars;
+        chars.reserve(static_cast<qsizetype>(event.glyphs.size()));
+        for (const TextGlyph& glyph : event.glyphs) {
+            chars.append(toChar(glyph));
+        }
+        emit textReady(event.request, event.text_page, event.text_skip, event.text_total, chars);
+        break;
+    }
     }
 }
 

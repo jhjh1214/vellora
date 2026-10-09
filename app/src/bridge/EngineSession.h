@@ -83,6 +83,8 @@ public:
     quint64 findPageLabel(const QString& text);
     // Up to `limit` (1 to 256) links of `page` after the first `skip`.
     quint64 requestLinks(quint32 page, quint32 skip, quint32 limit);
+    // Up to `limit` (1 to 8,192) characters of `page` after the first `skip`.
+    quint64 requestTextPage(quint32 page, quint32 skip, quint32 limit);
 
     // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
     quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }
@@ -107,6 +109,9 @@ signals:
     void pageFound(quint64 request, bool found, quint32 page);
     // `more`: ask again with `skip` advanced by the number received.
     void linksReady(quint64 request, quint32 page, const QList<vellora::Link>& links, bool more);
+    // The characters of `page` from `skip`; `total` is how many the page has in all.
+    void textReady(quint64 request, quint32 page, quint32 skip, quint32 total,
+                   const QList<vellora::TextChar>& chars);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);
     // Requests in `lost` will never be answered; ask again after `engineRestarted`.

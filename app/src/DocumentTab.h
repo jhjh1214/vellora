@@ -99,6 +99,22 @@ public:
     // Hosts the reader chose not to be asked about again, for this document and this run.
     bool isHostTrusted(const QString& host) const { return m_trustedHosts.contains(host); }
 
+    // ---- text ----
+    // Select All takes the text of the whole document; above this many pages the reader is
+    // asked first, because copying it means reading it all.
+    static constexpr quint32 kSelectAllConfirmPages = 1000;
+    // Asks whether to select the text of `pageCount` pages; the default shows a question.
+    using SelectAllConfirmer = std::function<bool(quint32 pageCount)>;
+    void setSelectAllConfirmer(SelectAllConfirmer confirmer) {
+        m_selectAllConfirmer = std::move(confirmer);
+    }
+    // Selects all the text of the document (after asking, for a long one), or of the page the
+    // reader is on.
+    void selectAll();
+    void selectPage();
+    // Copies the selected text to the clipboard.
+    void copy();
+
     // Shows the sidebar on its outline tab.
     void showOutline();
     // The label of a page: the document's own if it has page labels, else its number.
@@ -194,6 +210,7 @@ private:
     std::optional<AppSettings::ViewState> m_savedView;
     bool m_opened = false;
     bool m_applyingLayout = false;
+    SelectAllConfirmer m_selectAllConfirmer;
     UriConfirmer m_uriConfirmer;
     UriOpener m_uriOpener;
     Notifier m_notifier;

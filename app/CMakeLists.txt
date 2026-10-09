@@ -122,6 +122,12 @@ add_library(vellora_shell STATIC
   src/navigation/NavigationHistory.h
   src/sidebar/OutlineView.cpp
   src/sidebar/OutlineView.h
+  src/text/SelectionOverlay.cpp
+  src/text/SelectionOverlay.h
+  src/text/TextLayer.cpp
+  src/text/TextLayer.h
+  src/text/TextSelection.cpp
+  src/text/TextSelection.h
   src/sidebar/ThumbnailSidebar.cpp
   src/sidebar/ThumbnailSidebar.h
   src/sidebar/ThumbnailView.cpp
