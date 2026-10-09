@@ -35,6 +35,10 @@
 //! the engine may still write it for a live request. Do not mix this with [`Client::request_tile`]
 //! on the same client: that call lets the caller pick slots the cache knows nothing about.
 //!
+//! Thumbnails ([`Client::request_thumbnail`]) have a second cache with its own budget and its own
+//! slots at the end of the region, so a fling through the sidebar cannot evict the tiles of the
+//! page being read, and the engine renders them last ([`Priority::Thumbnail`]).
+//!
 //! # The client's own deadlines
 //!
 //! The engine aborts itself when a tile passes its hard deadline, but a wedged process may never
@@ -74,7 +78,10 @@ use vellora_ipc::{
 };
 use vellora_shm::{SlotGeometry, TileRegion};
 
-use crate::cache::{DEFAULT_BUDGET_BYTES, ReserveError, TileCache, TileKey};
+use crate::cache::{
+    DEFAULT_BUDGET_BYTES, DEFAULT_THUMBNAIL_BUDGET_BYTES, ReserveError, ScaleBucket, TileCache,
+    TileKey,
+};
 use crate::document::{self, Change, Seen};
 use crate::limits::ResourceLimits;
 use crate::logging::LineRing;
@@ -137,6 +144,10 @@ pub struct ClientConfig {
     pub max_restarts: u32,
     /// Bytes of finished and pending tiles the cache may hold.
     pub cache_budget_bytes: u64,
+    /// Bytes of finished and pending thumbnails the thumbnail cache may hold. It has slots of its
+    /// own, added to the region after `geometry`'s, so thumbnails never take room from tiles;
+    /// 0 turns thumbnails off.
+    pub thumbnail_budget_bytes: u64,
     /// How long a new engine may take to say `Hello` before it is killed ([`Stage::Hello`]).
     pub hello_timeout: Duration,
     /// How long the engine may take to answer `Open` after its `Hello` before it is killed
@@ -160,6 +171,7 @@ impl ClientConfig {
             env: Vec::new(),
             max_restarts: DEFAULT_MAX_RESTARTS,
             cache_budget_bytes: DEFAULT_BUDGET_BYTES,
+            thumbnail_budget_bytes: DEFAULT_THUMBNAIL_BUDGET_BYTES,
             hello_timeout: DEFAULT_HELLO_TIMEOUT,
             open_timeout: DEFAULT_OPEN_TIMEOUT,
             crash_dir: None,
@@ -435,8 +447,10 @@ struct State {
     /// dropped (and so wiped) when the engine refuses it, and with the client. Never logged.
     password: Option<Password>,
     cache: TileCache,
+    /// The thumbnails, in slots after the tile cache's.
+    thumbnails: TileCache,
     /// The cache entry each in-flight cached request is for.
-    tile_keys: HashMap<RequestId, TileKey>,
+    tile_keys: HashMap<RequestId, (Pool, TileKey)>,
     /// While the current engine is starting: what it owes us next and when that is overdue.
     startup: Option<(Stage, Instant)>,
     /// When the current engine last answered, or got its first request in flight after being idle.
@@ -497,26 +511,40 @@ impl State {
         }
     }
 
+    fn pool(&mut self, pool: Pool) -> &mut TileCache {
+        match pool {
+            Pool::Tiles => &mut self.cache,
+            Pool::Thumbnails => &mut self.thumbnails,
+        }
+    }
+
     /// Updates the cache for what the engine just said about a request.
     fn settle_tile(&mut self, event: &Event) {
         match event {
             Event::TileReady { request, .. } => {
-                if let Some(key) = self.tile_keys.remove(request) {
+                if let Some((pool, key)) = self.tile_keys.remove(request) {
                     // `false`: invalidated while in flight, the slot is freed instead.
-                    self.cache.complete(&key);
+                    self.pool(pool).complete(&key);
                 }
             }
             Event::RequestFailed {
                 request: Some(request),
                 ..
             } => {
-                if let Some(key) = self.tile_keys.remove(request) {
-                    self.cache.abandon(&key);
+                if let Some((pool, key)) = self.tile_keys.remove(request) {
+                    self.pool(pool).abandon(&key);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Which cache a request belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pool {
+    Tiles,
+    Thumbnails,
 }
 
 /// The write side of the current engine's pipe. Locked separately from [`State`]: a write can
@@ -619,9 +647,17 @@ impl Client {
     ///
     /// [`ClientError`] if the file cannot be opened, the region cannot be created or the engine
     /// cannot be started.
-    pub fn open(config: ClientConfig, path: &Path) -> Result<Self, ClientError> {
+    pub fn open(mut config: ClientConfig, path: &Path) -> Result<Self, ClientError> {
         let document = document::open_read_only(path).map_err(ClientError::Document)?;
         let seen = Seen::new(&document, path).map_err(ClientError::Document)?;
+        // The thumbnails' slots follow the tile cache's in one region. The geometry the rest of
+        // the client sees (and the engine is started with) is the whole region.
+        let tile_slots = config.geometry.slot_count();
+        let thumbnail_slots = thumbnail_slots(config.geometry, config.thumbnail_budget_bytes);
+        if thumbnail_slots > 0 {
+            config.geometry =
+                SlotGeometry::new(tile_slots + thumbnail_slots, config.geometry.slot_bytes())?;
+        }
         let (region, region_file) = TileRegion::create(config.geometry)?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
@@ -633,7 +669,16 @@ impl Client {
                 log_reader: None,
                 opened: None,
                 password: None,
-                cache: TileCache::new(config.geometry, config.cache_budget_bytes),
+                cache: TileCache::over_slots(
+                    config.geometry,
+                    0..tile_slots,
+                    config.cache_budget_bytes,
+                ),
+                thumbnails: TileCache::over_slots(
+                    config.geometry,
+                    tile_slots..tile_slots + thumbnail_slots,
+                    config.thumbnail_budget_bytes,
+                ),
                 tile_keys: HashMap::new(),
                 startup: None,
                 activity: Instant::now(),
@@ -780,7 +825,7 @@ impl Client {
                 Err(error) => return Err(error.into()),
             };
             let id = state.begin_request(Instant::now());
-            state.tile_keys.insert(id, key);
+            state.tile_keys.insert(id, (Pool::Tiles, key));
             (id, slot)
         };
         self.shared.watch.notify_all();
@@ -813,6 +858,109 @@ impl Client {
         Ok(TileLookup::Requested(id))
     }
 
+    /// Returns the thumbnail of `page` at `scale` from the thumbnail cache, or asks the engine for
+    /// it at [`Priority::Thumbnail`]. A thumbnail is the whole page rendered `width` x `height`
+    /// pixels (each at most [`TILE_PIXELS`]) at the bucket's scale; the same page and bucket must
+    /// always be asked for with the same size. Its cache has its own budget and slots
+    /// ([`ClientConfig::thumbnail_budget_bytes`]), so thumbnails and tiles never evict each other.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_cached_tile`](Self::request_cached_tile), and [`ClientError::InvalidTile`] for
+    /// a size outside `1..=`[`TILE_PIXELS`] or when thumbnails are off.
+    pub fn request_thumbnail(
+        &self,
+        page: u32,
+        scale: ScaleBucket,
+        width: u32,
+        height: u32,
+    ) -> Result<TileLookup, ClientError> {
+        if !(1..=TILE_PIXELS).contains(&width) || !(1..=TILE_PIXELS).contains(&height) {
+            return Err(ClientError::InvalidTile);
+        }
+        let key = TileKey {
+            page,
+            scale,
+            x: 0,
+            y: 0,
+        };
+        let (id, slot) = {
+            let mut state = self.shared.state();
+            Self::check_running(&state)?;
+            if state.thumbnails.get(&key).is_some() {
+                return Ok(TileLookup::Ready);
+            }
+            if state.thumbnails.contains(&key) {
+                return Ok(TileLookup::InFlight);
+            }
+            let bytes = u64::from(width) * u64::from(height) * 4;
+            let slot = match state.thumbnails.reserve(key, bytes) {
+                Ok(slot) => slot,
+                Err(ReserveError::Full) => return Ok(TileLookup::Full),
+                Err(ReserveError::TooLarge(_)) => return Err(ClientError::InvalidTile),
+                Err(error) => return Err(error.into()),
+            };
+            let id = state.begin_request(Instant::now());
+            state.tile_keys.insert(id, (Pool::Thumbnails, key));
+            (id, slot)
+        };
+        self.shared.watch.notify_all();
+        let request = Request::RenderTile {
+            req_id: id,
+            page,
+            scale: scale.scale(),
+            rect: TileRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            slot,
+            priority: Priority::Thumbnail,
+        };
+        let sent = match self.shared.sink().0.as_mut() {
+            Some(writer) => write_frame(writer, &request).map_err(ClientError::from),
+            None => Err(ClientError::EngineUnavailable),
+        };
+        if let Err(error) = sent {
+            let mut state = self.shared.state();
+            state.ledger.forget(id);
+            if state.tile_keys.remove(&id).is_some() {
+                state.thumbnails.abandon(&key);
+            }
+            return Err(error);
+        }
+        Ok(TileLookup::Requested(id))
+    }
+
+    /// Copies a ready thumbnail into `out`, which must be exactly `width * height * 4` bytes of
+    /// the size it was requested with, and marks it most recently used. `false` if it is not
+    /// ready.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Region`] for a buffer longer than a slot.
+    pub fn read_thumbnail(
+        &self,
+        page: u32,
+        scale: ScaleBucket,
+        out: &mut [u8],
+    ) -> Result<bool, ClientError> {
+        let key = TileKey {
+            page,
+            scale,
+            x: 0,
+            y: 0,
+        };
+        // Held across the copy, as in `read_tile`.
+        let mut state = self.shared.state();
+        let Some(slot) = state.thumbnails.get(&key) else {
+            return Ok(false);
+        };
+        self.shared.region.read_slot_prefix(slot.0, out)?;
+        Ok(true)
+    }
+
     /// Copies a ready tile into `out`, which must be exactly one slot long, and marks it most
     /// recently used. `false` if the tile is not ready (absent, in flight or invalidated).
     ///
@@ -833,13 +981,20 @@ impl Client {
     /// Forgets the cached tiles of `page` (it changed): ready ones at once, in-flight ones when the
     /// engine answers. Returns how many ready tiles were dropped.
     pub fn invalidate_page(&self, page: u32) -> usize {
-        self.shared.state().cache.invalidate_page(page)
+        let mut state = self.shared.state();
+        state.cache.invalidate_page(page) + state.thumbnails.invalidate_page(page)
     }
 
     /// Number of tiles in the cache, in flight and ready.
     #[must_use]
     pub fn cached_tiles(&self) -> usize {
         self.shared.state().cache.len()
+    }
+
+    /// Number of thumbnails in the thumbnail cache, in flight and ready.
+    #[must_use]
+    pub fn cached_thumbnails(&self) -> usize {
+        self.shared.state().thumbnails.len()
     }
 
     /// Withdraws a request. Queued work is dropped by the engine; a render already running
@@ -854,8 +1009,8 @@ impl Client {
             if !state.ledger.forget(request) {
                 return false;
             }
-            if let Some(key) = state.tile_keys.remove(&request) {
-                state.cache.abandon(&key);
+            if let Some((pool, key)) = state.tile_keys.remove(&request) {
+                state.pool(pool).abandon(&key);
             }
         }
         if let Some(writer) = self.shared.sink().0.as_mut() {
@@ -993,6 +1148,15 @@ impl Drop for Client {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// How many slots, added to a region of `geometry`, hold `budget_bytes` of thumbnails: as many
+/// whole slots as the budget fills, as far as the region limit allows.
+fn thumbnail_slots(geometry: SlotGeometry, budget_bytes: u64) -> u32 {
+    let slot_bytes = u64::from(geometry.slot_bytes());
+    let room = vellora_shm::MAX_REGION_BYTES / slot_bytes - u64::from(geometry.slot_count());
+    // At most the region limit over the slot size, so it fits `u32`.
+    u32::try_from((budget_bytes / slot_bytes).min(room)).unwrap_or(0)
 }
 
 /// Starts an engine over the document and region and sends `Hello` and `Open`.
@@ -1229,6 +1393,7 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
         let (lost, will_restart) = state.ledger.crashed();
         // Their answers will never come; ready tiles stay valid (task 21).
         state.cache.abandon_pending();
+        state.thumbnails.abandon_pending();
         state.tile_keys.clear();
         if !will_restart {
             state.phase = Phase::Failed;

@@ -24,6 +24,15 @@ endfunction()
 vellora_add_test(tst_engine_session tst_engine_session.cpp)
 vellora_add_test(tst_main_window tst_main_window.cpp)
 vellora_add_test(tst_view_modes tst_view_modes.cpp)
+vellora_add_test(tst_thumbnails tst_thumbnails.cpp)
+# The frame-time check of the sidebar: a timing test, so it is a file of its own. It is disabled on
+# the macOS CI runner, whose handlers and repaints go over 8 ms by up to 20 ms for code that takes
+# 0.5 ms elsewhere (app/README.md, "macOS and the canvas test"); set VELLORA_TEST_FRAME_TIME=1 to run
+# it, on real hardware.
+vellora_add_test(tst_thumbnails_frame_time tst_thumbnails_frame_time.cpp)
+if(APPLE AND NOT "$ENV{VELLORA_TEST_FRAME_TIME}" STREQUAL "1")
+  set_tests_properties(tst_thumbnails_frame_time PROPERTIES DISABLED TRUE)
+endif()
 vellora_add_test(tst_tabs tst_tabs.cpp)
 vellora_add_test(tst_about tst_about.cpp)
 vellora_add_test(tst_logging tst_logging.cpp)

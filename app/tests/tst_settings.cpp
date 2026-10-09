@@ -228,6 +228,31 @@ private slots:
         nothing.setLastLayout({false, 2, 2});
         QCOMPARE(nothing.lastLayout(), (AppSettings::Layout{true, 0, 0}));
     }
+    void theSidebarIsRememberedAndBounded() {
+        QTemporaryDir dir;
+        QSettings backing(dir.filePath(QStringLiteral("s.ini")), QSettings::IniFormat);
+        AppSettings settings(&backing);
+        // Hidden, with no chosen width, until the user says otherwise.
+        QCOMPARE(settings.sidebar(), (AppSettings::Sidebar{false, 0, 120}));
+        settings.setSidebar({true, 220, 90});
+        QCOMPARE(settings.sidebar(), (AppSettings::Sidebar{true, 220, 90}));
+        // Whatever is written, or found in the file, is clamped to what the sidebar can show.
+        settings.setSidebar({true, 99'999, 5'000});
+        QCOMPARE(settings.sidebar(), (AppSettings::Sidebar{true, AppSettings::kMaxSidebarWidth,
+                                                           AppSettings::kMaxThumbnailWidth}));
+        backing.setValue(QStringLiteral("sidebar/width"), 3);
+        backing.setValue(QStringLiteral("sidebar/thumbnailWidth"), -7);
+        QCOMPARE(settings.sidebar(), (AppSettings::Sidebar{true, AppSettings::kMinSidebarWidth,
+                                                           AppSettings::kMinThumbnailWidth}));
+        backing.setValue(QStringLiteral("sidebar/width"), QStringLiteral("garbage"));
+        backing.setValue(QStringLiteral("sidebar/visible"), QStringLiteral("garbage"));
+        QCOMPARE(settings.sidebar().width, 0);
+        QVERIFY(!settings.sidebar().visible);
+        AppSettings nothing;
+        nothing.setSidebar({true, 200, 100});
+        QCOMPARE(nothing.sidebar(), (AppSettings::Sidebar{false, 0, 120}));
+    }
+
     void pathsAreResolvedAgainstTheDirectoryTheCommandRanIn() {
         QTemporaryDir dir;
         const QStringList resolved = vellora::resolvePaths(

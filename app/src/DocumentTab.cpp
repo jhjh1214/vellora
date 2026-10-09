@@ -2,9 +2,12 @@
 
 #include "PasswordDialog.h"
 #include "RepairBar.h"
+#include "sidebar/ThumbnailSidebar.h"
 
 #include <QFileInfo>
+#include <QHBoxLayout>
 #include <QMetaObject>
+#include <QSplitter>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -21,15 +24,38 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     };
 
     // The repair bar sits above the canvas and takes its height from it; it is hidden unless the
-    // engine repaired the file.
-    auto* layout = new QVBoxLayout(this);
+    // engine repaired the file. The thumbnails are on the left, in a splitter, hidden at first.
+    auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    m_repairBar = new RepairBar(this);
-    m_canvas = new CanvasView(&m_session, this);
-    layout->addWidget(m_repairBar);
-    layout->addWidget(m_canvas, 1);
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->setChildrenCollapsible(false);
+    auto* content = new QWidget(m_splitter);
+    auto* contentLayout = new QVBoxLayout(content);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(0);
+    m_repairBar = new RepairBar(content);
+    m_canvas = new CanvasView(&m_session, content);
+    m_sidebar = new ThumbnailSidebar(&m_session, m_canvas->controller(), m_splitter);
+    contentLayout->addWidget(m_repairBar);
+    contentLayout->addWidget(m_canvas, 1);
+    m_splitter->addWidget(m_sidebar);
+    m_splitter->addWidget(content);
+    m_splitter->setStretchFactor(0, 0);
+    m_splitter->setStretchFactor(1, 1);
+    layout->addWidget(m_splitter);
     setFocusProxy(m_canvas);
+
+    const AppSettings::Sidebar sidebar =
+        m_settings ? m_settings->sidebar() : AppSettings::Sidebar{};
+    m_sidebar->thumbnails().setThumbnailWidth(sidebar.thumbnailWidth);
+    m_sidebar->setMinimumWidth(AppSettings::kMinSidebarWidth);
+    m_sidebar->setVisible(sidebar.visible);
+    const int sidebarWidth =
+        sidebar.width > 0 ? sidebar.width : m_sidebar->thumbnails().thumbnailWidth() + 40;
+    m_splitter->setSizes({sidebarWidth, 1000});
+    connect(m_splitter, &QSplitter::splitterMoved, this, [this] { saveSidebar(); });
+    connect(m_sidebar, &ThumbnailSidebar::thumbnailWidthChanged, this, [this] { saveSidebar(); });
 
     m_zoomStatus = tr("%1%").arg(qRound(m_canvas->controller()->zoom() * 100.0));
     // A new tab arranges its pages the way the user last chose.
@@ -62,8 +88,37 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
 }
 
 DocumentTab::~DocumentTab() {
-    // Qt would delete the canvas after the members, i.e. after the session it draws from.
+    // Qt would delete the children after the members, i.e. after the session they draw from.
+    delete m_sidebar;
     delete m_canvas;
+}
+
+bool DocumentTab::sidebarVisible() const {
+    // Not `isVisible`: that is false for a tab that is not the current one.
+    return !m_sidebar->isHidden();
+}
+
+void DocumentTab::setSidebarVisible(bool visible) {
+    if (visible == sidebarVisible()) {
+        return;
+    }
+    m_sidebar->setVisible(visible);
+    saveSidebar();
+    emit sidebarVisibilityChanged(visible);
+}
+
+void DocumentTab::saveSidebar() {
+    if (m_settings == nullptr) {
+        return;
+    }
+    AppSettings::Sidebar sidebar = m_settings->sidebar();
+    sidebar.visible = sidebarVisible();
+    // The width only counts while the sidebar is shown: a hidden one has none.
+    if (sidebarVisible() && !m_splitter->sizes().isEmpty()) {
+        sidebar.width = m_splitter->sizes().first();
+    }
+    sidebar.thumbnailWidth = m_sidebar->thumbnails().thumbnailWidth();
+    m_settings->setSidebar(sidebar);
 }
 
 void DocumentTab::setDocumentStatus(const QString& text) {
@@ -74,6 +129,7 @@ void DocumentTab::setDocumentStatus(const QString& text) {
 bool DocumentTab::open(const QString& path) {
     saveViewState();
     m_canvas->reset();
+    m_sidebar->reset();
     m_pageStatus.clear();
     m_fileChanged = false;
     m_opened = false;

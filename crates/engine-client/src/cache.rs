@@ -42,6 +42,10 @@ use vellora_shm::SlotGeometry;
 /// Default tile cache budget: 256 MiB (`docs/architecture/performance-targets.md`).
 pub const DEFAULT_BUDGET_BYTES: u64 = 256 << 20;
 
+/// Default budget of the thumbnail cache: 64 MiB, kept apart from the tile budget so that a
+/// fling through the sidebar never evicts the tiles of the page being read.
+pub const DEFAULT_THUMBNAIL_BUDGET_BYTES: u64 = 64 << 20;
+
 /// Bytes of one slot in a region sized for the cache: a 512 x 512 tile of 4-byte pixels.
 pub const SLOT_BYTES: u32 = 1 << 20;
 
@@ -143,13 +147,25 @@ impl TileCache {
     /// A cache over a region of `geometry` that keeps at most `budget_bytes` of tiles.
     #[must_use]
     pub fn new(geometry: SlotGeometry, budget_bytes: u64) -> Self {
+        Self::over_slots(geometry, 0..geometry.slot_count(), budget_bytes)
+    }
+
+    /// A cache that uses only the slots `slots` of a region of `geometry`, so that two caches can
+    /// share one region without ever handing out the same slot (the tile cache and the thumbnail
+    /// cache).
+    #[must_use]
+    pub fn over_slots(
+        geometry: SlotGeometry,
+        slots: std::ops::Range<u32>,
+        budget_bytes: u64,
+    ) -> Self {
         Self {
             slot_bytes: u64::from(geometry.slot_bytes()),
             budget: budget_bytes,
             used: 0,
             entries: HashMap::new(),
             recency: VecDeque::new(),
-            free: (0..geometry.slot_count()).map(SlotId).collect(),
+            free: slots.map(SlotId).collect(),
             tick: 0,
         }
     }

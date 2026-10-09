@@ -123,6 +123,40 @@ bool EngineSession::readTile(quint32 page, float zoom, quint32 x, quint32 y, QBy
     }
 }
 
+TileTicket EngineSession::requestThumbnail(quint32 page, float zoom, quint32 width,
+                                           quint32 height) {
+    if (!m_client) {
+        return TileTicket{TileState::Full, 0};
+    }
+    try {
+        return (*m_client)->request_thumbnail(page, zoom, width, height);
+    } catch (const std::exception&) {
+        // The engine is down (it restarts), the size is invalid or thumbnails are off.
+        return TileTicket{TileState::Full, 0};
+    }
+}
+
+bool EngineSession::readThumbnail(quint32 page, float zoom, quint32 width, quint32 height,
+                                  QImage& out) {
+    if (!m_client || width == 0 || height == 0 || width > tilePixels() || height > tilePixels()) {
+        return false;
+    }
+    // BGRx with tight rows, which is what RGB32 is in memory on little-endian machines.
+    if (out.format() != QImage::Format_RGB32 || out.width() != static_cast<int>(width) ||
+        out.height() != static_cast<int>(height)) {
+        out = QImage(static_cast<int>(width), static_cast<int>(height), QImage::Format_RGB32);
+    }
+    if (out.isNull() || out.bytesPerLine() != static_cast<qsizetype>(width) * 4) {
+        return false;
+    }
+    try {
+        return (*m_client)->read_thumbnail(
+            page, zoom, rust::Slice<uint8_t>(out.bits(), static_cast<size_t>(out.sizeInBytes())));
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 void EngineSession::invalidatePage(quint32 page) {
     if (m_client) {
         (*m_client)->invalidate_page(page);

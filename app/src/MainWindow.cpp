@@ -121,6 +121,8 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
         menu->addAction(action);
         m_viewActions.insert(QString::fromLatin1(id), action);
     };
+    addView(viewMenu, "view.thumbnails", true);
+    viewMenu->addSeparator();
     auto* layoutMenu = viewMenu->addMenu(tr("Page &Layout"));
     for (const char* id : {"view.layout.single", "view.layout.continuous", "view.layout.twoUp",
                            "view.layout.twoUpContinuous"}) {
@@ -199,6 +201,10 @@ void MainWindow::registerCommands() {
                 setCurrentTabIndex((currentTabIndex() + tabCount() - 1) % tabCount());
             }
         });
+    add("view.thumbnails", tr("Page Thumbnails"), {QKeySequence(Qt::Key_F4)}, [this] {
+        currentTab().setSidebarVisible(!currentTab().sidebarVisible());
+        updateViewActions();
+    });
     add("view.zoomIn", tr("Zoom In"),
         {QKeySequence(QKeySequence::ZoomIn), QKeySequence(Qt::CTRL | Qt::Key_Equal)},
         [this] { canvas().zoomIn(); });
@@ -285,6 +291,11 @@ DocumentTab* MainWindow::addTab() {
             updateViewActions();
         }
     });
+    connect(tab, &DocumentTab::sidebarVisibilityChanged, this, [this, tab] {
+        if (m_tabs->currentWidget() == tab) {
+            updateViewActions();
+        }
+    });
     connect(tab, &DocumentTab::message, this, [this, tab](const QString& text) {
         if (m_tabs->currentWidget() == tab) {
             if (text.isEmpty()) {
@@ -322,6 +333,7 @@ void MainWindow::updateViewActions() {
     check("view.layout.twoUp", !mode.continuous && twoUp);
     check("view.layout.twoUpContinuous", mode.continuous && twoUp);
     check("view.layout.cover", m_coverInTwoUp);
+    check("view.thumbnails", currentTab().sidebarVisible());
 }
 
 void MainWindow::updateTabTitle(DocumentTab* tab) {

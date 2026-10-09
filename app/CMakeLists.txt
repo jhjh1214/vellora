@@ -112,6 +112,10 @@ add_library(vellora_shell STATIC
   src/canvas/CanvasWidget.h
   src/canvas/PageLayout.cpp
   src/canvas/PageLayout.h
+  src/sidebar/ThumbnailSidebar.cpp
+  src/sidebar/ThumbnailSidebar.h
+  src/sidebar/ThumbnailView.cpp
+  src/sidebar/ThumbnailView.h
   src/commands/CommandPalette.cpp
   src/commands/CommandPalette.h
   src/commands/CommandRegistry.cpp

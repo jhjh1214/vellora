@@ -454,6 +454,33 @@ fn queued_tiles_are_rendered_by_priority_and_cancelled_ones_are_never_answered()
     assert_eq!(engine.recv(), ready(7, 0));
 }
 
+/// Thumbnails never delay visible tiles (M1 task 11), through the real engine: a whole sidebar's
+/// worth of thumbnails is queued ahead of a visible tile and a prefetch tile, and those two are
+/// answered before any of the thumbnails (the worker was busy with the blocker; nothing else may
+/// come between).
+#[test]
+fn a_queue_of_thumbnails_never_delays_visible_or_prefetch_tiles() {
+    const THUMBNAILS: u64 = 40;
+    let mut engine = session_with_big_slots();
+    let small = (0, 0, 20, 28);
+    let mut requests = vec![blocker(1, 0)];
+    // Slots 1..=THUMBNAILS would not fit six slots: the thumbnails share slot 1 (the engine does
+    // not look at who else wrote it, and this test only reads the order of the answers).
+    for n in 0..THUMBNAILS {
+        requests.push(tile_with(100 + n, Priority::Thumbnail, 1, 0.2, small, 1));
+    }
+    requests.push(tile_with(2, Priority::Prefetch, 1, 1.0, small, 2));
+    requests.push(tile_with(3, Priority::Visible, 1, 1.0, small, 3));
+    send_together(&mut engine, &requests);
+
+    assert_eq!(engine.recv(), ready(1, 0));
+    assert_eq!(engine.recv(), ready(3, 3), "the visible tile is next");
+    assert_eq!(engine.recv(), ready(2, 2), "then the prefetch tile");
+    for n in 0..THUMBNAILS {
+        assert_eq!(engine.recv(), ready(100 + n, 1), "thumbnail {n}");
+    }
+}
+
 #[test]
 fn a_cancelled_request_gets_no_tile_ready_whether_queued_or_running() {
     let mut engine = session_with_big_slots();

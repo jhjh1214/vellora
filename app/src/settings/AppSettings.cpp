@@ -14,6 +14,9 @@ constexpr auto kGeometry = "window/geometry";
 constexpr auto kLastDirectory = "files/lastDirectory";
 constexpr auto kCrashSeen = "crashes/seenUntilMs";
 constexpr auto kLayout = "view/layout";
+constexpr auto kSidebarVisible = "sidebar/visible";
+constexpr auto kSidebarWidth = "sidebar/width";
+constexpr auto kThumbnailWidth = "sidebar/thumbnailWidth";
 constexpr auto kRecent = "files/recent";
 constexpr auto kViewStates = "views";
 
@@ -119,6 +122,33 @@ void AppSettings::setLastLayout(const Layout& layout) {
             QLatin1String(kLayout),
             QStringList{layout.continuous ? QStringLiteral("1") : QStringLiteral("0"),
                         QString::number(layout.spread), QString::number(layout.rotation)});
+    }
+}
+
+AppSettings::Sidebar AppSettings::sidebar() const {
+    Sidebar sidebar;
+    if (m_settings) {
+        // Only what we write counts as "shown": QVariant would read any other text as true.
+        const QString visible = m_settings->value(QLatin1String(kSidebarVisible)).toString();
+        sidebar.visible = visible == QLatin1String("true") || visible == QLatin1String("1");
+        const int width = m_settings->value(QLatin1String(kSidebarWidth), 0).toInt();
+        sidebar.width = width <= 0 ? 0 : std::clamp(width, kMinSidebarWidth, kMaxSidebarWidth);
+        sidebar.thumbnailWidth = std::clamp(
+            m_settings->value(QLatin1String(kThumbnailWidth), sidebar.thumbnailWidth).toInt(),
+            kMinThumbnailWidth, kMaxThumbnailWidth);
+    }
+    return sidebar;
+}
+
+void AppSettings::setSidebar(const Sidebar& sidebar) {
+    if (m_settings) {
+        m_settings->setValue(QLatin1String(kSidebarVisible), sidebar.visible);
+        m_settings->setValue(
+            QLatin1String(kSidebarWidth),
+            sidebar.width <= 0 ? 0 : std::clamp(sidebar.width, kMinSidebarWidth, kMaxSidebarWidth));
+        m_settings->setValue(
+            QLatin1String(kThumbnailWidth),
+            std::clamp(sidebar.thumbnailWidth, kMinThumbnailWidth, kMaxThumbnailWidth));
     }
 }
 
