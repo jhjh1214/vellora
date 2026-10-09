@@ -112,6 +112,10 @@ add_library(vellora_shell STATIC
   src/canvas/CanvasWidget.h
   src/canvas/PageLayout.cpp
   src/canvas/PageLayout.h
+  src/navigation/NavigationHistory.cpp
+  src/navigation/NavigationHistory.h
+  src/sidebar/OutlineView.cpp
+  src/sidebar/OutlineView.h
   src/sidebar/ThumbnailSidebar.cpp
   src/sidebar/ThumbnailSidebar.h
   src/sidebar/ThumbnailView.cpp
@@ -130,6 +134,7 @@ add_library(vellora_shell STATIC
   src/diagnostics/Logging.h
   src/diagnostics/UiWatchdog.cpp
   src/diagnostics/UiWatchdog.h
+  src/bridge/Destination.h
   src/bridge/EngineSession.cpp
   src/bridge/EngineSession.h)
 target_include_directories(vellora_shell PUBLIC src "${VELLORA_CXXBRIDGE_DIR}/include"

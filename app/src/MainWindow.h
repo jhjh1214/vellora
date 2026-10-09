@@ -18,6 +18,8 @@
 #include <QHash>
 #include <QMainWindow>
 #include <QStringList>
+#include <functional>
+#include <optional>
 
 class QAction;
 class QDialog;
@@ -89,6 +91,16 @@ public:
     // What the window asks when a document needs a password (all tabs, present and future).
     void setPasswordProvider(PasswordProvider provider);
 
+    // View -> Go to Page: asks for a page number or label and goes there. The default shows a
+    // dialog (the current label is its starting text); tests replace it. An empty optional is
+    // "cancel".
+    using GoToPageProvider =
+        std::function<std::optional<QString>(const QString& current, quint32 pageCount)>;
+    void setGoToPageProvider(GoToPageProvider provider) {
+        m_goToPageProvider = std::move(provider);
+    }
+    void goToPageDialog();
+
     // The current tab's parts and status texts.
     EngineSession& session() { return currentTab().session(); }
     CanvasView& canvas() { return currentTab().canvas(); }
@@ -107,6 +119,8 @@ protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    // A click on the page text in the status bar asks for a page, like Ctrl+G.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void chooseDocument();
@@ -129,6 +143,7 @@ private:
     QLabel* m_pageStatus = nullptr;
     QLabel* m_zoomStatus = nullptr;
     PasswordProvider m_passwordProvider;
+    GoToPageProvider m_goToPageProvider;
     FolderOpener m_folderOpener;
     UrlOpener m_urlOpener;
     // Used when there are no settings to keep it in.

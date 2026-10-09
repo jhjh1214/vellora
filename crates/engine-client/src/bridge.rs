@@ -26,7 +26,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use tracing::Level;
-use vellora_ipc::{ErrorKind, PageSize, Priority, RequestId};
+use vellora_ipc::{Destination, ErrorKind, Fit, OutlineEntry, PageSize, Priority, RequestId};
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
 use crate::client::{Client, ClientConfig, ClientError, Event, Stage, TILE_PIXELS, TileLookup};
@@ -73,6 +73,58 @@ mod ffi {
         /// `file_replaced`. The file on disk differs from the one opened; reported before the
         /// engine restarts over it.
         DocumentChanged,
+        /// `request`, `outline`, `more`: the answer to `request_outline`.
+        Outline,
+        /// `request`, `path`: the answer to `request_outline_path`.
+        OutlinePath,
+        /// `request`, `first`, `labels_defined`, `labels`: the answer to `request_page_labels`.
+        PageLabels,
+        /// `request`, `found`, `found_page`: the answer to `find_page_label`.
+        PageFound,
+    }
+
+    /// How a destination shows its page (the protocol's `Fit`). Which numbers of an
+    /// [`OutlineNode`] are meaningful depends on it; the others are NaN.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum FitKind {
+        /// No destination.
+        None,
+        /// `left`, `top`, `zoom` (each NaN when the destination leaves it as it is).
+        Xyz,
+        /// The whole page.
+        Fit,
+        /// `top`.
+        FitH,
+        /// `left`.
+        FitV,
+        /// `left`, `bottom`, `right`, `top`.
+        FitR,
+        /// The page's bounding box.
+        FitB,
+        /// `top`.
+        FitBH,
+        /// `left`.
+        FitBV,
+    }
+
+    /// One item of the document outline (the protocol's `OutlineEntry`). Coordinates are in
+    /// default user space units of the destination page; a missing one is NaN.
+    #[derive(Clone, Debug)]
+    struct OutlineNode {
+        id: u32,
+        title: String,
+        /// The item goes to a page (`fit` is not `None`).
+        page: u32,
+        fit: FitKind,
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        zoom: f32,
+        has_children: bool,
+        open: bool,
+        bold: bool,
+        italic: bool,
     }
 
     /// What an engine failed to do in time (the client's `Stage`).
@@ -168,6 +220,22 @@ mod ffi {
         message: String,
         /// Requests lost in a crash; ask again after `EngineRestarted`.
         lost: Vec<u64>,
+        /// `Outline`: the items of the level, in order.
+        outline: Vec<OutlineNode>,
+        /// `Outline`: the level goes on after the last item.
+        more: bool,
+        /// `OutlinePath`: item ids from a top-level item to the one that starts the section.
+        path: Vec<u32>,
+        /// `PageLabels`: index of the first page labelled.
+        first: u32,
+        /// `PageLabels`: the document defines labels (else `labels` are the page numbers).
+        labels_defined: bool,
+        /// `PageLabels`: one label per page from `first`.
+        labels: Vec<String>,
+        /// `PageFound`: some page has the label.
+        found: bool,
+        /// `PageFound`: the zero-based page.
+        found_page: u32,
     }
 
     extern "Rust" {
@@ -297,6 +365,29 @@ mod ffi {
         /// diagnostics and tests that stop the engine from outside).
         fn engine_id(self: &EngineClient) -> u32;
 
+        /// Asks for one page of one level of the outline: the children of `parent` (the top level
+        /// if `has_parent` is false), after `after` (from the first if `has_after` is false), at
+        /// most `limit` (1 to 128). `already` is how many items of the level the caller has. The
+        /// answer is an `Outline` event with the returned request id.
+        fn request_outline(
+            self: &EngineClient,
+            parent: u32,
+            has_parent: bool,
+            after: u32,
+            has_after: bool,
+            already: u32,
+            limit: u32,
+        ) -> Result<u64>;
+
+        /// Asks which outline items lead to the section `page` is in (`OutlinePath`).
+        fn request_outline_path(self: &EngineClient, page: u32) -> Result<u64>;
+
+        /// Asks for the labels of `count` pages (1 to 1024) from `first` (`PageLabels`).
+        fn request_page_labels(self: &EngineClient, first: u32, count: u32) -> Result<u64>;
+
+        /// Asks which page has the label `text` (`PageFound`).
+        fn find_page_label(self: &EngineClient, text: &str) -> Result<u64>;
+
         /// Withdraws a request; it is never reported. `false` if it was not in flight.
         fn cancel(self: &EngineClient, request: u64) -> bool;
 
@@ -309,8 +400,8 @@ mod ffi {
 }
 
 pub use ffi::{
-    EngineEvent, EventKind, FailureKind, LogLevel, PageExtent, RepairNote, TilePriority, TileState,
-    TileTicket, TimeoutStage,
+    EngineEvent, EventKind, FailureKind, FitKind, LogLevel, OutlineNode, PageExtent, RepairNote,
+    TilePriority, TileState, TileTicket, TimeoutStage,
 };
 
 /// Crash reporting behind the bridge's opaque handle. `None` after `stop`.
@@ -618,6 +709,61 @@ impl EngineClient {
         }
     }
 
+    /// Asks for a level of the outline; see [`Client::request_outline`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or `limit` is out of range.
+    pub fn request_outline(
+        &self,
+        parent: u32,
+        has_parent: bool,
+        after: u32,
+        has_after: bool,
+        already: u32,
+        limit: u32,
+    ) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client
+            .request_outline(
+                has_parent.then_some(parent),
+                has_after.then_some(after),
+                already,
+                limit,
+            )
+            .map(|id| id.0)
+    }
+
+    /// Asks for the section of a page; see [`Client::request_outline_path`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down or the handle is closed.
+    pub fn request_outline_path(&self, page: u32) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.request_outline_path(page).map(|id| id.0)
+    }
+
+    /// Asks for page labels; see [`Client::request_page_labels`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or `count` is out of range.
+    pub fn request_page_labels(&self, first: u32, count: u32) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.request_page_labels(first, count).map(|id| id.0)
+    }
+
+    /// Asks which page has a label; see [`Client::find_page_label`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or the text is too long.
+    pub fn find_page_label(&self, text: &str) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.find_page_label(text).map(|id| id.0)
+    }
+
     /// Withdraws a request; false if it was not in flight.
     pub fn cancel(&self, request: u64) -> bool {
         self.client
@@ -632,7 +778,7 @@ impl EngineClient {
             .map(Client::poll_events)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|event| EngineEvent::try_from(event).ok())
+            .map(EngineEvent::from)
             .collect()
     }
 
@@ -707,17 +853,21 @@ impl EngineEvent {
             file_replaced: false,
             message: String::new(),
             lost: Vec::new(),
+            outline: Vec::new(),
+            more: false,
+            path: Vec::new(),
+            first: 0,
+            labels_defined: false,
+            labels: Vec::new(),
+            found: false,
+            found_page: 0,
         }
     }
 }
 
-/// The answers to navigation requests have no place here yet: the C++ side cannot make those
-/// requests until task 12c, so none arrive, and one that did would be dropped by `poll_events`.
-impl TryFrom<Event> for EngineEvent {
-    type Error = Event;
-
-    fn try_from(event: Event) -> Result<Self, Event> {
-        Ok(match event {
+impl From<Event> for EngineEvent {
+    fn from(event: Event) -> Self {
+        match event {
             Event::Opened {
                 page_count,
                 repairs,
@@ -779,11 +929,90 @@ impl TryFrom<Event> for EngineEvent {
                 file_replaced: change == Change::Replaced,
                 ..Self::empty(EventKind::DocumentChanged)
             },
-            answer @ (Event::Outline { .. }
-            | Event::OutlinePath { .. }
-            | Event::PageLabels { .. }
-            | Event::PageFound { .. }) => return Err(answer),
-        })
+            Event::Outline {
+                request,
+                items,
+                more,
+            } => Self {
+                request: request.0,
+                has_request: true,
+                outline: items.into_iter().map(OutlineNode::from).collect(),
+                more,
+                ..Self::empty(EventKind::Outline)
+            },
+            Event::OutlinePath { request, path } => Self {
+                request: request.0,
+                has_request: true,
+                path,
+                ..Self::empty(EventKind::OutlinePath)
+            },
+            Event::PageLabels {
+                request,
+                first,
+                defined,
+                labels,
+            } => Self {
+                request: request.0,
+                has_request: true,
+                first,
+                labels_defined: defined,
+                labels,
+                ..Self::empty(EventKind::PageLabels)
+            },
+            Event::PageFound { request, page } => Self {
+                request: request.0,
+                has_request: true,
+                found: page.is_some(),
+                found_page: page.unwrap_or(0),
+                ..Self::empty(EventKind::PageFound)
+            },
+        }
+    }
+}
+
+impl From<OutlineEntry> for OutlineNode {
+    fn from(entry: OutlineEntry) -> Self {
+        let mut node = Self {
+            id: entry.id,
+            title: entry.title,
+            page: 0,
+            fit: FitKind::None,
+            left: f32::NAN,
+            top: f32::NAN,
+            right: f32::NAN,
+            bottom: f32::NAN,
+            zoom: f32::NAN,
+            has_children: entry.has_children,
+            open: entry.open,
+            bold: entry.style.bold,
+            italic: entry.style.italic,
+        };
+        if let Some(Destination { page, fit }) = entry.destination {
+            node.page = page;
+            let nan = |v: Option<f32>| v.unwrap_or(f32::NAN);
+            match fit {
+                Fit::Xyz { left, top, zoom } => {
+                    (node.fit, node.left, node.top, node.zoom) =
+                        (FitKind::Xyz, nan(left), nan(top), nan(zoom));
+                }
+                Fit::Fit => node.fit = FitKind::Fit,
+                Fit::FitH { top } => (node.fit, node.top) = (FitKind::FitH, nan(top)),
+                Fit::FitV { left } => (node.fit, node.left) = (FitKind::FitV, nan(left)),
+                Fit::FitR {
+                    left,
+                    bottom,
+                    right,
+                    top,
+                } => {
+                    (node.fit, node.left, node.bottom, node.right, node.top) =
+                        (FitKind::FitR, left, bottom, right, top);
+                }
+                Fit::FitB => node.fit = FitKind::FitB,
+                Fit::FitBH { top } => (node.fit, node.top) = (FitKind::FitBH, nan(top)),
+                Fit::FitBV { left } => (node.fit, node.left) = (FitKind::FitBV, nan(left)),
+            }
+        }
+        node
     }
 }
 
@@ -797,7 +1026,7 @@ mod tests {
     use crate::process::{Crash, Termination};
 
     fn bridged(event: Event) -> EngineEvent {
-        EngineEvent::try_from(event).expect("an event the bridge carries")
+        EngineEvent::from(event)
     }
 
     #[test]
@@ -862,13 +1091,6 @@ mod tests {
             assert_eq!((refused.has_request, refused.failure), (false, expected));
         }
 
-        // Navigation answers are the client's own until task 12c bridges them.
-        let answer = Event::PageFound {
-            request: RequestId(4),
-            page: Some(1),
-        };
-        assert_eq!(EngineEvent::try_from(answer.clone()).err(), Some(answer));
-
         let crashed = bridged(Event::EngineCrashed {
             crash: Crash {
                 termination: Termination::Failure(3),
@@ -902,6 +1124,55 @@ mod tests {
                 message: "cross-reference unreadable".into(),
             }]
         );
+    }
+
+    #[test]
+    fn navigation_answers_and_outline_items_convert() {
+        let found = bridged(Event::PageFound {
+            request: RequestId(4),
+            page: Some(7),
+        });
+        assert_eq!(
+            (found.kind, found.request, found.found, found.found_page),
+            (EventKind::PageFound, 4, true, 7)
+        );
+        let missing = bridged(Event::PageFound {
+            request: RequestId(5),
+            page: None,
+        });
+        assert!(!missing.found);
+
+        let node = OutlineNode::from(OutlineEntry {
+            id: 9,
+            title: "Intro".into(),
+            destination: Some(Destination {
+                page: 3,
+                fit: Fit::Xyz {
+                    left: Some(72.0),
+                    top: None,
+                    zoom: Some(1.5),
+                },
+            }),
+            has_children: true,
+            open: false,
+            style: vellora_ipc::TitleStyle {
+                bold: true,
+                italic: false,
+            },
+        });
+        assert_eq!((node.id, node.page, node.fit), (9, 3, FitKind::Xyz));
+        assert_eq!((node.left, node.zoom), (72.0, 1.5));
+        assert!(node.top.is_nan() && node.right.is_nan());
+        assert!(node.has_children && node.bold && !node.italic && !node.open);
+        let plain = OutlineNode::from(OutlineEntry {
+            id: 1,
+            title: String::new(),
+            destination: None,
+            has_children: false,
+            open: false,
+            style: vellora_ipc::TitleStyle::default(),
+        });
+        assert_eq!(plain.fit, FitKind::None);
     }
 
     #[test]

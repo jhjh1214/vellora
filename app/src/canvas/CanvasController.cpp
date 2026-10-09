@@ -369,6 +369,62 @@ void CanvasController::goToPage(quint32 page) {
     noteCurrentPage();
 }
 
+void CanvasController::goToDestination(const Destination& destination) {
+    if (m_layout.rowCount() == 0 || !destination.valid()) {
+        return;
+    }
+    const quint32 page = std::min(destination.page, m_layout.pageCount() - 1);
+    const double height = m_session->pageSize(page).height();
+    // Only an upright page of known height can place a point; otherwise the page is shown.
+    const bool placeable = m_mode.rotation == 0 && height > 0.0;
+    // Points down from the top of the page, for a y measured up from its bottom.
+    const auto fromTop = [height](double y) { return std::max(0.0, height - y); };
+    switch (destination.fit) {
+    case FitKind::Xyz: {
+        const bool zoomed = Destination::has(destination.zoom) && destination.zoom > 0.0;
+        const double zoom = zoomed ? std::clamp(destination.zoom, kMinZoom, kMaxZoom) : m_zoom;
+        if (placeable && Destination::has(destination.top)) {
+            restoreView({page, fromTop(destination.top)}, zoom);
+        } else {
+            if (zoomed) {
+                setZoom(zoom, QPointF(0.0, 0.0));
+            }
+            goToPage(page);
+        }
+        break;
+    }
+    case FitKind::FitH:
+    case FitKind::FitBH:
+        fitWidth();
+        goToPage(page);
+        if (placeable && Destination::has(destination.top)) {
+            setScrollPosition(
+                {m_scroll.x(), m_layout.yOf({page, fromTop(destination.top)}, m_zoom)});
+        }
+        break;
+    case FitKind::FitR: {
+        const double width = destination.right - destination.left;
+        const double rectHeight = destination.top - destination.bottom;
+        if (placeable && width > 0.0 && rectHeight > 0.0 && !m_viewport.isEmpty()) {
+            const double gap = PageLayout::kGap;
+            const double zoom = std::clamp(std::min((m_viewport.width() - 2.0 * gap) / width,
+                                                    (m_viewport.height() - 2.0 * gap) / rectHeight),
+                                           kMinZoom, kMaxZoom);
+            restoreView({page, fromTop(destination.top)}, zoom);
+            break;
+        }
+        fitPage();
+        goToPage(page);
+        break;
+    }
+    default: // Fit, FitB, FitV, FitBV, and anything a later protocol adds
+        fitPage();
+        goToPage(page);
+        break;
+    }
+    noteCurrentPage();
+}
+
 void CanvasController::nextPage() {
     if (m_layout.rowCount() == 0) {
         return;

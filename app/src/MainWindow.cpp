@@ -14,10 +14,12 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QStatusBar>
@@ -94,6 +96,9 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     m_pageStatus = plainLabel(this);
     m_zoomStatus = plainLabel(this);
     statusBar()->addPermanentWidget(m_documentStatus);
+    m_pageStatus->setCursor(Qt::PointingHandCursor);
+    m_pageStatus->setToolTip(tr("Go to page (Ctrl+G)"));
+    m_pageStatus->installEventFilter(this);
     statusBar()->addPermanentWidget(m_pageStatus);
     statusBar()->addPermanentWidget(m_zoomStatus);
 
@@ -122,6 +127,7 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
         m_viewActions.insert(QString::fromLatin1(id), action);
     };
     addView(viewMenu, "view.thumbnails", true);
+    addView(viewMenu, "view.outline");
     viewMenu->addSeparator();
     auto* layoutMenu = viewMenu->addMenu(tr("Page &Layout"));
     for (const char* id : {"view.layout.single", "view.layout.continuous", "view.layout.twoUp",
@@ -146,6 +152,9 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     viewMenu->addSeparator();
     addView(viewMenu, "view.nextPage");
     addView(viewMenu, "view.previousPage");
+    addView(viewMenu, "view.goToPage");
+    addView(viewMenu, "view.back");
+    addView(viewMenu, "view.forward");
     viewMenu->addSeparator();
     viewMenu->addAction(m_commands.createAction(QStringLiteral("palette.show"), this));
     auto* windowMenu = menuBar()->addMenu(tr("&Window"));
@@ -205,6 +214,16 @@ void MainWindow::registerCommands() {
         currentTab().setSidebarVisible(!currentTab().sidebarVisible());
         updateViewActions();
     });
+    add("view.outline", tr("Outline"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O)}, [this] {
+        currentTab().showOutline();
+        updateViewActions();
+    });
+    add("view.goToPage", tr("Go to Page…"), {QKeySequence(Qt::CTRL | Qt::Key_G)},
+        [this] { goToPageDialog(); });
+    add("view.back", tr("Previous View"), {QKeySequence(Qt::ALT | Qt::Key_Left)},
+        [this] { currentTab().goBack(); });
+    add("view.forward", tr("Next View"), {QKeySequence(Qt::ALT | Qt::Key_Right)},
+        [this] { currentTab().goForward(); });
     add("view.zoomIn", tr("Zoom In"),
         {QKeySequence(QKeySequence::ZoomIn), QKeySequence(Qt::CTRL | Qt::Key_Equal)},
         [this] { canvas().zoomIn(); });
@@ -291,6 +310,11 @@ DocumentTab* MainWindow::addTab() {
             updateViewActions();
         }
     });
+    connect(tab, &DocumentTab::historyChanged, this, [this, tab] {
+        if (m_tabs->currentWidget() == tab) {
+            updateViewActions();
+        }
+    });
     connect(tab, &DocumentTab::sidebarVisibilityChanged, this, [this, tab] {
         if (m_tabs->currentWidget() == tab) {
             updateViewActions();
@@ -334,6 +358,48 @@ void MainWindow::updateViewActions() {
     check("view.layout.twoUpContinuous", mode.continuous && twoUp);
     check("view.layout.cover", m_coverInTwoUp);
     check("view.thumbnails", currentTab().sidebarVisible());
+    if (QAction* back = m_viewActions.value(QStringLiteral("view.back"))) {
+        back->setEnabled(currentTab().history().canGoBack());
+    }
+    if (QAction* forward = m_viewActions.value(QStringLiteral("view.forward"))) {
+        forward->setEnabled(currentTab().history().canGoForward());
+    }
+}
+
+void MainWindow::goToPageDialog() {
+    if (m_tabs->currentWidget() == nullptr) {
+        return;
+    }
+    DocumentTab& tab = currentTab();
+    const quint32 count = tab.canvas().controller()->pageCount();
+    if (count == 0) {
+        return;
+    }
+    const QString current = tab.pageLabel(tab.canvas().controller()->currentPage());
+    std::optional<QString> text;
+    if (m_goToPageProvider) {
+        text = m_goToPageProvider(current, count);
+    } else {
+        bool accepted = false;
+        const QString typed = QInputDialog::getText(
+            this, tr("Go to Page"), tr("Page number or label (1 to %1):").arg(count),
+            QLineEdit::Normal, current, &accepted);
+        if (accepted) {
+            text = typed;
+        }
+    }
+    if (text) {
+        tab.goToPageText(*text);
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_pageStatus && event->type() == QEvent::MouseButtonRelease &&
+        static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+        goToPageDialog();
+        return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::updateTabTitle(DocumentTab* tab) {
