@@ -214,6 +214,28 @@ impl TileRegion {
         out.copy_from_slice(bytes);
         Ok(())
     }
+
+    /// Copies the first `out.len()` bytes of `slot` into `out`, which may be shorter than the
+    /// slot. For tiles smaller than a slot, such as thumbnails: copying the whole slot would move
+    /// many times what the tile holds.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SlotOutOfRange`], or [`Error::InvalidGeometry`] if `out` is longer than a slot.
+    pub fn read_slot_prefix(&self, slot: u32, out: &mut [u8]) -> Result<(), Error> {
+        let range = self.geometry.range(slot)?;
+        if out.len() > range.len() {
+            return Err(Error::InvalidGeometry(
+                "the output buffer is longer than one slot",
+            ));
+        }
+        let bytes = self.map.get(range).ok_or(Error::SlotOutOfRange {
+            slot,
+            count: self.geometry.slot_count,
+        })?;
+        out.copy_from_slice(&bytes[..out.len()]);
+        Ok(())
+    }
 }
 
 /// A `memfd` of `bytes` bytes sealed against shrinking and growing (and against further seals).

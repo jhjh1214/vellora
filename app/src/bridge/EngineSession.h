@@ -7,6 +7,7 @@
 #include "vellora-engine-client/src/bridge.rs.h"
 
 #include <QByteArray>
+#include <QImage>
 #include <QList>
 #include <QObject>
 #include <QSizeF>
@@ -55,6 +56,14 @@ public:
     bool readTile(quint32 page, float zoom, quint32 x, quint32 y, QByteArray& out);
     void invalidatePage(quint32 page);
     bool cancel(quint64 request);
+
+    // Page thumbnails: the whole page, `width` x `height` pixels (each 1 to `tilePixels()`) at the
+    // bucketed `zoom`, from a cache of their own (64 MB by default) that tiles never evict from.
+    // Same answers as `requestTile`; the engine renders them after every tile. The same page and
+    // zoom must always be asked for with the same size.
+    TileTicket requestThumbnail(quint32 page, float zoom, quint32 width, quint32 height);
+    // Fills `out` (RGB32, `width` x `height`) with a ready thumbnail; false if it is not ready.
+    bool readThumbnail(quint32 page, float zoom, quint32 width, quint32 height, QImage& out);
 
     // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
     quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }

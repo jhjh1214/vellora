@@ -266,6 +266,28 @@ mod ffi {
             out: &mut [u8],
         ) -> Result<bool>;
 
+        /// Returns the thumbnail of `page` (the whole page, `width` x `height` pixels, each 1 to
+        /// `tile_pixels()`, at `scale` bucketed as for tiles) from the thumbnail cache, or asks
+        /// the engine for it at thumbnail priority. The same page and bucket must always be asked
+        /// for with the same size. The thumbnail cache has its own budget, apart from the tiles'.
+        /// Throws when the engine is down, the handle is closed or the size is invalid.
+        fn request_thumbnail(
+            self: &EngineClient,
+            page: u32,
+            scale: f32,
+            width: u32,
+            height: u32,
+        ) -> Result<TileTicket>;
+
+        /// Copies a ready thumbnail into `out`, exactly `width * height * 4` bytes (`BGRx`, rows
+        /// tight). `false` if it is not ready.
+        fn read_thumbnail(
+            self: &EngineClient,
+            page: u32,
+            scale: f32,
+            out: &mut [u8],
+        ) -> Result<bool>;
+
         /// Drops the cached tiles of a page (it changed).
         fn invalidate_page(self: &EngineClient, page: u32);
 
@@ -538,6 +560,47 @@ impl EngineClient {
         client.read_tile(&tile_key(page, scale, x, y)?, out)
     }
 
+    /// Asks for a thumbnail; see [`Client::request_thumbnail`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or the size is invalid.
+    pub fn request_thumbnail(
+        &self,
+        page: u32,
+        scale: f32,
+        width: u32,
+        height: u32,
+    ) -> Result<TileTicket, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        let scale = ScaleBucket::from_scale(scale).ok_or(ClientError::InvalidTile)?;
+        Ok(
+            match client.request_thumbnail(page, scale, width, height)? {
+                TileLookup::Ready => ticket(TileState::Ready, 0),
+                TileLookup::InFlight => ticket(TileState::InFlight, 0),
+                TileLookup::Requested(id) => ticket(TileState::Requested, id.0),
+                _ => ticket(TileState::Full, 0),
+            },
+        )
+    }
+
+    /// Copies a ready thumbnail into `out`; see [`Client::read_thumbnail`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the handle is closed, the scale is invalid or `out` is longer than a
+    /// slot.
+    pub fn read_thumbnail(
+        &self,
+        page: u32,
+        scale: f32,
+        out: &mut [u8],
+    ) -> Result<bool, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        let scale = ScaleBucket::from_scale(scale).ok_or(ClientError::InvalidTile)?;
+        client.read_thumbnail(page, scale, out)
+    }
+
     /// The id of the running engine process, or 0.
     pub fn engine_id(&self) -> u32 {
         self.client
@@ -736,6 +799,8 @@ mod tests {
             "::rust::Box<::vellora::EngineClient> open(::rust::Str path)",
             "request_tile(",
             "read_tile(",
+            "request_thumbnail(",
+            "read_thumbnail(",
             "submit_password(::rust::Str password)",
             "engine_id()",
             "struct TileTicket",
@@ -835,6 +900,14 @@ mod tests {
         ));
         assert!(matches!(
             handle.read_tile(0, 1.0, 0, 0, &mut []),
+            Err(ClientError::Closed)
+        ));
+        assert!(matches!(
+            handle.request_thumbnail(0, 0.2, 100, 140),
+            Err(ClientError::Closed)
+        ));
+        assert!(matches!(
+            handle.read_thumbnail(0, 0.2, &mut []),
             Err(ClientError::Closed)
         ));
         assert!(matches!(

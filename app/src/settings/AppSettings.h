@@ -54,6 +54,22 @@ public:
     Layout lastLayout() const;
     void setLastLayout(const Layout& layout);
 
+    // The page sidebar as the user left it: shown or not, how wide, and how big its thumbnails are
+    // (logical pixels). A width of 0 is "not chosen yet".
+    struct Sidebar {
+        bool visible = false;
+        int width = 0;
+        int thumbnailWidth = 120;
+        friend bool operator==(const Sidebar&, const Sidebar&) = default;
+    };
+    static constexpr int kMinSidebarWidth = 80;
+    static constexpr int kMaxSidebarWidth = 600;
+    static constexpr int kMinThumbnailWidth = 64;
+    static constexpr int kMaxThumbnailWidth = 256;
+    // Values outside the allowed ranges are clamped when read and written.
+    Sidebar sidebar() const;
+    void setSidebar(const Sidebar& sidebar);
+
     // Crash reports modified before this have been shown to the user (null: none yet).
     QDateTime crashReportsSeenUntil() const;
     void setCrashReportsSeenUntil(const QDateTime& when);

@@ -324,6 +324,63 @@ mod tests {
         assert_eq!(queue.next().unwrap().0, id(1));
     }
 
+    /// Thumbnails never delay visible tiles (M1 task 11): with the thumbnail lane as full as a
+    /// 10,000-page sidebar fling makes it, and visible and prefetch tiles arriving at arbitrary
+    /// moments, the worker never takes a thumbnail while a visible or prefetch tile is waiting.
+    /// What it cannot avoid is finishing the one thumbnail already rendering when the tile
+    /// arrives (PDFium cannot be interrupted), which is why thumbnails are small.
+    #[test]
+    fn a_waiting_tile_is_never_passed_over_for_a_thumbnail() {
+        let queue = Queue::new();
+        for n in 0..10_000 {
+            queue.push(Priority::Thumbnail, id(n), "thumb");
+        }
+        // A fixed pseudo-random sequence (an LCG), so that a failure repeats.
+        let mut seed = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next_random = move || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            seed >> 33
+        };
+        let mut waiting_urgent = 0_usize;
+        let mut urgent_taken = 0_usize;
+        let mut thumbnails_taken = 0_usize;
+        let mut next_id = 100_000;
+        for _ in 0..5_000 {
+            // Sometimes tiles arrive while the worker is busy with a job it already took.
+            if next_random() % 3 == 0 {
+                let priority = if next_random() % 2 == 0 {
+                    Priority::Visible
+                } else {
+                    Priority::Prefetch
+                };
+                queue.push(priority, id(next_id), "tile");
+                next_id += 1;
+                waiting_urgent += 1;
+            }
+            let (req, job) = queue.next().expect("work is queued");
+            queue.finish();
+            if job == "thumb" {
+                thumbnails_taken += 1;
+                assert_eq!(
+                    waiting_urgent, 0,
+                    "thumbnail {} was taken with {waiting_urgent} tile(s) waiting",
+                    req.0
+                );
+            } else {
+                waiting_urgent -= 1;
+                urgent_taken += 1;
+            }
+        }
+        // The test saw both kinds; it would pass vacuously otherwise.
+        assert!(urgent_taken > 1_000, "{urgent_taken} tiles taken");
+        assert!(
+            thumbnails_taken > 1_000,
+            "{thumbnails_taken} thumbnails taken"
+        );
+    }
+
     #[test]
     fn a_queued_request_that_is_cancelled_is_never_handed_out() {
         let queue = Queue::new();

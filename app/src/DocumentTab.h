@@ -14,9 +14,12 @@
 #include <optional>
 #include <utility>
 
+class QSplitter;
+
 namespace vellora {
 
 class RepairBar;
+class ThumbnailSidebar;
 
 class DocumentTab : public QWidget {
     Q_OBJECT
@@ -46,6 +49,12 @@ public:
     EngineSession& session() { return m_session; }
     CanvasView& canvas() { return *m_canvas; }
     RepairBar& repairBar() { return *m_repairBar; }
+    ThumbnailSidebar& sidebar() { return *m_sidebar; }
+
+    // The thumbnails on the left. Hidden until asked for (or until the user's last choice, which
+    // the settings keep); its width and its thumbnails' size are remembered the same way.
+    bool sidebarVisible() const;
+    void setSidebarVisible(bool visible);
 
     QString documentStatus() const { return m_documentStatus; }
     QString documentStatusTip() const { return m_documentTip; }
@@ -67,6 +76,8 @@ signals:
     void titleChanged();
     // The arrangement of the pages or the turn of the view changed.
     void viewModeChanged();
+    // The sidebar was shown or hidden.
+    void sidebarVisibilityChanged(bool visible);
     // A short message for the status bar; empty clears it.
     void message(const QString& text);
     // The tab wants the user's attention (a password prompt): show it.
@@ -90,9 +101,14 @@ private:
     void askForPassword(bool wrong, quint64 generation);
     void giveUp(const QString& status);
 
+    void saveSidebar();
+
     AppSettings* m_settings;
-    // The canvas uses the session, so the destructor deletes the canvas before this member goes.
+    // The canvas and the sidebar use the session, so the destructor deletes them before this member
+    // goes.
     EngineSession m_session;
+    QSplitter* m_splitter = nullptr;
+    ThumbnailSidebar* m_sidebar = nullptr;
     CanvasView* m_canvas = nullptr;
     RepairBar* m_repairBar = nullptr;
     QString m_path;

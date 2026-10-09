@@ -40,6 +40,8 @@ fn config(max_restarts: u32) -> ClientConfig {
         .env
         .push((vellora_render::LIBRARY_ENV.into(), pdfium_path().into()));
     config.max_restarts = max_restarts;
+    // Thumbnails have tests of their own; the others need not map a region for them.
+    config.thumbnail_budget_bytes = 0;
     config
 }
 
@@ -579,6 +581,136 @@ fn finished_tiles_survive_a_crash_and_requests_in_flight_do_not() {
             other => panic!("page {page}: {other:?}"),
         }
     }
+}
+
+// ---- M1 task 11: thumbnails ----
+
+/// The size of the thumbnail of `page` at `scale`: the whole page, rounded up.
+fn thumbnail_size(client: &Client, page: u32, scale: ScaleBucket) -> (u32, u32) {
+    let size = client.page_size(page).expect("page size known");
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    (
+        (size.width * scale.scale()).ceil() as u32,
+        (size.height * scale.scale()).ceil() as u32,
+    )
+}
+
+/// Requests a thumbnail that must be new, waits for it and returns its pixels.
+fn fetch_thumbnail(client: &Client, page: u32, scale: ScaleBucket) -> Vec<u8> {
+    let (width, height) = thumbnail_size(client, page, scale);
+    let TileLookup::Requested(request) = client
+        .request_thumbnail(page, scale, width, height)
+        .unwrap()
+    else {
+        panic!("expected a new request for the thumbnail of page {page}");
+    };
+    wait_for(
+        client,
+        |event| matches!(event, Event::TileReady { request: r, .. } if *r == request),
+    );
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    assert!(client.read_thumbnail(page, scale, &mut pixels).unwrap());
+    pixels
+}
+
+#[test]
+fn thumbnails_are_cached_apart_from_tiles_within_their_own_budget() {
+    let (_dir, path) = golden_file();
+    let mut config = config(3);
+    // Two thumbnail slots: a third thumbnail pushes the oldest out.
+    config.thumbnail_budget_bytes = 2 << 20;
+    let client = Client::open(config, &path).unwrap();
+    wait_for(&client, |event| matches!(event, Event::Opened { .. }));
+    let scale = ScaleBucket::from_scale(0.5).unwrap();
+
+    // A thumbnail is the plain render of the whole page at that scale.
+    let thumbnail = fetch_thumbnail(&client, 0, scale);
+    let (width, height) = thumbnail_size(&client, 0, scale);
+    let request = client
+        .request_tile(&TileRequest {
+            page: 0,
+            scale: scale.scale(),
+            rect: TileRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            slot: SlotId(3),
+            priority: Priority::Visible,
+        })
+        .unwrap();
+    wait_for(
+        &client,
+        |event| matches!(event, Event::TileReady { request: r, .. } if *r == request),
+    );
+    let mut direct = vec![0; client.geometry().slot_bytes() as usize];
+    client.read_slot(SlotId(3), &mut direct).unwrap();
+    assert_eq!(thumbnail, direct[..thumbnail.len()]);
+    assert!(thumbnail.iter().any(|&b| b != 0xFF), "the page has content");
+    assert_eq!(client.cached_tiles(), 0, "a thumbnail is not a tile");
+    assert_eq!(client.cached_thumbnails(), 1);
+
+    // A hit sends nothing.
+    assert_eq!(
+        client.request_thumbnail(0, scale, width, height).unwrap(),
+        TileLookup::Ready
+    );
+
+    // Tiles fill their own cache untouched by thumbnails, and thumbnails evict only thumbnails.
+    fetch(&client, key(0));
+    fetch_thumbnail(&client, 1, scale);
+    fetch_thumbnail(&client, 2, scale);
+    assert_eq!(client.cached_thumbnails(), 2);
+    assert_eq!(client.cached_tiles(), 1);
+    let mut tile = vec![0; client.geometry().slot_bytes() as usize];
+    assert!(
+        client.read_tile(&key(0), &mut tile).unwrap(),
+        "the tile survived"
+    );
+    let mut gone = vec![0; width as usize * height as usize * 4];
+    assert!(
+        !client.read_thumbnail(0, scale, &mut gone).unwrap(),
+        "the oldest thumbnail was evicted"
+    );
+
+    // Invalidating a page drops its thumbnail as well as its tiles.
+    assert_eq!(client.invalidate_page(2), 1);
+    assert_eq!(client.cached_thumbnails(), 1);
+}
+
+#[test]
+fn a_thumbnail_the_cache_cannot_hold_is_refused() {
+    let (_dir, path) = golden_file();
+    let client = Client::open(config(3), &path).unwrap();
+    wait_for(&client, |event| matches!(event, Event::Opened { .. }));
+    let scale = ScaleBucket::from_scale(0.5).unwrap();
+    // Thumbnails are off in this configuration (no budget).
+    assert!(matches!(
+        client.request_thumbnail(0, scale, 100, 70),
+        Err(ClientError::InvalidTile)
+    ));
+
+    let mut on = self::config(3);
+    on.thumbnail_budget_bytes = 1 << 20;
+    let (_dir2, path2) = golden_file();
+    let client = Client::open(on, &path2).unwrap();
+    wait_for(&client, |event| matches!(event, Event::Opened { .. }));
+    for (width, height) in [
+        (0, 10),
+        (10, 0),
+        (TILE_PIXELS + 1, 10),
+        (10, TILE_PIXELS + 1),
+    ] {
+        assert!(
+            matches!(
+                client.request_thumbnail(0, scale, width, height),
+                Err(ClientError::InvalidTile)
+            ),
+            "{width}x{height}"
+        );
+    }
+    assert_eq!(client.cached_thumbnails(), 0);
 }
 
 // ---- M1 task 7: encrypted documents ----
