@@ -55,24 +55,41 @@ fn document() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-/// Collects events until `done` accepts one; returns everything seen, the accepted event last.
+thread_local! {
+    /// Events taken from the client but not yet looked at. A batch can hold several events that
+    /// a test waits for one after the other (`EngineRestarted`, then `Opened` of the new engine):
+    /// the ones after the match belong to the next call, not to the bin.
+    static LEFTOVER: std::cell::RefCell<std::collections::VecDeque<Event>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// Collects events until `done` accepts one; returns everything seen, the accepted event last. The
+/// events after it in the same batch stay for the next call.
 fn wait_for(client: &Client, mut done: impl FnMut(&Event) -> bool) -> Vec<Event> {
     let deadline = Instant::now() + PATIENCE;
     let mut seen = Vec::new();
     loop {
-        let left = deadline
-            .checked_duration_since(Instant::now())
-            .unwrap_or_else(|| panic!("no matching event within {PATIENCE:?}; saw {seen:?}"));
-        for event in client.wait_events(left) {
+        while let Some(event) = LEFTOVER.with(|left| left.borrow_mut().pop_front()) {
             let hit = done(&event);
             seen.push(event);
             if hit {
                 return seen;
             }
         }
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("no matching event within {PATIENCE:?}; saw {seen:?}"));
+        let mut batch = client.wait_events(left).into_iter();
+        while let Some(event) = batch.next() {
+            let hit = done(&event);
+            seen.push(event);
+            if hit {
+                LEFTOVER.with(|left| left.borrow_mut().extend(batch));
+                return seen;
+            }
+        }
     }
 }
-
 /// Whether a process with this id exists.
 fn alive(pid: u32) -> bool {
     if cfg!(windows) {
