@@ -114,6 +114,23 @@ impl TileRequest {
     }
 }
 
+/// One character of a page, as PDFium extracts it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextChar {
+    /// The UTF-16 code unit PDFium reports (a character outside the BMP is two of them).
+    pub unicode: u32,
+    /// `[left, top, right, bottom]` in points of the page as shown (rotation and crop box
+    /// applied), origin at the top left. All zero for a generated character.
+    pub rect: [f32; 4],
+    /// Font size in points; 0 when PDFium has none.
+    pub size: f32,
+    /// PDFium inserted this character (the space between two words, the break between two
+    /// lines); it is not in the content stream and has no box.
+    pub generated: bool,
+    /// PDFium takes this character for a hyphen that breaks a word at the end of a line.
+    pub hyphen: bool,
+}
+
 enum Command {
     Open {
         bytes: DocumentBytes,
@@ -130,6 +147,12 @@ enum Command {
         doc: u64,
         request: TileRequest,
         reply: Sender<Result<Vec<u8>, Error>>,
+    },
+    Text {
+        doc: u64,
+        page: usize,
+        max_chars: usize,
+        reply: Sender<Result<Vec<TextChar>, Error>>,
     },
     Close {
         doc: u64,
@@ -287,6 +310,26 @@ impl DocHandle {
         answer.recv().map_err(|_| Error::Closed)?
     }
 
+    /// The characters of page `page`, at most `max_chars` of them, in the order PDFium extracts
+    /// them (see [`TextChar`]). Blocks until the renderer thread has done it, like a tile.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PageOutOfRange`], [`Error::Page`] if PDFium cannot read the page or its text,
+    /// [`Error::Panicked`], [`Error::Closed`].
+    pub fn page_text(&self, page: usize, max_chars: usize) -> Result<Vec<TextChar>, Error> {
+        let (reply, answer) = mpsc::channel();
+        self.commands
+            .send(Command::Text {
+                doc: self.id,
+                page,
+                max_chars,
+                reply,
+            })
+            .map_err(|_| Error::Closed)?;
+        answer.recv().map_err(|_| Error::Closed)?
+    }
+
     /// Renders the tile into `buffer`: 4 bytes per pixel (blue, green, red, unused), rows `stride`
     /// bytes apart, top row first, over an opaque white page. Bytes between the end of a row's
     /// pixels and the next row are not touched. Blocks until the renderer thread has done it.
@@ -388,6 +431,15 @@ fn serve(pdfium: &Pdfium, inbox: &Receiver<Command>) {
                     )?;
                     Ok(pixels)
                 });
+                let _ = reply.send(result);
+            }
+            Command::Text {
+                doc,
+                page,
+                max_chars,
+                reply,
+            } => {
+                let result = guarded(|| api.page_text(document(&documents, doc)?, page, max_chars));
                 let _ = reply.send(result);
             }
             Command::Close { doc } => {

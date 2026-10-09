@@ -8,7 +8,7 @@
 //! read-side functions are declared: no save, edit or page-generation entry point exists here
 //! (ADR-0002). `FPDF_CALLCONV` is empty in the public headers, so everything is `extern "C"`.
 
-use std::ffi::{CStr, c_int, c_ulong, c_void};
+use std::ffi::{CStr, c_double, c_int, c_uint, c_ulong, c_void};
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use libloading::Library;
 
+use crate::renderer::TextChar;
 use crate::{Error, LastError};
 
 /// The bytes of one document revision, kept alive for as long as PDFium may read them.
@@ -36,6 +37,12 @@ pub(crate) struct PageT {
     _private: [u8; 0],
 }
 
+/// `FPDF_TEXTPAGE` points at one of these (opaque to us).
+#[repr(C)]
+pub(crate) struct TextPageT {
+    _private: [u8; 0],
+}
+
 /// `FPDF_BITMAP` points at one of these (opaque to us).
 #[repr(C)]
 pub(crate) struct BitmapT {
@@ -45,6 +52,11 @@ pub(crate) struct BitmapT {
 pub(crate) type Document = *mut DocumentT;
 pub(crate) type Page = *mut PageT;
 pub(crate) type Bitmap = *mut BitmapT;
+pub(crate) type TextPage = *mut TextPageT;
+
+/// Device units per point when a text position is mapped to the page as shown: `FPDF_PageToDevice`
+/// answers in whole numbers, so the page is mapped onto a grid this much finer than a point.
+const TEXT_GRID: f64 = 64.0;
 
 /// `FPDF_GetBlock` callback: copy `size` bytes at `position` into `buf`; non-zero on success.
 pub(crate) type GetBlock = unsafe extern "C" fn(*mut c_void, c_ulong, *mut u8, c_ulong) -> c_int;
@@ -157,6 +169,35 @@ pub(crate) struct Api {
     pub(crate) bitmap_destroy: unsafe extern "C" fn(Bitmap),
     pub(crate) render_page_bitmap_with_matrix:
         unsafe extern "C" fn(Bitmap, Page, *const Matrix, *const RectF, c_int),
+    // fpdf_text.h
+    pub(crate) text_load_page: unsafe extern "C" fn(Page) -> TextPage,
+    pub(crate) text_close_page: unsafe extern "C" fn(TextPage),
+    pub(crate) text_count_chars: unsafe extern "C" fn(TextPage) -> c_int,
+    pub(crate) text_get_unicode: unsafe extern "C" fn(TextPage, c_int) -> c_uint,
+    pub(crate) text_is_generated: unsafe extern "C" fn(TextPage, c_int) -> c_int,
+    pub(crate) text_is_hyphen: unsafe extern "C" fn(TextPage, c_int) -> c_int,
+    pub(crate) text_get_font_size: unsafe extern "C" fn(TextPage, c_int) -> c_double,
+    pub(crate) text_get_char_box: unsafe extern "C" fn(
+        TextPage,
+        c_int,
+        *mut c_double,
+        *mut c_double,
+        *mut c_double,
+        *mut c_double,
+    ) -> c_int,
+    // fpdfview.h
+    pub(crate) page_to_device: unsafe extern "C" fn(
+        Page,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_double,
+        c_double,
+        *mut c_int,
+        *mut c_int,
+    ) -> c_int,
     // Never unloaded: a large C++ library can leave thread-local destructors or atexit hooks
     // behind, and running them after `dlclose` unmapped their code crashes the process. PDFium
     // is destroyed in `Drop`; its code simply stays mapped until the process exits, so a later
@@ -217,6 +258,15 @@ impl Api {
                     &library,
                     "FPDF_RenderPageBitmapWithMatrix\0",
                 )?,
+                text_load_page: symbol(&library, "FPDFText_LoadPage\0")?,
+                text_close_page: symbol(&library, "FPDFText_ClosePage\0")?,
+                text_count_chars: symbol(&library, "FPDFText_CountChars\0")?,
+                text_get_unicode: symbol(&library, "FPDFText_GetUnicode\0")?,
+                text_is_generated: symbol(&library, "FPDFText_IsGenerated\0")?,
+                text_is_hyphen: symbol(&library, "FPDFText_IsHyphen\0")?,
+                text_get_font_size: symbol(&library, "FPDFText_GetFontSize\0")?,
+                text_get_char_box: symbol(&library, "FPDFText_GetCharBox\0")?,
+                page_to_device: symbol(&library, "FPDF_PageToDevice\0")?,
                 _library: ManuallyDrop::new(library),
                 _claim: claim,
                 _not_send: PhantomData,
@@ -373,6 +423,159 @@ impl Api {
         // SAFETY: destroyed once; with an external buffer PDFium does not free `pixels`.
         unsafe { (self.bitmap_destroy)(bitmap) };
         result
+    }
+
+    /// The characters of page `index`, at most `max_chars`, in the order PDFium extracts them,
+    /// with their boxes in points of the page as shown (rotation and crop applied, origin at the
+    /// top left). PDFium inserts the spaces and line breaks between words and lines itself; those
+    /// are marked `generated` and have an empty box.
+    pub(crate) fn page_text(
+        &self,
+        document: &OpenDocument,
+        index: usize,
+        max_chars: usize,
+    ) -> Result<Vec<TextChar>, Error> {
+        let page_number = Self::page_number(document, index)?;
+        let mut size = SizeF::default();
+        // SAFETY: the handle is live and `size` is a valid out parameter.
+        let ok =
+            unsafe { (self.get_page_size_by_index_f)(document.handle, page_number, &raw mut size) };
+        if ok == 0 {
+            return Err(Error::Page {
+                page: index,
+                source: self.last_error(),
+            });
+        }
+        // SAFETY: the document handle is live and `page_number` was range-checked.
+        let page = unsafe { (self.load_page)(document.handle, page_number) };
+        if page.is_null() {
+            return Err(Error::Page {
+                page: index,
+                source: self.last_error(),
+            });
+        }
+        let result = self.read_text(page, size, index, max_chars);
+        // SAFETY: closed once, after the text page made from it (closed in `read_text`).
+        unsafe { (self.close_page)(page) };
+        result
+    }
+
+    // Counts and indices are C ints that PDFium keeps non-negative; the grid keeps positions far
+    // inside the range of an int for any page PDFium accepts (14,400 points at most).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn read_text(
+        &self,
+        page: Page,
+        size: SizeF,
+        index: usize,
+        max_chars: usize,
+    ) -> Result<Vec<TextChar>, Error> {
+        // SAFETY: `page` is live.
+        let text = unsafe { (self.text_load_page)(page) };
+        if text.is_null() {
+            return Err(Error::Page {
+                page: index,
+                source: self.last_error(),
+            });
+        }
+        // SAFETY: `text` is live.
+        let count = unsafe { (self.text_count_chars)(text) };
+        let count = usize::try_from(count).unwrap_or(0).min(max_chars);
+        let grid = (
+            (f64::from(size.width) * TEXT_GRID).round() as c_int,
+            (f64::from(size.height) * TEXT_GRID).round() as c_int,
+        );
+        let mut chars = Vec::with_capacity(count);
+        for at in 0..count {
+            let Ok(at) = c_int::try_from(at) else { break };
+            // SAFETY: `text` is live and `at` is below its count.
+            let (unicode, generated, hyphen, font_size) = unsafe {
+                (
+                    (self.text_get_unicode)(text, at),
+                    (self.text_is_generated)(text, at) == 1,
+                    (self.text_is_hyphen)(text, at) == 1,
+                    (self.text_get_font_size)(text, at),
+                )
+            };
+            let rect = if generated {
+                [0.0; 4]
+            } else {
+                self.char_rect(page, text, at, grid).unwrap_or([0.0; 4])
+            };
+            chars.push(TextChar {
+                unicode,
+                rect,
+                size: if font_size.is_finite() && font_size > 0.0 {
+                    font_size as f32
+                } else {
+                    0.0
+                },
+                generated,
+                hyphen,
+            });
+        }
+        // SAFETY: closed once, before its page.
+        unsafe { (self.text_close_page)(text) };
+        Ok(chars)
+    }
+
+    /// The box of character `at` as `[left, top, right, bottom]` in points of the page as shown,
+    /// or `None` if PDFium has none for it.
+    #[allow(clippy::cast_possible_truncation)]
+    fn char_rect(
+        &self,
+        page: Page,
+        text: TextPage,
+        at: c_int,
+        grid: (c_int, c_int),
+    ) -> Option<[f32; 4]> {
+        let (mut left, mut right, mut bottom, mut top) = (0.0, 0.0, 0.0, 0.0);
+        // SAFETY: `text` is live, `at` is below its count and the four out parameters are locals.
+        let ok = unsafe {
+            (self.text_get_char_box)(
+                text,
+                at,
+                &raw mut left,
+                &raw mut right,
+                &raw mut bottom,
+                &raw mut top,
+            )
+        };
+        if ok == 0
+            || ![left, right, bottom, top]
+                .iter()
+                .all(|v| f64::is_finite(*v))
+        {
+            return None;
+        }
+        let corner = |x: f64, y: f64| -> Option<(f32, f32)> {
+            let (mut device_x, mut device_y) = (0, 0);
+            // SAFETY: `page` is live and the out parameters are locals; the page is mapped onto
+            // the grid with no extra rotation.
+            let ok = unsafe {
+                (self.page_to_device)(
+                    page,
+                    0,
+                    0,
+                    grid.0,
+                    grid.1,
+                    0,
+                    x,
+                    y,
+                    &raw mut device_x,
+                    &raw mut device_y,
+                )
+            };
+            (ok != 0).then(|| {
+                (
+                    (f64::from(device_x) / TEXT_GRID) as f32,
+                    (f64::from(device_y) / TEXT_GRID) as f32,
+                )
+            })
+        };
+        let (x0, y0) = corner(left, top)?;
+        let (x1, y1) = corner(right, bottom)?;
+        Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
     }
 
     /// `index` as a C int, if the document has such a page.

@@ -74,7 +74,7 @@ use std::time::{Duration, Instant};
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
     ErrorKind, Link, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
-    RequestId, Response, SlotId, TileRect, check_version, read_frame, write_frame,
+    RequestId, Response, SlotId, TextChar, TileRect, check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
 
@@ -326,6 +326,19 @@ pub enum Event {
         /// More follow: ask again with `skip` advanced by `links.len()`.
         more: bool,
     },
+    /// The answer to [`Client::request_text_page`].
+    TextPage {
+        /// The request it answers.
+        request: RequestId,
+        /// The page the characters are on.
+        page: u32,
+        /// Index of the first character returned.
+        skip: u32,
+        /// How many characters the page has in all.
+        total: u32,
+        /// The characters from `skip`.
+        chars: Vec<TextChar>,
+    },
     /// A request failed, or the engine reported a problem of its own (`request` is `None`).
     RequestFailed {
         /// The failed request.
@@ -456,62 +469,6 @@ impl Ledger {
                     Accepted::Dropped
                 }
             }
-            // The answers to navigation requests. A cancelled request may still be answered, and
-            // the caller was told it is gone.
-            Response::Outline {
-                req_id,
-                items,
-                more,
-            } => self.answered(
-                req_id,
-                Event::Outline {
-                    request: req_id,
-                    items,
-                    more,
-                },
-            ),
-            Response::OutlinePath { req_id, path } => self.answered(
-                req_id,
-                Event::OutlinePath {
-                    request: req_id,
-                    path,
-                },
-            ),
-            Response::PageLabels {
-                req_id,
-                first,
-                defined,
-                labels,
-            } => self.answered(
-                req_id,
-                Event::PageLabels {
-                    request: req_id,
-                    first,
-                    defined,
-                    labels,
-                },
-            ),
-            Response::PageFound { req_id, page } => self.answered(
-                req_id,
-                Event::PageFound {
-                    request: req_id,
-                    page,
-                },
-            ),
-            Response::Links {
-                req_id,
-                page,
-                links,
-                more,
-            } => self.answered(
-                req_id,
-                Event::Links {
-                    request: req_id,
-                    page,
-                    links,
-                    more,
-                },
-            ),
             Response::Error {
                 req_id,
                 kind,
@@ -524,6 +481,10 @@ impl Ledger {
                     message,
                 }),
             },
+            // The answers to navigation requests. A cancelled request may still be answered, and
+            // the caller was told it is gone.
+            answer => navigation_event(answer)
+                .map_or(Accepted::Violation, |(id, event)| self.answered(id, event)),
         }
     }
 
@@ -546,6 +507,83 @@ impl Ledger {
     }
 }
 
+/// A navigation answer as the event it becomes and the request it answers; `None` for any other
+/// response.
+fn navigation_event(response: Response) -> Option<(RequestId, Event)> {
+    Some(match response {
+        Response::Outline {
+            req_id,
+            items,
+            more,
+        } => (
+            req_id,
+            Event::Outline {
+                request: req_id,
+                items,
+                more,
+            },
+        ),
+        Response::OutlinePath { req_id, path } => (
+            req_id,
+            Event::OutlinePath {
+                request: req_id,
+                path,
+            },
+        ),
+        Response::PageLabels {
+            req_id,
+            first,
+            defined,
+            labels,
+        } => (
+            req_id,
+            Event::PageLabels {
+                request: req_id,
+                first,
+                defined,
+                labels,
+            },
+        ),
+        Response::PageFound { req_id, page } => (
+            req_id,
+            Event::PageFound {
+                request: req_id,
+                page,
+            },
+        ),
+        Response::Links {
+            req_id,
+            page,
+            links,
+            more,
+        } => (
+            req_id,
+            Event::Links {
+                request: req_id,
+                page,
+                links,
+                more,
+            },
+        ),
+        Response::TextPage {
+            req_id,
+            page,
+            skip,
+            total,
+            chars,
+        } => (
+            req_id,
+            Event::TextPage {
+                request: req_id,
+                page,
+                skip,
+                total,
+                chars,
+            },
+        ),
+        _ => return None,
+    })
+}
 #[derive(Debug)]
 struct State {
     phase: Phase,
@@ -1200,6 +1238,28 @@ impl Client {
         limit: u32,
     ) -> Result<RequestId, ClientError> {
         self.request_navigation(|req_id| Request::GetLinks {
+            req_id,
+            page,
+            skip,
+            limit,
+        })
+    }
+
+    /// Asks for the characters of `page` (zero-based): at most `limit` (1 to 8,192) after skipping
+    /// the first `skip`, in the order PDFium extracts them, with their boxes. The answer is
+    /// [`Event::TextPage`], which says how many the page has in all.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for a `limit` out of
+    /// range.
+    pub fn request_text_page(
+        &self,
+        page: u32,
+        skip: u32,
+        limit: u32,
+    ) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetTextPage {
             req_id,
             page,
             skip,
@@ -1921,6 +1981,30 @@ mod tests {
                 page: 2,
                 links: vec![],
                 more: true
+            })
+        );
+        assert_eq!(ledger.accept(response), Accepted::Dropped);
+    }
+
+    #[test]
+    fn text_answers_clear_their_request() {
+        let mut ledger = Ledger::new(3);
+        let id = ledger.begin();
+        let response = Response::TextPage {
+            req_id: id,
+            page: 1,
+            skip: 0,
+            total: 0,
+            chars: vec![],
+        };
+        assert_eq!(
+            ledger.accept(response.clone()),
+            Accepted::Event(Event::TextPage {
+                request: id,
+                page: 1,
+                skip: 0,
+                total: 0,
+                chars: vec![]
             })
         );
         assert_eq!(ledger.accept(response), Accepted::Dropped);

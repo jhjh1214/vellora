@@ -494,3 +494,149 @@ fn dropping_a_handle_closes_its_document_and_others_keep_working() {
         assert_eq!(keep.page_size(2).unwrap(), (612.0, 792.0));
     });
 }
+
+// ---- text (M1 task 14a) ----
+
+/// A one-page PDF of `size` points, turned `rotate` degrees, whose page runs `content` with the
+/// base-14 Helvetica as `/F1`.
+fn text_pdf(size: (u32, u32), rotate: i32, content: &str) -> Vec<u8> {
+    use std::fmt::Write as _;
+
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Rotate {rotate} /Contents 4 0 R \
+             /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica \
+             /Encoding /WinAnsiEncoding >> >> >> >>",
+            size.0, size.1
+        ),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        write!(pdf, "{} 0 obj\n{object}\nendobj\n", index + 1).unwrap();
+    }
+    let xref = pdf.len();
+    write!(pdf, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).unwrap();
+    for offset in offsets {
+        writeln!(pdf, "{offset:010} 00000 n ").unwrap();
+    }
+    write!(
+        pdf,
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    )
+    .unwrap();
+    pdf.into_bytes()
+}
+
+/// The text of `chars` as PDFium extracted it.
+fn text_of(chars: &[TextChar]) -> String {
+    chars
+        .iter()
+        .filter_map(|c| char::from_u32(c.unicode))
+        .collect()
+}
+
+const TWO_LINES: &str = "BT /F1 12 Tf 20 60 Td (Hello World) Tj 0 -20 Td (Second line) Tj ET";
+
+#[test]
+fn a_page_gives_its_characters_in_order_with_boxes_in_the_page_as_shown() {
+    let pdf = text_pdf((200, 100), 0, TWO_LINES);
+    with_renderer(|renderer| {
+        let doc = renderer.open(pdf).unwrap();
+        let chars = doc.page_text(0, 1000).unwrap();
+        let text = text_of(&chars);
+        // PDFium puts a line break between the two lines.
+        assert!(text.starts_with("Hello World"), "{text:?}");
+        assert!(
+            text.replace("\r\n", "\n")
+                .contains("Hello World\nSecond line"),
+            "{text:?}"
+        );
+
+        let h = chars[0];
+        assert_eq!(h.unicode, u32::from(b'H'));
+        assert!(!h.generated && !h.hyphen);
+        assert!((h.size - 12.0).abs() < 0.01, "size {}", h.size);
+        // 'H' starts at x = 20; its baseline is 60 up from the bottom of a 100 point page, so it
+        // spans roughly y = 31..40 counted from the top.
+        let [left, top, right, bottom] = h.rect;
+        assert!((left - 20.0).abs() < 1.0, "left {left}");
+        assert!(right > left + 3.0 && right < left + 12.0, "right {right}");
+        assert!((24.0..36.0).contains(&top), "top {top}");
+        assert!(bottom > top + 6.0 && bottom < 46.0, "bottom {bottom}");
+
+        // The characters of the second line are lower on the page, and left to right.
+        let second = chars
+            .iter()
+            .position(|c| c.unicode == u32::from(b'S'))
+            .unwrap();
+        assert!(chars[second].rect[1] > h.rect[1] + 10.0);
+        assert!(chars[second + 1].rect[0] > chars[second].rect[0]);
+
+        // What PDFium inserted between the lines has no box.
+        let generated: Vec<_> = chars.iter().filter(|c| c.generated).collect();
+        assert_ne!(generated.len(), 0, "PDFium puts a break between the lines");
+        assert!(
+            generated
+                .iter()
+                .all(|c| c.rect.iter().all(|v| v.abs() < f32::EPSILON))
+        );
+    });
+}
+
+#[test]
+fn the_boxes_follow_the_rotation_of_the_page() {
+    let pdf = text_pdf((200, 100), 90, TWO_LINES);
+    with_renderer(|renderer| {
+        let doc = renderer.open(pdf).unwrap();
+        assert_eq!(doc.page_size(0).unwrap(), (100.0, 200.0));
+        let chars = doc.page_text(0, 1000).unwrap();
+        let real: Vec<_> = chars.iter().filter(|c| !c.generated).collect();
+        // Everything lies inside the page as shown: 100 wide and 200 high.
+        for c in &real {
+            let [l, t, r, b] = c.rect;
+            assert!(
+                l >= -0.5 && r <= 100.5 && t >= -0.5 && b <= 200.5,
+                "{:?}",
+                c.rect
+            );
+            assert!(r > l && b > t, "{:?}", c.rect);
+        }
+        // Turned a quarter clockwise, a line of text runs downwards.
+        assert!(real[1].rect[1] > real[0].rect[1] + 3.0);
+        assert!((real[1].rect[0] - real[0].rect[0]).abs() < 1.0);
+    });
+}
+
+#[test]
+fn text_is_limited_and_a_missing_page_is_an_error() {
+    let pdf = text_pdf((200, 100), 0, TWO_LINES);
+    with_renderer(|renderer| {
+        let doc = renderer.open(pdf).unwrap();
+        assert_eq!(doc.page_text(0, 5).unwrap().len(), 5);
+        assert_eq!(doc.page_text(0, 0).unwrap().len(), 0);
+        let err = doc.page_text(1, 10).unwrap_err();
+        assert!(
+            matches!(err, Error::PageOutOfRange { page: 1, count: 1 }),
+            "{err:?}"
+        );
+    });
+}
+
+#[test]
+fn a_page_without_text_has_no_characters() {
+    with_renderer(|renderer| {
+        let doc = renderer.open(sample_pdf()).unwrap();
+        for page in 0..3 {
+            assert_eq!(doc.page_text(page, 100).unwrap().len(), 0);
+        }
+    });
+}

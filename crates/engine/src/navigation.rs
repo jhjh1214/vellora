@@ -10,7 +10,7 @@
 //! All of it is untrusted input read through `cos`'s limits. Whatever cannot be read becomes an
 //! `Error` answer for that request (`ReadFailed`); the document and the tiles are unaffected.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::Receiver;
@@ -22,15 +22,20 @@ use vellora_cos::{
 };
 use vellora_ipc::{
     Destination, ErrorKind, Fit, Link, LinkAction, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES,
-    NamedAction, OutlineEntry, Request, RequestId, Response, TitleStyle,
+    NamedAction, OutlineEntry, Request, RequestId, Response, TextChar, TitleStyle,
 };
-use vellora_shm::MappedFile;
 use zeroize::Zeroizing;
 
+use crate::document::Document;
 use crate::session::{error_response, send_shared};
+use crate::text;
 
 /// Pages whose objects are kept for reading their links; links on later pages are not offered.
 const MAX_LINK_PAGES: usize = 1 << 16;
+/// Characters read from one page; a page with more is cut there.
+const MAX_PAGE_CHARS: usize = 1 << 19;
+/// Characters of text kept for the pages read, over all pages; the oldest page goes first.
+const TEXT_CACHE_CHARS: usize = 1 << 20;
 
 /// Items asked of `cos` at a time while the whole outline is walked.
 const WALK_CHUNK: usize = 256;
@@ -45,7 +50,8 @@ pub(crate) enum Message {
 
 /// What reading the document's structure needs.
 pub(crate) struct OpenDocument {
-    pub(crate) mapped: Arc<MappedFile>,
+    /// The document: its bytes for cos, and PDFium's handle for the text of a page.
+    pub(crate) document: Arc<Document>,
     /// The page count PDFium reported, which is what the UI numbers pages by.
     pub(crate) page_count: u32,
     /// The forms of the password the user typed (empty if none), for a document that is locked.
@@ -60,7 +66,8 @@ pub(crate) fn request_id(request: &Request) -> Option<RequestId> {
         | Request::GetOutlinePath { req_id, .. }
         | Request::GetPageLabels { req_id, .. }
         | Request::FindPageLabel { req_id, .. }
-        | Request::GetLinks { req_id, .. } => Some(*req_id),
+        | Request::GetLinks { req_id, .. }
+        | Request::GetTextPage { req_id, .. } => Some(*req_id),
         _ => None,
     }
 }
@@ -84,21 +91,30 @@ pub(crate) fn run<W: Write>(messages: &Receiver<Message>, output: &Mutex<W>) {
         }
     };
     let OpenDocument {
-        mapped,
+        document,
         page_count,
         unlock,
     } = opened;
+    let mapped = Arc::clone(&document.mapped);
     let store = open_store(mapped.as_slice(), &unlock);
     drop(unlock);
     match &store {
         Ok(store) => {
-            let mut navigator = Navigator::new(store, page_count);
+            let mut navigator = Navigator::new(store, page_count, document);
             serve(messages, output, |request| navigator.answer(request));
         }
         Err(reason) => {
             tracing::debug!(%reason, "the document structure cannot be read for navigation");
-            serve(messages, output, |request| {
-                refusal(request, ErrorKind::ReadFailed, reason)
+            // The text of a page comes from PDFium, so it can still be answered.
+            let mut text = TextCache::new(document, page_count);
+            serve(messages, output, |request| match request {
+                Request::GetTextPage {
+                    req_id,
+                    page,
+                    skip,
+                    limit,
+                } => text.page(*req_id, *page, *skip, *limit),
+                _ => refusal(request, ErrorKind::ReadFailed, reason),
             });
         }
     }
@@ -291,16 +307,94 @@ struct Navigator<'s, 'a> {
     flat: Option<FlatOutline>,
     /// The page objects in order, up to `MAX_LINK_PAGES`, read on first use.
     pages: Option<Vec<Page>>,
+    text: TextCache,
+}
+
+/// The text of the pages read lately. It needs PDFium only, not `cos`, so it works for a file that
+/// `cos` cannot read.
+struct TextCache {
+    document: Arc<Document>,
+    page_count: u32,
+    /// Oldest first in `order`, at most `TEXT_CACHE_CHARS` characters in all (the newest page is
+    /// kept whatever its size).
+    texts: HashMap<u32, Arc<Vec<TextChar>>>,
+    order: VecDeque<u32>,
+    chars: usize,
+}
+
+impl TextCache {
+    fn new(document: Arc<Document>, page_count: u32) -> Self {
+        Self {
+            document,
+            page_count,
+            texts: HashMap::new(),
+            order: VecDeque::new(),
+            chars: 0,
+        }
+    }
+    /// A window of the characters of `page`: from PDFium once, then from the cache.
+    fn page(&mut self, req_id: RequestId, page: u32, skip: u32, limit: u32) -> Response {
+        let page_count = self.page_count;
+        if page >= page_count {
+            return error_response(
+                Some(req_id),
+                ErrorKind::InvalidRequest,
+                &format_args!("page {page} is out of range: the document has {page_count} pages"),
+            );
+        }
+        let text = match self.cached(page) {
+            Ok(text) => text,
+            Err(error) => return error_response(Some(req_id), ErrorKind::ReadFailed, &error),
+        };
+        let total = text.len();
+        let start = usize::try_from(skip).map_or(total, |skip| skip.min(total));
+        let end =
+            usize::try_from(limit).map_or(total, |limit| start.saturating_add(limit).min(total));
+        Response::TextPage {
+            req_id,
+            page,
+            // `start` and `total` are at most `MAX_PAGE_CHARS`.
+            skip: u32::try_from(start).unwrap_or(u32::MAX),
+            total: u32::try_from(total).unwrap_or(u32::MAX),
+            chars: text[start..end].to_vec(),
+        }
+    }
+
+    /// The text of `page`, read from PDFium if it is not kept.
+    fn cached(&mut self, page: u32) -> Result<Arc<Vec<TextChar>>, vellora_render::Error> {
+        if let Some(text) = self.texts.get(&page) {
+            return Ok(Arc::clone(text));
+        }
+        let raw = self
+            .document
+            .handle
+            .page_text(usize::try_from(page).unwrap_or(usize::MAX), MAX_PAGE_CHARS)?;
+        let text = Arc::new(text::build(&raw));
+        self.chars += text.len();
+        self.texts.insert(page, Arc::clone(&text));
+        self.order.push_back(page);
+        // The oldest pages make room; the page just read always stays.
+        while self.chars > TEXT_CACHE_CHARS && self.order.len() > 1 {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(gone) = self.texts.remove(&oldest) {
+                self.chars -= gone.len();
+            }
+        }
+        Ok(text)
+    }
 }
 
 impl<'s, 'a> Navigator<'s, 'a> {
-    fn new(store: &'s ObjectStore<'a>, page_count: u32) -> Self {
+    fn new(store: &'s ObjectStore<'a>, page_count: u32, document: Arc<Document>) -> Self {
         Self {
             resolver: DestinationResolver::new(store),
             page_count,
             labels: None,
             flat: None,
             pages: None,
+            text: TextCache::new(document, page_count),
         }
     }
 
@@ -337,6 +431,12 @@ impl<'s, 'a> Navigator<'s, 'a> {
                 skip,
                 limit,
             } => self.links(req_id, page, skip, limit),
+            Request::GetTextPage {
+                req_id,
+                page,
+                skip,
+                limit,
+            } => self.text.page(req_id, page, skip, limit),
             Request::FindPageLabel { req_id, ref text } => {
                 let page_count = self.page_count;
                 match self.labels() {

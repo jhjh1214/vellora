@@ -4,7 +4,8 @@
 //!
 //! - load a document revision from bytes we provide (`FPDF_FILEACCESS`)
 //! - rasterise tiles into caller-provided buffers (shared memory)
-//! - report page sizes and, later, glyph geometry, annotation and form rendering
+//! - report page sizes, the characters of a page with their boxes ([`DocHandle::page_text`]) and,
+//!   later, annotation and form rendering
 //!
 //! **Boundaries:**
 //!
@@ -39,7 +40,7 @@ use std::path::{Path, PathBuf};
 mod renderer;
 
 pub use renderer::{
-    DocHandle, MAX_SCALE, MAX_TILE_PIXELS, MAX_TILE_SIDE, Renderer, TileRect, TileRequest,
+    DocHandle, MAX_SCALE, MAX_TILE_PIXELS, MAX_TILE_SIDE, Renderer, TextChar, TileRect, TileRequest,
 };
 
 /// Environment variable that overrides where [`Pdfium::locate`] looks for the library.

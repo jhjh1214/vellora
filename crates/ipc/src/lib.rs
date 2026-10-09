@@ -38,8 +38,8 @@ pub use message::{
     MAX_LABELS_PER_MESSAGE, MAX_LINK_KIND_BYTES, MAX_LINKS_PER_MESSAGE,
     MAX_OUTLINE_ITEMS_PER_MESSAGE, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES,
     MAX_PAGE_SIZES_PER_MESSAGE, MAX_PASSWORD_BYTES, MAX_REPAIR_CODE_BYTES,
-    MAX_REPAIR_MESSAGE_BYTES, MAX_REPAIRS, MAX_TILE_AREA, MAX_TILE_ORIGIN, MAX_TILE_SCALE,
-    MAX_TILE_SIDE, MAX_URI_BYTES, NamedAction, OutlineEntry, PROTOCOL_VERSION, PageSize, Password,
-    Priority, Repair, Request, RequestId, Response, SlotId, TileRect, TitleStyle, Validate,
-    check_version,
+    MAX_REPAIR_MESSAGE_BYTES, MAX_REPAIRS, MAX_TEXT_CHARS_PER_MESSAGE, MAX_TILE_AREA,
+    MAX_TILE_ORIGIN, MAX_TILE_SCALE, MAX_TILE_SIDE, MAX_URI_BYTES, NamedAction, OutlineEntry,
+    PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request, RequestId, Response, SlotId,
+    TEXT_GENERATED, TEXT_HYPHEN, TextChar, TileRect, TitleStyle, Validate, check_version,
 };

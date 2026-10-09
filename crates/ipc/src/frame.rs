@@ -1180,6 +1180,135 @@ mod tests {
         assert_eq!(round_trip(&kinds), kinds);
     }
 
+    fn text_char(ch: char, flags: u8) -> TextChar {
+        TextChar {
+            ch,
+            rect: [1.0, 2.0, 7.5, 14.25],
+            size: 12.0,
+            flags,
+            word: 3,
+            line: 1,
+        }
+    }
+
+    fn text_messages() -> (Vec<Request>, Vec<Response>) {
+        (
+            vec![Request::GetTextPage {
+                req_id: RequestId(20),
+                page: 4,
+                skip: 8192,
+                limit: 8192,
+            }],
+            vec![
+                Response::TextPage {
+                    req_id: RequestId(20),
+                    page: 4,
+                    skip: 2,
+                    total: 5,
+                    chars: vec![
+                        text_char('é', 0),
+                        text_char(' ', TEXT_GENERATED),
+                        text_char('-', TEXT_HYPHEN),
+                    ],
+                },
+                Response::TextPage {
+                    req_id: RequestId(21),
+                    page: 0,
+                    skip: 0,
+                    total: 0,
+                    chars: vec![],
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn text_messages_round_trip_and_follow_the_older_variants_on_the_wire() {
+        let (requests, responses) = text_messages();
+        for message in requests {
+            assert_eq!(round_trip(&message), message);
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &message).unwrap();
+            assert_eq!(wire[4], 10, "after GetLinks (9)");
+        }
+        for message in responses {
+            assert_eq!(round_trip(&message), message);
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &message).unwrap();
+            assert_eq!(wire[4], 9, "after Links (8)");
+        }
+    }
+
+    #[test]
+    fn text_limits_are_enforced_on_both_sides_of_the_wire() {
+        let get = |limit| Request::GetTextPage {
+            req_id: RequestId(1),
+            page: 0,
+            skip: 0,
+            limit,
+        };
+        let max = u32::try_from(MAX_TEXT_CHARS_PER_MESSAGE).unwrap();
+        for good in [get(1), get(max)] {
+            assert_eq!(round_trip(&good), good);
+        }
+        for bad in [get(0), get(max + 1), get(u32::MAX)] {
+            assert!(matches!(bad.validate(), Err(Error::Invalid(_))), "{bad:?}");
+            let mut wire = Vec::new();
+            assert!(matches!(
+                write_frame(&mut wire, &bad),
+                Err(Error::Invalid(_))
+            ));
+        }
+
+        let page = |skip, total, chars| Response::TextPage {
+            req_id: RequestId(1),
+            page: 0,
+            skip,
+            total,
+            chars,
+        };
+        let one = || text_char('a', 0);
+        let bad = [
+            page(0, u32::MAX, vec![one(); MAX_TEXT_CHARS_PER_MESSAGE + 1]),
+            // More characters than the page has after `skip`.
+            page(4, 5, vec![one(), one()]),
+            page(u32::MAX, u32::MAX, vec![one()]),
+            page(
+                0,
+                1,
+                vec![TextChar {
+                    rect: [0.0, f32::NAN, 1.0, 1.0],
+                    ..one()
+                }],
+            ),
+            page(
+                0,
+                1,
+                vec![TextChar {
+                    size: f32::INFINITY,
+                    ..one()
+                }],
+            ),
+        ];
+        for message in &bad {
+            assert!(
+                matches!(message.validate(), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+        }
+        // The largest message fits a frame, with the widest characters.
+        let wide = TextChar {
+            ch: '\u{10FFFF}',
+            rect: [f32::MAX, f32::MIN_POSITIVE, 1.0e30, -1.0e30],
+            size: f32::MAX,
+            flags: 255,
+            word: u32::MAX,
+            line: u32::MAX,
+        };
+        let full = page(0, u32::MAX, vec![wide; MAX_TEXT_CHARS_PER_MESSAGE]);
+        assert_eq!(round_trip(&full), full);
+    }
+
     fn repair(code: &str, message: &str) -> Repair {
         Repair {
             code: code.into(),
