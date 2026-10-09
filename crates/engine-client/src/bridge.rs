@@ -26,7 +26,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use tracing::Level;
-use vellora_ipc::{Destination, ErrorKind, Fit, OutlineEntry, PageSize, Priority, RequestId};
+use vellora_ipc::{
+    Destination, ErrorKind, Fit, Link, LinkAction, NamedAction, OutlineEntry, PageSize, Priority,
+    RequestId,
+};
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
 use crate::client::{Client, ClientConfig, ClientError, Event, Stage, TILE_PIXELS, TileLookup};
@@ -81,6 +84,49 @@ mod ffi {
         PageLabels,
         /// `request`, `found`, `found_page`: the answer to `find_page_label`.
         PageFound,
+        /// `request`, `links_page`, `links`, `more`: the answer to `request_links`.
+        Links,
+    }
+
+    /// What a link does (the protocol's `LinkAction`).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum LinkKind {
+        /// Go to a place in this document: `page` and the destination fields.
+        GoTo,
+        /// A jump that goes nowhere.
+        Unresolved,
+        /// Open a web address: `text`. Only after asking the reader.
+        Uri,
+        /// `named`.
+        Named,
+        /// An action that is never run: `text` is its name.
+        Inert,
+    }
+
+    /// The page actions of a `Named` link.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum NamedKind {
+        None,
+        NextPage,
+        PrevPage,
+        FirstPage,
+        LastPage,
+    }
+
+    /// A link on a page (the protocol's `Link`). The rectangle is in points of the page as shown,
+    /// top left origin. For `GoTo` the destination is `destination`, an [`OutlineNode`] whose
+    /// `id` and `title` are unused.
+    #[derive(Clone, Debug)]
+    struct LinkNode {
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        kind: LinkKind,
+        named: NamedKind,
+        /// `Uri`: the address; `Inert`: the name of the action.
+        text: String,
+        destination: OutlineNode,
     }
 
     /// How a destination shows its page (the protocol's `Fit`). Which numbers of an
@@ -236,6 +282,10 @@ mod ffi {
         found: bool,
         /// `PageFound`: the zero-based page.
         found_page: u32,
+        /// `Links`: the page the links are on.
+        links_page: u32,
+        /// `Links`: the links, in the order of the page.
+        links: Vec<LinkNode>,
     }
 
     extern "Rust" {
@@ -388,6 +438,9 @@ mod ffi {
         /// Asks which page has the label `text` (`PageFound`).
         fn find_page_label(self: &EngineClient, text: &str) -> Result<u64>;
 
+        /// Asks for up to `limit` (1 to 256) links of `page` after the first `skip` (`Links`).
+        fn request_links(self: &EngineClient, page: u32, skip: u32, limit: u32) -> Result<u64>;
+
         /// Withdraws a request; it is never reported. `false` if it was not in flight.
         fn cancel(self: &EngineClient, request: u64) -> bool;
 
@@ -400,8 +453,8 @@ mod ffi {
 }
 
 pub use ffi::{
-    EngineEvent, EventKind, FailureKind, FitKind, LogLevel, OutlineNode, PageExtent, RepairNote,
-    TilePriority, TileState, TileTicket, TimeoutStage,
+    EngineEvent, EventKind, FailureKind, FitKind, LinkKind, LinkNode, LogLevel, NamedKind,
+    OutlineNode, PageExtent, RepairNote, TilePriority, TileState, TileTicket, TimeoutStage,
 };
 
 /// Crash reporting behind the bridge's opaque handle. `None` after `stop`.
@@ -764,6 +817,16 @@ impl EngineClient {
         client.find_page_label(text).map(|id| id.0)
     }
 
+    /// Asks for the links of a page; see [`Client::request_links`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or `limit` is out of range.
+    pub fn request_links(&self, page: u32, skip: u32, limit: u32) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.request_links(page, skip, limit).map(|id| id.0)
+    }
+
     /// Withdraws a request; false if it was not in flight.
     pub fn cancel(&self, request: u64) -> bool {
         self.client
@@ -861,6 +924,8 @@ impl EngineEvent {
             labels: Vec::new(),
             found: false,
             found_page: 0,
+            links_page: 0,
+            links: Vec::new(),
         }
     }
 }
@@ -929,6 +994,19 @@ impl From<Event> for EngineEvent {
                 file_replaced: change == Change::Replaced,
                 ..Self::empty(EventKind::DocumentChanged)
             },
+            answer @ (Event::Outline { .. }
+            | Event::OutlinePath { .. }
+            | Event::PageLabels { .. }
+            | Event::PageFound { .. }
+            | Event::Links { .. }) => Self::navigation_answer(answer),
+        }
+    }
+}
+
+impl EngineEvent {
+    /// The answers to navigation requests (outline, labels, links).
+    fn navigation_answer(event: Event) -> Self {
+        match event {
             Event::Outline {
                 request,
                 items,
@@ -959,6 +1037,19 @@ impl From<Event> for EngineEvent {
                 labels,
                 ..Self::empty(EventKind::PageLabels)
             },
+            Event::Links {
+                request,
+                page,
+                links,
+                more,
+            } => Self {
+                request: request.0,
+                has_request: true,
+                links_page: page,
+                links: links.into_iter().map(LinkNode::from).collect(),
+                more,
+                ..Self::empty(EventKind::Links)
+            },
             Event::PageFound { request, page } => Self {
                 request: request.0,
                 has_request: true,
@@ -966,7 +1057,63 @@ impl From<Event> for EngineEvent {
                 found_page: page.unwrap_or(0),
                 ..Self::empty(EventKind::PageFound)
             },
+            // Not a navigation answer; From<Event> never sends one here.
+            other => Self::empty(EventKind::Failed).with_message(format!("unexpected {other:?}")),
         }
+    }
+
+    fn with_message(mut self, message: String) -> Self {
+        self.message = message;
+        self
+    }
+}
+
+impl From<Link> for LinkNode {
+    fn from(link: Link) -> Self {
+        let [left, top, right, bottom] = link.rect;
+        let mut node = Self {
+            left,
+            top,
+            right,
+            bottom,
+            kind: LinkKind::Unresolved,
+            named: NamedKind::None,
+            text: String::new(),
+            destination: OutlineNode::from(OutlineEntry {
+                id: 0,
+                title: String::new(),
+                destination: None,
+                has_children: false,
+                open: false,
+                style: vellora_ipc::TitleStyle::default(),
+            }),
+        };
+        match link.action {
+            LinkAction::GoTo(destination) => {
+                node.kind = LinkKind::GoTo;
+                node.destination = OutlineNode::from(OutlineEntry {
+                    id: 0,
+                    title: String::new(),
+                    destination: Some(destination),
+                    has_children: false,
+                    open: false,
+                    style: vellora_ipc::TitleStyle::default(),
+                });
+            }
+            LinkAction::Unresolved => {}
+            LinkAction::Uri(uri) => (node.kind, node.text) = (LinkKind::Uri, uri),
+            LinkAction::Named(named) => {
+                node.kind = LinkKind::Named;
+                node.named = match named {
+                    NamedAction::NextPage => NamedKind::NextPage,
+                    NamedAction::PrevPage => NamedKind::PrevPage,
+                    NamedAction::FirstPage => NamedKind::FirstPage,
+                    NamedAction::LastPage => NamedKind::LastPage,
+                };
+            }
+            LinkAction::Inert(kind) => (node.kind, node.text) = (LinkKind::Inert, kind),
+        }
+        node
     }
 }
 
@@ -1173,6 +1320,38 @@ mod tests {
             style: vellora_ipc::TitleStyle::default(),
         });
         assert_eq!(plain.fit, FitKind::None);
+    }
+
+    #[test]
+    fn link_actions_convert() {
+        let link = |action| {
+            LinkNode::from(Link {
+                rect: [1.0, 2.0, 3.0, 4.0],
+                action,
+            })
+        };
+        let go = link(LinkAction::GoTo(Destination {
+            page: 6,
+            fit: Fit::FitH { top: Some(9.0) },
+        }));
+        assert_eq!(
+            (go.kind, go.destination.page, go.destination.fit),
+            (LinkKind::GoTo, 6, FitKind::FitH)
+        );
+        assert_eq!((go.left, go.top, go.right, go.bottom), (1.0, 2.0, 3.0, 4.0));
+        let uri = link(LinkAction::Uri("https://e".into()));
+        assert_eq!((uri.kind, uri.text.as_str()), (LinkKind::Uri, "https://e"));
+        let named = link(LinkAction::Named(NamedAction::LastPage));
+        assert_eq!(
+            (named.kind, named.named),
+            (LinkKind::Named, NamedKind::LastPage)
+        );
+        let inert = link(LinkAction::Inert("Launch".into()));
+        assert_eq!(
+            (inert.kind, inert.text.as_str()),
+            (LinkKind::Inert, "Launch")
+        );
+        assert_eq!(link(LinkAction::Unresolved).kind, LinkKind::Unresolved);
     }
 
     #[test]

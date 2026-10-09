@@ -211,7 +211,20 @@ mod tests {
                 req_id: RequestId(14),
                 text: "A-3 é".into(),
             },
+            Request::GetLinks {
+                req_id: RequestId(16),
+                page: 7,
+                skip: 256,
+                limit: 256,
+            },
         ]
+    }
+
+    fn link(action: LinkAction) -> Link {
+        Link {
+            rect: [1.0, 2.0, 30.5, 40.25],
+            action,
+        }
     }
 
     fn entry(title: &str, destination: Option<Destination>) -> OutlineEntry {
@@ -325,6 +338,32 @@ mod tests {
         ]
     }
 
+    fn link_responses() -> Vec<Response> {
+        vec![
+            Response::Links {
+                req_id: RequestId(16),
+                page: 7,
+                links: vec![
+                    link(LinkAction::GoTo(Destination {
+                        page: 2,
+                        fit: Fit::Fit,
+                    })),
+                    link(LinkAction::Unresolved),
+                    link(LinkAction::Uri("https://example.org/é?x=1".into())),
+                    link(LinkAction::Named(NamedAction::LastPage)),
+                    link(LinkAction::Inert("Launch".into())),
+                ],
+                more: true,
+            },
+            Response::Links {
+                req_id: RequestId(17),
+                page: 0,
+                links: vec![],
+                more: false,
+            },
+        ]
+    }
+
     fn round_trip<T>(message: &T) -> T
     where
         T: Serialize + DeserializeOwned + Validate,
@@ -349,7 +388,7 @@ mod tests {
 
     #[test]
     fn every_response_round_trips() {
-        for message in responses() {
+        for message in responses().into_iter().chain(link_responses()) {
             assert_eq!(round_trip(&message), message);
         }
     }
@@ -1044,6 +1083,101 @@ mod tests {
             labels: vec!["é".repeat(MAX_LABEL_BYTES / 2); MAX_LABELS_PER_MESSAGE],
         };
         assert_eq!(round_trip(&labels), labels);
+    }
+
+    /// Links came with version 5, after the navigation messages (`FindPageLabel` is request 8,
+    /// `PageFound` response 7).
+    #[test]
+    fn links_follow_the_older_variants_on_the_wire() {
+        let mut wire = Vec::new();
+        write_frame(
+            &mut wire,
+            &Request::GetLinks {
+                req_id: RequestId(1),
+                page: 0,
+                skip: 0,
+                limit: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(wire[4], 9);
+        let mut wire = Vec::new();
+        write_frame(
+            &mut wire,
+            &Response::Links {
+                req_id: RequestId(1),
+                page: 0,
+                links: vec![],
+                more: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(wire[4], 8);
+    }
+
+    #[test]
+    fn link_limits_are_enforced_on_both_sides_of_the_wire() {
+        let get = |limit| Request::GetLinks {
+            req_id: RequestId(1),
+            page: 0,
+            skip: 0,
+            limit,
+        };
+        let max = u32::try_from(MAX_LINKS_PER_MESSAGE).unwrap();
+        for good in [get(1), get(max)] {
+            assert_eq!(round_trip(&good), good);
+        }
+        for bad in [get(0), get(max + 1), get(u32::MAX)] {
+            assert!(matches!(bad.validate(), Err(Error::Invalid(_))), "{bad:?}");
+            let mut wire = Vec::new();
+            assert!(matches!(
+                write_frame(&mut wire, &bad),
+                Err(Error::Invalid(_))
+            ));
+        }
+
+        let links = |links| Response::Links {
+            req_id: RequestId(1),
+            page: 0,
+            links,
+            more: false,
+        };
+        let bad = [
+            links(vec![
+                link(LinkAction::Unresolved);
+                MAX_LINKS_PER_MESSAGE + 1
+            ]),
+            links(vec![link(LinkAction::Uri("u".repeat(MAX_URI_BYTES + 1)))]),
+            links(vec![link(LinkAction::Inert(
+                "k".repeat(MAX_LINK_KIND_BYTES + 1),
+            ))]),
+            links(vec![Link {
+                rect: [0.0, f32::NAN, 1.0, 1.0],
+                action: LinkAction::Unresolved,
+            }]),
+            links(vec![link(LinkAction::GoTo(Destination {
+                page: 0,
+                fit: Fit::FitH {
+                    top: Some(f32::INFINITY),
+                },
+            }))]),
+        ];
+        for message in &bad {
+            assert!(
+                matches!(message.validate(), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+        }
+        // The same sizes at the limit are fine, and the largest message fits one frame.
+        let full = links(vec![
+            link(LinkAction::Uri("é".repeat(MAX_URI_BYTES / 2)));
+            MAX_LINKS_PER_MESSAGE
+        ]);
+        assert_eq!(round_trip(&full), full);
+        let kinds = links(vec![link(LinkAction::Inert(
+            "k".repeat(MAX_LINK_KIND_BYTES),
+        ))]);
+        assert_eq!(round_trip(&kinds), kinds);
     }
 
     fn repair(code: &str, message: &str) -> Repair {

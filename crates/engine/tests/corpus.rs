@@ -130,6 +130,9 @@ struct NavigationRun {
     labelled: bool,
     /// Some outline item starts at or before the last page.
     sectioned: bool,
+    /// Links on the first page, and how many of them are of a kind that is never run.
+    links: usize,
+    inert_links: usize,
     /// What the `ReadFailed` answers said.
     unreadable: Vec<String>,
     /// Answers that were neither a typed answer nor `ReadFailed`.
@@ -143,6 +146,8 @@ struct NavigationTotals {
     labelled: usize,
     sectioned: usize,
     unreadable: usize,
+    links: usize,
+    inert_links: usize,
 }
 
 impl NavigationTotals {
@@ -151,6 +156,8 @@ impl NavigationTotals {
         self.items += run.items;
         self.labelled += usize::from(run.labelled);
         self.sectioned += usize::from(run.sectioned);
+        self.links += run.links;
+        self.inert_links += run.inert_links;
         self.unreadable += run.unreadable.len();
         problems.extend(
             run.problems
@@ -165,9 +172,24 @@ impl std::fmt::Display for NavigationTotals {
         write!(
             f,
             "navigation: {} outline items read, {} documents with page labels, {} with a section \
-             at the last page, {} answered ReadFailed",
-            self.items, self.labelled, self.sectioned, self.unreadable
+             at the last page, {} links on first pages ({} of kinds never run), {} answered ReadFailed",
+            self.items,
+            self.labelled,
+            self.sectioned,
+            self.links,
+            self.inert_links,
+            self.unreadable
         )
+    }
+}
+
+impl NavigationRun {
+    fn count_links(&mut self, links: &[vellora_ipc::Link]) {
+        self.links += links.len();
+        self.inert_links += links
+            .iter()
+            .filter(|link| matches!(link.action, vellora_ipc::LinkAction::Inert(_)))
+            .count();
     }
 }
 
@@ -231,6 +253,10 @@ impl Walk<'_> {
                 request, defined, ..
             } if self.navigation.pending.remove(&request) => {
                 self.navigation.labelled |= defined;
+                self.navigation_step()
+            }
+            Event::Links { request, links, .. } if self.navigation.pending.remove(&request) => {
+                self.navigation.count_links(&links);
                 self.navigation_step()
             }
             Event::PageFound { request, .. } if self.navigation.pending.remove(&request) => {
@@ -313,6 +339,10 @@ impl Walk<'_> {
         self.ask(|client| client.request_page_labels(0, 1024));
         self.ask(|client| client.request_outline_path(last));
         self.ask(|client| client.find_page_label("1"));
+        // A document with no pages has no first page to ask about.
+        if self.page_count > 0 {
+            self.ask(|client| client.request_links(0, 0, 256));
+        }
         self.navigation_step()
     }
 

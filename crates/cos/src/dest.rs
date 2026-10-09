@@ -133,7 +133,7 @@ impl PageIndex {
 
 /// A finite number, as `f32`; `None` for anything else (`null`, a name, infinity).
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn number(object: &Object<'_>) -> Option<f32> {
+pub(crate) fn number(object: &Object<'_>) -> Option<f32> {
     let value = match object.kind {
         ObjectKind::Integer(n) => n as f64,
         ObjectKind::Real(r) => r,

@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
 /// revision 6 password and 32 of an older one, so this is generous.
@@ -37,6 +37,14 @@ pub const MAX_OUTLINE_PATH: usize = 64;
 pub const MAX_LABELS_PER_MESSAGE: usize = 1024;
 /// Longest page label in bytes (a prefix of 64 characters and a number).
 pub const MAX_LABEL_BYTES: usize = 320;
+/// Most links one `Links` may carry. With addresses of at most [`MAX_URI_BYTES`] this stays far
+/// below the frame limit.
+pub const MAX_LINKS_PER_MESSAGE: usize = 256;
+/// Longest address in a [`LinkAction::Uri`], in bytes. The engine offers longer ones as inert
+/// actions, because they could not be shown whole.
+pub const MAX_URI_BYTES: usize = 2048;
+/// Longest name of an inert action, in bytes.
+pub const MAX_LINK_KIND_BYTES: usize = 64;
 /// Largest accepted tile scale (device pixels per point).
 pub const MAX_TILE_SCALE: f32 = 64.0;
 /// Longest accepted tile side in device pixels.
@@ -178,6 +186,46 @@ pub struct TitleStyle {
     pub bold: bool,
     /// Italic.
     pub italic: bool,
+}
+
+/// The page actions of a `Named` link that the viewer does by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NamedAction {
+    /// Go to the next page.
+    NextPage,
+    /// Go to the previous page.
+    PrevPage,
+    /// Go to the first page.
+    FirstPage,
+    /// Go to the last page.
+    LastPage,
+}
+
+/// What activating a link does. The viewer follows `GoTo` and `Named` itself, opens a `Uri` only
+/// after asking, and never does what an `Inert` action names.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum LinkAction {
+    /// Go to a place in this document.
+    GoTo(Destination),
+    /// A jump to a place that is not a page of this document: the link goes nowhere.
+    Unresolved,
+    /// Open a web address (text from the document, at most [`MAX_URI_BYTES`] bytes).
+    Uri(String),
+    /// A page action of the viewer.
+    Named(NamedAction),
+    /// An action Vellora never runs, by name (`Launch`, `JavaScript`, `GoToR`, `SubmitForm`,
+    /// `ImportData`, `Named:Print`, ...; at most [`MAX_LINK_KIND_BYTES`] bytes).
+    Inert(String),
+}
+
+/// A link on a page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Link {
+    /// `[left, top, right, bottom]` in points of the page as shown (after its crop box and
+    /// `/Rotate`), origin at the top left: the frame of the page size in `Opened`.
+    pub rect: [f32; 4],
+    /// What it does.
+    pub action: LinkAction,
 }
 
 /// A document password as the user typed it (UTF-8 text).
@@ -348,6 +396,18 @@ pub enum Request {
         /// The label as typed, at most [`MAX_LABEL_BYTES`] bytes.
         text: String,
     },
+    /// The links of a page, a window of them. Answered with `Links`. Read by the same thread as
+    /// the other navigation requests.
+    GetLinks {
+        /// Correlation id.
+        req_id: RequestId,
+        /// Zero-based page index.
+        page: u32,
+        /// How many links of the page to skip (the ones already received).
+        skip: u32,
+        /// Most links wanted, in `1..=`[`MAX_LINKS_PER_MESSAGE`].
+        limit: u32,
+    },
 }
 
 /// Messages from the engine to the UI.
@@ -421,6 +481,17 @@ pub enum Response {
         req_id: RequestId,
         /// The zero-based page, or `None` if no page has that label.
         page: Option<u32>,
+    },
+    /// The answer to `GetLinks`.
+    Links {
+        /// The request it answers.
+        req_id: RequestId,
+        /// The page the links are on.
+        page: u32,
+        /// The links in the order of the page, at most [`MAX_LINKS_PER_MESSAGE`].
+        links: Vec<Link>,
+        /// More links follow: ask again with `skip` advanced by `links.len()`.
+        more: bool,
     },
 }
 
@@ -507,6 +578,13 @@ impl Validate for Request {
                 }
                 Ok(())
             }
+            Request::GetLinks { limit, .. } => {
+                let wanted = usize::try_from(*limit).unwrap_or(usize::MAX);
+                if wanted == 0 || wanted > MAX_LINKS_PER_MESSAGE {
+                    return Err(Error::Invalid("link limit must be 1..=256"));
+                }
+                Ok(())
+            }
             Request::Hello { .. }
             | Request::Open { .. }
             | Request::Cancel { .. }
@@ -582,6 +660,29 @@ impl Validate for Response {
                 }
                 if labels.iter().any(|l| l.len() > MAX_LABEL_BYTES) {
                     return Err(Error::Invalid("page label too long"));
+                }
+                Ok(())
+            }
+            Response::Links { links, .. } => {
+                if links.len() > MAX_LINKS_PER_MESSAGE {
+                    return Err(Error::Invalid("too many links in one message"));
+                }
+                for link in links {
+                    if !link.rect.iter().all(|v| v.is_finite()) {
+                        return Err(Error::Invalid("link rectangle must be finite"));
+                    }
+                    match &link.action {
+                        LinkAction::Uri(uri) if uri.len() > MAX_URI_BYTES => {
+                            return Err(Error::Invalid("link address too long"));
+                        }
+                        LinkAction::Inert(kind) if kind.len() > MAX_LINK_KIND_BYTES => {
+                            return Err(Error::Invalid("link action name too long"));
+                        }
+                        LinkAction::GoTo(destination) if !destination.fit.is_finite() => {
+                            return Err(Error::Invalid("destination numbers must be finite"));
+                        }
+                        _ => {}
+                    }
                 }
                 Ok(())
             }

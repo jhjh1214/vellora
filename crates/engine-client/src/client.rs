@@ -73,7 +73,7 @@ use std::time::{Duration, Instant};
 
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
-    ErrorKind, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
+    ErrorKind, Link, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
     RequestId, Response, SlotId, TileRect, check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
@@ -107,6 +107,9 @@ pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The least time between two engine incident reports.
 const INCIDENT_SPACING: Duration = Duration::from_secs(10);
+
+/// How long the line of a panic the engine caught is waited for before the report is written.
+const PANIC_LINE_PATIENCE: Duration = Duration::from_secs(2);
 
 /// How long a crashed engine's last log lines are waited for before the report is written.
 const LOG_DRAIN_PATIENCE: Duration = Duration::from_millis(500);
@@ -312,6 +315,17 @@ pub enum Event {
         /// The zero-based page that has the label, if one does.
         page: Option<u32>,
     },
+    /// The answer to [`Client::request_links`].
+    Links {
+        /// The request it answers.
+        request: RequestId,
+        /// The page the links are on.
+        page: u32,
+        /// The links, in the order of the page.
+        links: Vec<Link>,
+        /// More follow: ask again with `skip` advanced by `links.len()`.
+        more: bool,
+    },
     /// A request failed, or the engine reported a problem of its own (`request` is `None`).
     RequestFailed {
         /// The failed request.
@@ -482,6 +496,20 @@ impl Ledger {
                 Event::PageFound {
                     request: req_id,
                     page,
+                },
+            ),
+            Response::Links {
+                req_id,
+                page,
+                links,
+                more,
+            } => self.answered(
+                req_id,
+                Event::Links {
+                    request: req_id,
+                    page,
+                    links,
+                    more,
                 },
             ),
             Response::Error {
@@ -1154,6 +1182,31 @@ impl Client {
         })
     }
 
+    /// Asks for the links of `page` (zero-based): at most `limit` (1 to 256) after skipping the
+    /// first `skip`. The answer is [`Event::Links`]; when it says `more`, ask again with `skip`
+    /// advanced by the number received.
+    ///
+    /// The engine only describes the links. What an action does is up to the caller: internal
+    /// jumps are followed, addresses are shown and confirmed, everything else is never run.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for a `limit` out of
+    /// range.
+    pub fn request_links(
+        &self,
+        page: u32,
+        skip: u32,
+        limit: u32,
+    ) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetLinks {
+            req_id,
+            page,
+            skip,
+            limit,
+        })
+    }
+
     /// Registers a request, sends it, and forgets it again if it could not be sent.
     fn request_navigation(
         &self,
@@ -1512,13 +1565,24 @@ fn read_responses(shared: &Arc<Shared>, generation: u64, stdout: File) {
                 }
                 drop(state);
                 if let Some(message) = incident {
-                    // The engine prints a panic's message just before it answers; give the log
-                    // reader a moment to take it, without holding up this thread.
+                    // The engine prints a panic's message just before it answers, on a stream of
+                    // its own, so the line may reach the log tail after the answer. Wait for it
+                    // (a failure that is not a panic never prints one, so not for long), without
+                    // holding up this thread.
                     let shared = Arc::clone(shared);
                     let _ = thread::Builder::new()
                         .name("vellora-incident".into())
                         .spawn(move || {
-                            thread::sleep(Duration::from_millis(150));
+                            let give_up = Instant::now() + PANIC_LINE_PATIENCE;
+                            while Instant::now() < give_up
+                                && !shared
+                                    .engine_log
+                                    .tail()
+                                    .iter()
+                                    .any(|line| line.contains("panicked at"))
+                            {
+                                thread::sleep(Duration::from_millis(10));
+                            }
                             shared
                                 .record_incident("the engine reported an internal error", &message);
                         });
@@ -1838,6 +1902,28 @@ mod tests {
         assert!(ledger.pending.is_empty());
         // Four answers in, but no tile: the budget of one restart is still spent.
         assert!(!ledger.crashed().1);
+    }
+
+    #[test]
+    fn link_answers_clear_their_request() {
+        let mut ledger = Ledger::new(3);
+        let id = ledger.begin();
+        let response = Response::Links {
+            req_id: id,
+            page: 2,
+            links: vec![],
+            more: true,
+        };
+        assert_eq!(
+            ledger.accept(response.clone()),
+            Accepted::Event(Event::Links {
+                request: id,
+                page: 2,
+                links: vec![],
+                more: true
+            })
+        );
+        assert_eq!(ledger.accept(response), Accepted::Dropped);
     }
 
     #[test]

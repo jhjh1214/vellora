@@ -11,6 +11,7 @@ mod support;
 
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -248,8 +249,19 @@ fn a_closed_session_ends_with_success() {
 
 /// The control for the memory test: without a limit the same bomb renders. If this fails, the
 /// bomb is not what the next test says it is.
+/// The three tests that use the bomb each make PDFium decode about 900 MiB. Side by side on a
+/// small runner they starve one another, and the deadline test then measures the machine
+/// swapping instead of the engine aborting (it ended 5.8 s and 6.5 s after a 300 ms deadline in
+/// CI, with core files already ruled out). They take turns.
+static HEAVY: Mutex<()> = Mutex::new(());
+
+fn one_at_a_time() -> MutexGuard<'static, ()> {
+    HEAVY.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[test]
 fn the_bomb_renders_when_nothing_limits_it() {
+    let _turn = one_at_a_time();
     let mut engine = Client::start(&bomb_pdf(), patient(), |_| ResourceLimits::default());
     engine.open(1);
     engine.render_first_page();
@@ -272,6 +284,7 @@ fn the_bomb_renders_when_nothing_limits_it() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn a_memory_bomb_kills_the_engine_and_the_client_reports_a_crash() {
+    let _turn = one_at_a_time();
     const { assert!(ResourceLimits::ENFORCES_MEMORY) };
     let mut engine = Client::start(&bomb_pdf(), patient(), tight);
     engine.open(1);
@@ -297,6 +310,7 @@ fn a_memory_bomb_kills_the_engine_and_the_client_reports_a_crash() {
 /// reports an abort.
 #[test]
 fn a_render_past_its_hard_deadline_ends_the_engine() {
+    let _turn = one_at_a_time();
     let deadlines = Deadlines {
         soft: Duration::from_millis(100),
         hard: Duration::from_millis(300),

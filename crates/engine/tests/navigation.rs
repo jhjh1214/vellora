@@ -14,8 +14,8 @@ use std::fs;
 
 use support::{GOLDEN_PDF, Session};
 use vellora_ipc::{
-    Destination, ErrorKind, Fit, OutlineEntry, Priority, Request, RequestId, Response, SlotId,
-    TileRect, TitleStyle,
+    Destination, ErrorKind, Fit, Link, LinkAction, NamedAction, OutlineEntry, Priority, Request,
+    RequestId, Response, SlotId, TileRect, TitleStyle,
 };
 
 /// The object number of page `index`.
@@ -30,6 +30,11 @@ const FIRST_FREE: u32 = page(PAGES);
 /// A PDF of [`PAGES`] blank pages with a classic xref table. `catalog_extra` goes into the catalog
 /// dictionary; `objects` are numbered from [`FIRST_FREE`].
 fn pdf(catalog_extra: &str, objects: &[String]) -> Vec<u8> {
+    pdf_with_first_page(catalog_extra, "", objects)
+}
+
+/// [`pdf`] with `first_page_extra` in the dictionary of the first page.
+fn pdf_with_first_page(catalog_extra: &str, first_page_extra: &str, objects: &[String]) -> Vec<u8> {
     let kids = (0..PAGES)
         .map(|i| format!("{} 0 R", page(i)))
         .collect::<Vec<_>>()
@@ -38,9 +43,10 @@ fn pdf(catalog_extra: &str, objects: &[String]) -> Vec<u8> {
         format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
         format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} >>"),
     ];
-    all.extend(
-        (0..PAGES).map(|_| "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>".to_owned()),
-    );
+    all.extend((0..PAGES).map(|i| {
+        let extra = if i == 0 { first_page_extra } else { "" };
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] {extra} >>")
+    }));
     all.extend(objects.iter().cloned());
 
     let mut out = String::from("%PDF-1.4\n");
@@ -556,5 +562,130 @@ fn protected_documents_are_navigable_once_they_are_opened_with_their_password() 
             assert!(!defined, "{name}");
             assert_eq!(listed, ["1"], "{name}");
         }
+    }
+}
+
+// ---- links (task 13a) ----
+
+fn get_links(engine: &mut Session, page: u32, skip: u32, limit: u32) -> (Vec<Link>, bool) {
+    engine.send(&Request::GetLinks {
+        req_id: id(5),
+        page,
+        skip,
+        limit,
+    });
+    match engine.recv() {
+        Response::Links {
+            req_id,
+            page: answered,
+            links,
+            more,
+        } => {
+            assert_eq!((req_id, answered), (id(5), page));
+            (links, more)
+        }
+        other => panic!("expected links, got {other:?}"),
+    }
+}
+
+/// A first page with one link of every kind the protocol distinguishes, and a second page to go to.
+fn linked() -> Vec<u8> {
+    let link = |rect: &str, entry: &str| {
+        format!("<< /Type /Annot /Subtype /Link /Rect [{rect}] {entry} >>")
+    };
+    let annots = [
+        link("10 10 20 20", &format!("/Dest [{} 0 R /Fit]", page(1))),
+        link(
+            "10 30 20 40",
+            "/A << /S /URI /URI (https://example.org/x) >>",
+        ),
+        link("10 50 20 60", "/A << /S /Named /N /NextPage >>"),
+        link("10 70 20 80", "/A << /S /Launch /F (calc.exe) >>"),
+        link("30 10 40 20", "/A << /S /JavaScript /JS (app.alert(1)) >>"),
+        link(
+            "30 30 40 40",
+            "/A << /S /GoToR /F (other.pdf) /D [0 /Fit] >>",
+        ),
+        link("30 50 40 60", "/A << /S /SubmitForm /F (http://x/post) >>"),
+        link("30 70 40 80", "/A << /S /ImportData /F (data.fdf) >>"),
+        link("50 10 60 20", "/Dest /nowhere"),
+    ]
+    .join(" ");
+    pdf_with_first_page("", &format!("/Annots [{annots}]"), &[])
+}
+
+#[test]
+fn every_kind_of_link_action_is_described_and_none_is_run() {
+    let mut engine = opened(&linked());
+    let (links, more) = get_links(&mut engine, 0, 0, 256);
+    assert!(!more);
+    let actions: Vec<LinkAction> = links.iter().map(|link| link.action.clone()).collect();
+    let inert = |name: &str| LinkAction::Inert(name.to_owned());
+    assert_eq!(
+        actions,
+        [
+            LinkAction::GoTo(Destination {
+                page: 1,
+                fit: Fit::Fit
+            }),
+            LinkAction::Uri("https://example.org/x".to_owned()),
+            LinkAction::Named(NamedAction::NextPage),
+            inert("Launch"),
+            inert("JavaScript"),
+            inert("GoToR"),
+            inert("SubmitForm"),
+            inert("ImportData"),
+            LinkAction::Unresolved,
+        ]
+    );
+    // The page is 100 x 100: a link at y 10 to 20 (up from the bottom) is 80 to 90 down from the top.
+    assert_eq!(links[0].rect, [10.0, 80.0, 20.0, 90.0]);
+    // Still serving: the engine did not launch anything or end.
+    engine.send(&tile_request(1));
+    assert!(matches!(engine.recv(), Response::TileReady { .. }));
+}
+
+#[test]
+fn links_come_in_windows_and_other_pages_have_none() {
+    let mut engine = opened(&linked());
+    let (first, more) = get_links(&mut engine, 0, 0, 4);
+    assert_eq!((first.len(), more), (4, true));
+    let (second, more) = get_links(&mut engine, 0, 4, 4);
+    assert_eq!((second.len(), more), (4, true));
+    let (last, more) = get_links(&mut engine, 0, 8, 4);
+    assert_eq!((last.len(), more), (1, false));
+    assert_eq!(last[0].action, LinkAction::Unresolved);
+    let (none, more) = get_links(&mut engine, 3, 0, 4);
+    assert_eq!((none.len(), more), (0, false));
+
+    // A page that does not exist is refused, naming the request.
+    engine.send(&Request::GetLinks {
+        req_id: id(6),
+        page: PAGES,
+        skip: 0,
+        limit: 1,
+    });
+    match engine.recv() {
+        Response::Error { req_id, kind, .. } => {
+            assert_eq!((req_id, kind), (Some(id(6)), ErrorKind::InvalidRequest));
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn links_are_refused_before_a_document_is_open() {
+    let mut engine = started(&linked());
+    engine.send(&Request::GetLinks {
+        req_id: id(9),
+        page: 0,
+        skip: 0,
+        limit: 1,
+    });
+    match engine.recv() {
+        Response::Error { req_id, kind, .. } => {
+            assert_eq!((req_id, kind), (Some(id(9)), ErrorKind::InvalidRequest));
+        }
+        other => panic!("expected a refusal, got {other:?}"),
     }
 }
