@@ -1,18 +1,23 @@
 #include "MainWindow.h"
 
-#include "PasswordDialog.h"
 #include "RepairBar.h"
 
 #include <QAction>
+#include <QCloseEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
-#include <QMetaObject>
+#include <QMimeData>
 #include <QScreen>
 #include <QStatusBar>
 #include <QStyle>
-#include <QVBoxLayout>
+#include <QTabBar>
+#include <QTabWidget>
+#include <QUrl>
 #include <functional>
 #include <utility>
 
@@ -27,17 +32,31 @@ QLabel* plainLabel(QWidget* parent) {
     return label;
 }
 
+// Tab titles are file names: a literal `&` must not become a mnemonic.
+QString tabTitle(const QString& fileName) {
+    QString title = fileName.isEmpty() ? QObject::tr("New Tab") : fileName;
+    return title.replace(QLatin1Char('&'), QStringLiteral("&&"));
+}
+
+// The local files among the URLs of a drop.
+QStringList localFiles(const QMimeData* mime) {
+    QStringList files;
+    if (mime != nullptr) {
+        for (const QUrl& url : mime->urls()) {
+            if (url.isLocalFile()) {
+                files.append(url.toLocalFile());
+            }
+        }
+    }
+    return files;
+}
+
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
+    : QMainWindow(parent), m_settings(settings) {
     setWindowTitle(tr("Vellora"));
-    m_passwordProvider = [this](const QString& fileName, int attempt, int maxAttempts, bool wrong) {
-        PasswordDialog dialog(fileName, attempt, maxAttempts, wrong, this);
-        if (dialog.exec() != QDialog::Accepted) {
-            return std::optional<QString>();
-        }
-        return std::optional<QString>(dialog.takePassword());
-    };
+    setAcceptDrops(true);
     // 1000 x 800, but never more than 80% of the screen.
     const QSize available = screen() ? screen()->availableSize() : QSize(1250, 1000);
     resize(QSize(1000, 800).boundedTo(available * 0.8));
@@ -46,18 +65,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         setGeometry(QStyle::alignedRect(Qt::LeftToRight, Qt::AlignCenter, size(),
                                         screen()->availableGeometry()));
     }
+    if (m_settings != nullptr && !m_settings->windowGeometry().isEmpty()) {
+        // Falls back to the size above if the saved geometry is not usable (a screen is gone).
+        restoreGeometry(m_settings->windowGeometry());
+    }
 
-    // The repair bar sits above the canvas and takes its height from it; it is hidden unless the
-    // engine repaired the file.
-    auto* central = new QWidget(this);
-    auto* centralLayout = new QVBoxLayout(central);
-    centralLayout->setContentsMargins(0, 0, 0, 0);
-    centralLayout->setSpacing(0);
-    m_repairBar = new RepairBar(central);
-    m_canvas = new CanvasView(&m_session, central);
-    centralLayout->addWidget(m_repairBar);
-    centralLayout->addWidget(m_canvas, 1);
-    setCentralWidget(central);
+    m_tabs = new QTabWidget(this);
+    m_tabs->setDocumentMode(true);
+    m_tabs->setTabsClosable(true);
+    m_tabs->setMovable(true);
+    m_tabs->setElideMode(Qt::ElideMiddle);
+    m_tabs->tabBar()->setChangeCurrentOnDrag(false);
+    setCentralWidget(m_tabs);
 
     m_documentStatus = plainLabel(this);
     m_pageStatus = plainLabel(this);
@@ -65,36 +84,39 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->addPermanentWidget(m_documentStatus);
     statusBar()->addPermanentWidget(m_pageStatus);
     statusBar()->addPermanentWidget(m_zoomStatus);
-    onZoomChanged(m_canvas->controller()->zoom());
 
     registerCommands();
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(m_commands.createAction(QStringLiteral("file.open"), this));
+    QAction* recent = m_commands.createAction(QStringLiteral("file.openRecent"), this);
+    m_recentMenu = new QMenu(this);
+    recent->setMenu(m_recentMenu);
+    fileMenu->addAction(recent);
+    connect(m_recentMenu, &QMenu::aboutToShow, this, &MainWindow::refreshRecentMenu);
+    fileMenu->addSeparator();
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.close"), this));
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.reopenClosed"), this));
     fileMenu->addSeparator();
     fileMenu->addAction(m_commands.createAction(QStringLiteral("file.quit"), this));
+    // Shown inside the Open Recent menu.
+    for (const char* id : {"file.clearRecent", "file.removeUnavailableRecent"}) {
+        m_recentFixedActions.append(m_commands.createAction(QString::fromLatin1(id), this));
+    }
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     for (const char* id : {"view.zoomIn", "view.zoomOut", "view.actualSize", "view.fitWidth"}) {
         viewMenu->addAction(m_commands.createAction(QString::fromLatin1(id), this));
     }
     viewMenu->addSeparator();
     viewMenu->addAction(m_commands.createAction(QStringLiteral("palette.show"), this));
+    auto* windowMenu = menuBar()->addMenu(tr("&Window"));
+    windowMenu->addAction(m_commands.createAction(QStringLiteral("tabs.next"), this));
+    windowMenu->addAction(m_commands.createAction(QStringLiteral("tabs.previous"), this));
 
     m_palette = new CommandPalette(&m_commands, this);
 
-    connect(&m_session, &EngineSession::opened, this, &MainWindow::onOpened);
-    connect(&m_session, &EngineSession::requestFailed, this, &MainWindow::onRequestFailed);
-    connect(&m_session, &EngineSession::passwordRequested, this, &MainWindow::onPasswordRequested);
-    connect(&m_session, &EngineSession::engineCrashed, this,
-            [this](const QString& how, bool willRestart, const QList<quint64>&) {
-                onEngineCrashed(how, willRestart);
-            });
-    connect(&m_session, &EngineSession::failed, this, &MainWindow::onFailed);
-    connect(&m_session, &EngineSession::engineTimedOut, this, &MainWindow::onEngineTimedOut);
-    connect(&m_session, &EngineSession::documentChanged, this, &MainWindow::onDocumentChanged);
-    connect(m_canvas->controller(), &CanvasController::currentPageChanged, this,
-            &MainWindow::onPageChanged);
-    connect(m_canvas->controller(), &CanvasController::zoomChanged, this,
-            &MainWindow::onZoomChanged);
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateChrome(); });
+    connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
+    addTab();
 }
 
 void MainWindow::registerCommands() {
@@ -108,23 +130,130 @@ void MainWindow::registerCommands() {
         Q_UNUSED(added);
     };
     add("file.open", tr("Open…"), {QKeySequence::Open}, [this] { chooseDocument(); });
+    add("file.openRecent", tr("Open Recent"), {}, [this] {
+        refreshRecentMenu();
+        m_recentMenu->popup(mapToGlobal(rect().center()));
+    });
+    add("file.clearRecent", tr("Clear Recent Files"), {}, [this] {
+        if (m_settings != nullptr) {
+            m_settings->clearRecentFiles();
+        }
+    });
+    add("file.removeUnavailableRecent", tr("Remove Unavailable Files"), {},
+        [this] { removeUnavailableRecent(); });
+    add("file.close", tr("Close Tab"), {QKeySequence::Close}, [this] { closeCurrentTab(); });
+    add("file.reopenClosed", tr("Reopen Closed Tab"),
+        {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T)}, [this] { reopenClosedTab(); });
     add("file.quit", tr("Quit"), QKeySequence::keyBindings(QKeySequence::Quit),
         [this] { close(); });
+    add("tabs.next", tr("Next Tab"), {QKeySequence(Qt::CTRL | Qt::Key_Tab)}, [this] {
+        if (tabCount() > 1) {
+            setCurrentTabIndex((currentTabIndex() + 1) % tabCount());
+        }
+    });
+    add("tabs.previous", tr("Previous Tab"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Tab)},
+        [this] {
+            if (tabCount() > 1) {
+                setCurrentTabIndex((currentTabIndex() + tabCount() - 1) % tabCount());
+            }
+        });
     add("view.zoomIn", tr("Zoom In"),
         {QKeySequence(QKeySequence::ZoomIn), QKeySequence(Qt::CTRL | Qt::Key_Equal)},
-        [this] { m_canvas->zoomIn(); });
-    add("view.zoomOut", tr("Zoom Out"), {QKeySequence::ZoomOut}, [this] { m_canvas->zoomOut(); });
+        [this] { canvas().zoomIn(); });
+    add("view.zoomOut", tr("Zoom Out"), {QKeySequence::ZoomOut}, [this] { canvas().zoomOut(); });
     add("view.actualSize", tr("Actual Size"), {QKeySequence(Qt::CTRL | Qt::Key_1)},
-        [this] { m_canvas->actualSize(); });
+        [this] { canvas().actualSize(); });
     add("view.fitWidth", tr("Fit Width"), {QKeySequence(Qt::CTRL | Qt::Key_2)},
-        [this] { m_canvas->fitWidth(); });
+        [this] { canvas().fitWidth(); });
     add("palette.show", tr("Command Palette…"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)},
         [this] { m_palette->open(); });
 }
 
 MainWindow::~MainWindow() {
-    // Qt would delete the canvas after the members, i.e. after the session it draws from.
-    delete m_canvas;
+    // Each tab ends its engine; do it before the members they report to go away.
+    while (m_tabs->count() > 0) {
+        delete m_tabs->widget(0);
+    }
+}
+
+DocumentTab* MainWindow::addTab() {
+    auto* tab = new DocumentTab(m_settings, m_tabs);
+    if (m_passwordProvider) {
+        tab->setPasswordProvider(m_passwordProvider);
+    }
+    const int index = m_tabs->addTab(tab, tabTitle(QString()));
+    connect(tab, &DocumentTab::statusChanged, this, [this, tab] {
+        if (m_tabs->currentWidget() == tab) {
+            updateChrome();
+        }
+    });
+    connect(tab, &DocumentTab::titleChanged, this, [this, tab] { updateTabTitle(tab); });
+    connect(tab, &DocumentTab::message, this, [this, tab](const QString& text) {
+        if (m_tabs->currentWidget() == tab) {
+            if (text.isEmpty()) {
+                statusBar()->clearMessage();
+            } else {
+                statusBar()->showMessage(text);
+            }
+        }
+    });
+    connect(tab, &DocumentTab::needsAttention, this,
+            [this, tab] { m_tabs->setCurrentWidget(tab); });
+    m_tabs->setCurrentIndex(index);
+    emit tabAdded(tab);
+    updateChrome();
+    return tab;
+}
+
+void MainWindow::updateTabTitle(DocumentTab* tab) {
+    const int index = m_tabs->indexOf(tab);
+    if (index >= 0) {
+        m_tabs->setTabText(index, tabTitle(tab->fileName()));
+        m_tabs->setTabToolTip(index, tab->path());
+    }
+    updateChrome();
+}
+
+void MainWindow::updateChrome() {
+    // No current tab while the last one is being removed (or the window is being destroyed).
+    if (m_tabs->currentWidget() == nullptr) {
+        return;
+    }
+    DocumentTab& tab = currentTab();
+    m_documentStatus->setText(tab.documentStatus());
+    m_documentStatus->setToolTip(tab.documentStatusTip());
+    m_pageStatus->setText(tab.pageStatus());
+    m_zoomStatus->setText(tab.zoomStatus());
+    statusBar()->clearMessage();
+    setWindowTitle(!tab.isEmpty() && tab.session().isOpen() ? tr("%1 — Vellora").arg(tab.fileName())
+                                                            : tr("Vellora"));
+}
+
+int MainWindow::tabCount() const {
+    return m_tabs->count();
+}
+
+DocumentTab& MainWindow::tab(int index) {
+    return *qobject_cast<DocumentTab*>(m_tabs->widget(index));
+}
+
+DocumentTab& MainWindow::currentTab() {
+    return *qobject_cast<DocumentTab*>(m_tabs->currentWidget());
+}
+
+int MainWindow::currentTabIndex() const {
+    return m_tabs->currentIndex();
+}
+
+void MainWindow::setCurrentTabIndex(int index) {
+    m_tabs->setCurrentIndex(index);
+}
+
+void MainWindow::setPasswordProvider(PasswordProvider provider) {
+    m_passwordProvider = std::move(provider);
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        tab(i).setPasswordProvider(m_passwordProvider);
+    }
 }
 
 QString MainWindow::documentStatus() const {
@@ -139,151 +268,135 @@ QString MainWindow::zoomStatus() const {
     return m_zoomStatus->text();
 }
 
-void MainWindow::setDocumentStatus(const QString& text) {
-    m_documentStatus->setText(text);
-}
-
 void MainWindow::chooseDocument() {
-    const QString path =
-        QFileDialog::getOpenFileName(this, tr("Open PDF"), QString(), tr("PDF documents (*.pdf)"));
-    if (!path.isEmpty()) {
-        openDocument(path);
-    }
+    const QString start = m_settings != nullptr ? m_settings->lastDirectory() : QString();
+    const QStringList paths =
+        QFileDialog::getOpenFileNames(this, tr("Open PDF"), start, tr("PDF documents (*.pdf)"));
+    openDocuments(paths);
 }
 
 bool MainWindow::openDocument(const QString& path) {
-    m_canvas->reset();
-    m_pageStatus->clear();
-    m_fileChanged = false;
-    m_wrongPasswords = 0;
-    ++m_openGeneration;
-    m_repairBar->setReasons({});
-    m_documentStatus->setToolTip(QString());
-    const QString error = m_session.open(path);
-    if (!error.isEmpty()) {
-        setDocumentStatus(tr("Cannot open: %1").arg(error));
-        return false;
+    const QString normal = normalizedPath(path);
+    for (int i = 0; i < tabCount(); ++i) {
+        if (!tab(i).isEmpty() && samePath(tab(i).path(), normal)) {
+            setCurrentTabIndex(i);
+            return true;
+        }
     }
-    m_fileName = QFileInfo(path).fileName();
-    setWindowTitle(tr("%1 — Vellora").arg(m_fileName));
-    setDocumentStatus(tr("Opening…"));
-    return true;
+    DocumentTab* target = currentTab().isEmpty() ? &currentTab() : addTab();
+    const bool ok = target->open(normal);
+    if (ok && m_settings != nullptr) {
+        m_settings->addRecentFile(normal);
+        m_settings->setLastDirectory(QFileInfo(normal).absolutePath());
+    }
+    return ok;
 }
 
-void MainWindow::onOpened(quint32 pageCount, const QStringList& repairs) {
-    // Also the answer of a restarted engine: it has the document again, so tiles are on their way.
-    m_wrongPasswords = 0;
-    m_canvas->hideBanner();
-    statusBar()->clearMessage();
-    QString text = tr("%n page(s)", nullptr, static_cast<int>(pageCount));
-    if (!repairs.isEmpty()) {
-        text += tr(" — repaired");
+QStringList MainWindow::openDocuments(const QStringList& paths) {
+    QStringList failed;
+    for (const QString& path : paths) {
+        if (!openDocument(path)) {
+            failed.append(path);
+        }
     }
-    // A restarted engine answers again with the same reasons; a bar the user dismissed stays gone.
-    if (repairs != m_repairBar->reasons()) {
-        m_repairBar->setReasons(repairs);
-    }
-    if (m_fileChanged) {
-        text += tr(" — file changed on disk");
-    }
-    setDocumentStatus(text);
+    return failed;
 }
 
-void MainWindow::onRequestFailed(quint64 request, const QString& message) {
-    // A failure that belongs to a request is the canvas's business; one that belongs to no
-    // request is the document (for example, the engine could not read the file).
-    if (request == 0) {
-        setDocumentStatus(tr("Cannot open: %1").arg(message));
-    }
-}
-
-void MainWindow::onPasswordRequested(bool wrong) {
-    setDocumentStatus(tr("Password required"));
-    // The prompt is modal and runs its own event loop, which must not happen inside the session's
-    // event dispatch: it is shown from the event loop instead, for the document that asked.
-    const quint64 generation = m_openGeneration;
-    QMetaObject::invokeMethod(
-        this, [this, wrong, generation] { askForPassword(wrong, generation); },
-        Qt::QueuedConnection);
-}
-
-void MainWindow::askForPassword(bool wrong, quint64 generation) {
-    if (generation != m_openGeneration || !m_session.isOpen()) {
+void MainWindow::closeTab(int index) {
+    if (index < 0 || index >= tabCount()) {
         return;
     }
-    if (wrong) {
-        ++m_wrongPasswords;
+    DocumentTab* closing = &tab(index);
+    closing->saveViewState();
+    if (!closing->isEmpty()) {
+        m_closedTabs.append(closing->path());
+        while (m_closedTabs.size() > kMaxClosedTabs) {
+            m_closedTabs.removeFirst();
+        }
     }
-    if (m_wrongPasswords >= kMaxPasswordAttempts) {
-        giveUpOnDocument(
-            tr("Cannot open: the password was wrong %n time(s)", nullptr, m_wrongPasswords));
+    m_tabs->removeTab(index);
+    // Ends the tab's engine process.
+    delete closing;
+    if (m_tabs->count() == 0) {
+        addTab();
+    }
+    if (m_settings != nullptr) {
+        m_settings->sync();
+    }
+    updateChrome();
+}
+
+bool MainWindow::reopenClosedTab() {
+    while (!m_closedTabs.isEmpty()) {
+        const QString path = m_closedTabs.takeLast();
+        // A file that is gone is skipped: the next one in the list is the closest to what was
+        // meant.
+        if (QFileInfo(path).isReadable()) {
+            return openDocument(path);
+        }
+    }
+    return false;
+}
+
+void MainWindow::refreshRecentMenu() {
+    m_recentMenu->clear();
+    const QStringList files = m_settings != nullptr ? m_settings->recentFiles() : QStringList();
+    for (const QString& path : files) {
+        const QFileInfo info(path);
+        QAction* entry = m_recentMenu->addAction(tabTitle(info.fileName()));
+        entry->setToolTip(path);
+        entry->setStatusTip(path);
+        if (info.isReadable()) {
+            connect(entry, &QAction::triggered, this, [this, path] { openDocument(path); });
+        } else {
+            // Greyed out: the file is gone, moved or not readable. "Remove Unavailable Files"
+            // drops them from the list.
+            entry->setEnabled(false);
+        }
+    }
+    if (!files.isEmpty()) {
+        m_recentMenu->addSeparator();
+    }
+    for (QAction* action : std::as_const(m_recentFixedActions)) {
+        m_recentMenu->addAction(action);
+    }
+}
+
+void MainWindow::removeUnavailableRecent() {
+    if (m_settings == nullptr) {
         return;
     }
-    const std::optional<QString> password = m_passwordProvider(
-        m_fileName, m_wrongPasswords + 1, kMaxPasswordAttempts, m_wrongPasswords > 0);
-    // The prompt ran its own event loop: the document may have been replaced meanwhile.
-    if (generation != m_openGeneration || !m_session.isOpen()) {
+    for (const QString& path : m_settings->recentFiles()) {
+        if (!QFileInfo(path).isReadable()) {
+            m_settings->removeRecentFile(path);
+        }
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    for (int i = 0; i < tabCount(); ++i) {
+        tab(i).saveViewState();
+    }
+    if (m_settings != nullptr) {
+        m_settings->setWindowGeometry(saveGeometry());
+        m_settings->sync();
+    }
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (!localFiles(event->mimeData()).isEmpty()) {
+        event->acceptProposedAction();
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    const QStringList files = localFiles(event->mimeData());
+    if (files.isEmpty()) {
         return;
     }
-    if (!password) {
-        giveUpOnDocument(tr("Cannot open: a password is required"));
-        return;
-    }
-    const QString error = m_session.submitPassword(*password);
-    if (!error.isEmpty()) {
-        giveUpOnDocument(tr("Cannot open: %1").arg(error));
-        return;
-    }
-    setDocumentStatus(tr("Opening…"));
-}
-
-void MainWindow::giveUpOnDocument(const QString& status) {
-    m_session.close();
-    m_fileName.clear();
-    setWindowTitle(tr("Vellora"));
-    setDocumentStatus(status);
-}
-
-void MainWindow::onEngineCrashed(const QString& how, bool willRestart) {
-    // Non-modal: the window stays usable, and the banner goes away when the engine is back.
-    m_canvas->showBanner(willRestart ? tr("Page failed to render — retrying…")
-                                     : tr("The page renderer stopped and could not be restarted."));
-    statusBar()->showMessage(willRestart ? tr("The engine stopped (%1) — restarting").arg(how)
-                                         : tr("The engine stopped (%1)").arg(how));
-}
-
-void MainWindow::onFailed(const QString& reason) {
-    m_canvas->showBanner(tr("The page renderer failed. Reopen the document."));
-    setDocumentStatus(tr("Engine failed: %1").arg(reason));
-}
-
-void MainWindow::onEngineTimedOut(TimeoutStage stage, const QString& message) {
-    if (stage == TimeoutStage::Tile) {
-        // The engine was killed; `engineCrashed` follows and shows the restart.
-        statusBar()->showMessage(tr("The page renderer stopped answering (%1)").arg(message));
-        return;
-    }
-    m_canvas->showBanner(tr("The page renderer did not start in time. Reopen the document."));
-    setDocumentStatus(tr("Engine timed out: %1").arg(message));
-}
-
-void MainWindow::onDocumentChanged(bool replaced) {
-    // Reported just before the engine restarts over the file, which then shows what is there now.
-    m_fileChanged = true;
-    m_documentStatus->setToolTip(
-        replaced ? tr("Another program replaced this file after it was opened. The pages shown "
-                      "come from the file as it is now.")
-                 : tr("Another program modified this file after it was opened. The pages shown "
-                      "come from the file as it is now."));
-}
-
-void MainWindow::onPageChanged(quint32 page, quint32 pageCount) {
-    m_pageStatus->setText(pageCount == 0 ? QString()
-                                         : tr("Page %1 / %2").arg(page + 1).arg(pageCount));
-}
-
-void MainWindow::onZoomChanged(double zoom) {
-    m_zoomStatus->setText(tr("%1%").arg(qRound(zoom * 100.0)));
+    event->acceptProposedAction();
+    openDocuments(files);
 }
 
 } // namespace vellora

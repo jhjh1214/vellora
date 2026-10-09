@@ -24,6 +24,10 @@ public:
     explicit EngineSession(QObject* parent = nullptr);
     ~EngineSession() override;
 
+    // Sessions that exist now, open or not (tests use it to prove that closing a tab ends its
+    // session).
+    static int liveCount();
+
     // Starts an engine over `path`. Returns an empty string on success (`opened` follows), else
     // the error text; a session that failed to open stays closed.
     QString open(const QString& path);

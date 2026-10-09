@@ -1,9 +1,13 @@
 #include "MainWindow.h"
+#include "SingleInstance.h"
 #include "diagnostics/Application.h"
 #include "diagnostics/DiagnosticsScript.h"
 #include "diagnostics/UiWatchdog.h"
+#include "settings/AppSettings.h"
 
 #include <QCommandLineParser>
+#include <QDir>
+#include <QSettings>
 #include <QTextStream>
 
 int main(int argc, char** argv) {
@@ -43,16 +47,44 @@ int main(int argc, char** argv) {
     vellora::UiWatchdog watchdog;
     app.setWatchdog(&watchdog);
 
-    vellora::MainWindow window;
+    // Files are given relative to where the command was run; a running instance has another
+    // working directory.
+    const QStringList paths = vellora::resolvePaths(files, QDir::currentPath());
+
+    // One instance per user: a second launch hands its files to the first and leaves. A scripted
+    // session is a measurement and always runs on its own.
+    vellora::SingleInstance instance;
+    if (!scripted) {
+        if (instance.forward(paths)) {
+            return 0;
+        }
+        instance.listen();
+    }
+
+    // The settings of this user: native format (registry, plist, ini file). Nothing else in the
+    // application touches them, and a scripted session does not either.
+    QSettings nativeSettings;
+    vellora::AppSettings settings(&nativeSettings);
+    vellora::MainWindow window(scripted ? nullptr : &settings);
+    QObject::connect(
+        &window, &vellora::MainWindow::tabAdded, &window,
+        [&watchdog](vellora::DocumentTab* tab) { watchdog.watch(tab->canvas().canvas()); });
     watchdog.watch(window.canvas().canvas());
     if (scripted || vellora::UiWatchdog::enabledByDefault()) {
         watchdog.start();
     }
     window.show();
+    QObject::connect(&instance, &vellora::SingleInstance::filesReceived, &window,
+                     [&window](const QStringList& received) {
+                         window.openDocuments(received);
+                         window.setWindowState(window.windowState() & ~Qt::WindowMinimized);
+                         window.raise();
+                         window.activateWindow();
+                     });
 
-    // `vellora <file.pdf>` opens the file at start-up.
-    if (!files.isEmpty()) {
-        window.openDocument(files.first());
+    // `vellora a.pdf b.pdf` opens each file in a tab.
+    for (const QString& failed : window.openDocuments(paths)) {
+        err << "vellora: cannot open " << failed << '\n';
     }
 
     vellora::DiagnosticsScript script(window.canvas().controller());
