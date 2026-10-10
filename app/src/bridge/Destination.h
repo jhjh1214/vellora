@@ -5,6 +5,7 @@
 #include "rust/cxx.h"
 #include "vellora-engine-client/src/bridge.rs.h"
 
+#include <QList>
 #include <QMetaType>
 #include <QRectF>
 #include <QString>
@@ -68,8 +69,24 @@ struct TextChar {
     bool hasBox() const { return !generated() && !rect.isEmpty(); }
 };
 
+// One place the search text was found.
+struct SearchHit {
+    quint32 page = 0;
+    quint32 first = 0; // index of the first matched character, as the page's text counts them
+    quint32 count = 0; // how many characters
+    // One rectangle per line the match spans, in points of the page as shown, origin at the top
+    // left.
+    QList<QRectF> boxes;
+    // The match with some text around it on one line, and where the match is in it (UTF-16 units).
+    QString snippet;
+    qsizetype matchStart = 0;
+    qsizetype matchLength = 0;
+};
+
 } // namespace vellora
 
+Q_DECLARE_METATYPE(vellora::SearchHit)
+Q_DECLARE_METATYPE(vellora::SearchEnd)
 Q_DECLARE_METATYPE(vellora::TextChar)
 Q_DECLARE_METATYPE(vellora::Link)
 Q_DECLARE_METATYPE(vellora::Destination)

@@ -62,7 +62,18 @@ ThumbnailSidebar::Tab ThumbnailSidebar::currentTab() const {
 }
 
 void ThumbnailSidebar::setCurrentTab(Tab tab) {
-    m_tabs->setCurrentIndex(static_cast<int>(tab));
+    if (static_cast<int>(tab) < m_tabs->count()) {
+        m_tabs->setCurrentIndex(static_cast<int>(tab));
+    }
+}
+
+void ThumbnailSidebar::setSearch(SearchController* search) {
+    if (m_results != nullptr) {
+        return;
+    }
+    m_results = new SearchResultsView(search, this);
+    m_pages->addWidget(m_results);
+    m_tabs->addTab(tr("Search"));
 }
 
 } // namespace vellora

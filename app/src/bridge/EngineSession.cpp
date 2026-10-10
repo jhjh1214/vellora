@@ -1,6 +1,7 @@
 #include "bridge/EngineSession.h"
 
 #include <QDir>
+#include <algorithm>
 #include <atomic>
 #include <exception>
 
@@ -51,6 +52,28 @@ Link toLink(const LinkNode& node) {
     link.text = toQString(node.text);
     link.destination = toDestination(node.destination);
     return link;
+}
+
+SearchHit toHit(const SearchMatch& match) {
+    SearchHit hit;
+    hit.page = match.page;
+    hit.first = match.first;
+    hit.count = match.count;
+    for (size_t i = 0; i + 3 < match.boxes.size(); i += 4) {
+        hit.boxes.append(QRectF(QPointF(static_cast<double>(match.boxes[i]),
+                                        static_cast<double>(match.boxes[i + 1])),
+                                QPointF(static_cast<double>(match.boxes[i + 2]),
+                                        static_cast<double>(match.boxes[i + 3])))
+                             .normalized());
+    }
+    // The engine counts the match in UTF-8 bytes; the snippet is shown as a QString.
+    const QByteArray snippet(match.snippet.data(), static_cast<qsizetype>(match.snippet.size()));
+    hit.snippet = QString::fromUtf8(snippet);
+    const qsizetype start = std::min<qsizetype>(match.match_start, snippet.size());
+    const qsizetype end = std::min<qsizetype>(start + match.match_len, snippet.size());
+    hit.matchStart = QString::fromUtf8(snippet.left(start)).size();
+    hit.matchLength = QString::fromUtf8(snippet.mid(start, end - start)).size();
+    return hit;
 }
 
 OutlineItem toItem(const OutlineNode& node) {
@@ -241,6 +264,21 @@ quint64 EngineSession::requestTextPage(quint32 page, quint32 skip, quint32 limit
     }
 }
 
+quint64 EngineSession::requestSearch(const QString& text, bool caseSensitive, bool wholeWord,
+                                     bool regex) {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        const QByteArray utf8 = text.toUtf8();
+        return (*m_client)->request_search(
+            rust::Str(utf8.constData(), static_cast<size_t>(utf8.size())), caseSensitive, wholeWord,
+            regex);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 quint64 EngineSession::requestOutlinePath(quint32 page) {
     if (!m_client) {
         return 0;
@@ -391,6 +429,18 @@ void EngineSession::dispatch(const EngineEvent& event) {
         emit textReady(event.request, event.text_page, event.text_skip, event.text_total, chars);
         break;
     }
+    case EventKind::SearchHits: {
+        QList<SearchHit> hits;
+        hits.reserve(static_cast<qsizetype>(event.matches.size()));
+        for (const SearchMatch& match : event.matches) {
+            hits.append(toHit(match));
+        }
+        emit searchHits(event.request, hits, event.pages_done);
+        break;
+    }
+    case EventKind::SearchDone:
+        emit searchDone(event.request, event.search_end, event.search_hits, event.pages_done);
+        break;
     }
 }
 

@@ -8,6 +8,7 @@
 #include "bridge/EngineSession.h"
 #include "canvas/CanvasView.h"
 #include "navigation/NavigationHistory.h"
+#include "search/SearchController.h"
 #include "settings/AppSettings.h"
 
 #include <QSet>
@@ -21,6 +22,7 @@ class QSplitter;
 
 namespace vellora {
 
+class FindBar;
 class RepairBar;
 class ThumbnailSidebar;
 
@@ -58,6 +60,8 @@ public:
     RepairBar& repairBar() { return *m_repairBar; }
     ThumbnailSidebar& sidebar() { return *m_sidebar; }
     NavigationHistory& history() { return m_history; }
+    SearchController& search() { return *m_search; }
+    FindBar& findBar() { return *m_findBar; }
 
     // ---- navigation ----
     // Jumps are recorded in the history (Back and Forward return to where the reader was);
@@ -115,6 +119,16 @@ public:
     // Copies the selected text to the clipboard.
     void copy();
 
+    // ---- search ----
+    // Shows the find bar with the focus in it. Typing there searches the whole document; the hits
+    // are painted on the pages and listed in the sidebar (`showSearchResults`).
+    void showFind();
+    // F3 and Shift+F3: the next or previous hit (wrapping). With the find bar closed they open it.
+    void findNext();
+    void findPrevious();
+    // Shows the sidebar on its Search tab.
+    void showSearchResults();
+
     // Shows the sidebar on its outline tab.
     void showOutline();
     // The label of a page: the document's own if it has page labels, else its number.
@@ -168,6 +182,7 @@ private slots:
     void onPageLabels(quint64 request, quint32 first, bool defined, const QStringList& labels);
     void onPageFound(quint64 request, bool found, quint32 page);
     void onZoomChanged(double zoom);
+    void onSearchCurrent(int index);
 
 private:
     AppSettings::Layout currentLayout() const;
@@ -192,6 +207,8 @@ private:
     ThumbnailSidebar* m_sidebar = nullptr;
     CanvasView* m_canvas = nullptr;
     RepairBar* m_repairBar = nullptr;
+    SearchController* m_search = nullptr;
+    FindBar* m_findBar = nullptr;
     QString m_path;
     QString m_fileName;
     QString m_documentStatus;

@@ -85,6 +85,11 @@ public:
     quint64 requestLinks(quint32 page, quint32 skip, quint32 limit);
     // Up to `limit` (1 to 8,192) characters of `page` after the first `skip`.
     quint64 requestTextPage(quint32 page, quint32 skip, quint32 limit);
+    // Searches the whole text of the document, from the first page: `searchHits` (many, in page
+    // order) and then `searchDone`. `text` is 1 to 1,024 bytes of UTF-8; with `regex` it is a
+    // regular expression (one that does not parse is a `requestFailed` with the reason). A new
+    // search ends the one before it; `cancel` stops one and silences it.
+    quint64 requestSearch(const QString& text, bool caseSensitive, bool wholeWord, bool regex);
 
     // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
     quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }
@@ -112,6 +117,11 @@ signals:
     // The characters of `page` from `skip`; `total` is how many the page has in all.
     void textReady(quint64 request, quint32 page, quint32 skip, quint32 total,
                    const QList<vellora::TextChar>& chars);
+    // New hits of a search and how many pages it has searched (a message without hits shows
+    // progress), then the end: how it ended, how many hits it reported in all, how many pages it
+    // searched.
+    void searchHits(quint64 request, const QList<vellora::SearchHit>& hits, quint32 pagesDone);
+    void searchDone(quint64 request, vellora::SearchEnd end, quint32 hits, quint32 pagesDone);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);
     // Requests in `lost` will never be answered; ask again after `engineRestarted`.

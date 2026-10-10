@@ -4,6 +4,7 @@
 // VELLORA_UPDATE_GOLDEN=1 and the change must be read before it is committed.
 #include "MainWindow.h"
 #include "SyntheticPdf.h"
+#include "TextPdf.h"
 #include "VelloraTestMain.h"
 #include "canvas/CanvasController.h"
 #include "text/SelectionOverlay.h"
@@ -29,50 +30,6 @@ constexpr int kWaitMs = 60'000;
 // boxes differ by a fraction of a point from one machine to the next (0.3 pt between Windows and
 // Linux). A selection that is wrong moves a rectangle by a whole character, at least 4 points.
 constexpr double kGoldenTolerance = 1.0;
-
-// Pages of 612 x 792 points with the given text streams, in Helvetica 20, turned `rotate` degrees.
-QByteArray textPdf(const QStringList& contents, int rotate = 0) {
-    QStringList objects;
-    objects << QStringLiteral("<< /Type /Catalog /Pages 2 0 R >>");
-    QStringList kids;
-    for (int i = 0; i < contents.size(); ++i) {
-        kids << QStringLiteral("%1 0 R").arg(3 + i);
-    }
-    objects << QStringLiteral("<< /Type /Pages /Kids [%1] /Count %2 >>")
-                   .arg(kids.join(QLatin1Char(' ')))
-                   .arg(contents.size());
-    const int fontObject = 3 + 2 * static_cast<int>(contents.size());
-    for (int i = 0; i < contents.size(); ++i) {
-        objects << QStringLiteral("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate %1 "
-                                  "/Contents %2 0 R /Resources << /Font << /F1 %3 0 R >> >> >>")
-                       .arg(rotate)
-                       .arg(3 + contents.size() + i)
-                       .arg(fontObject);
-    }
-    for (const QString& content : contents) {
-        objects << QStringLiteral("<< /Length %1 >>\nstream\n%2\nendstream")
-                       .arg(content.size())
-                       .arg(content);
-    }
-    objects << QStringLiteral(
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
-    QByteArray out = "%PDF-1.4\n";
-    QList<qsizetype> offsets;
-    for (int i = 0; i < objects.size(); ++i) {
-        offsets << out.size();
-        out += QStringLiteral("%1 0 obj\n%2\nendobj\n").arg(i + 1).arg(objects.at(i)).toUtf8();
-    }
-    const qsizetype xref = out.size();
-    out += QStringLiteral("xref\n0 %1\n0000000000 65535 f \n").arg(objects.size() + 1).toUtf8();
-    for (const qsizetype offset : offsets) {
-        out += QStringLiteral("%1 00000 n \n").arg(offset, 10, 10, QLatin1Char('0')).toUtf8();
-    }
-    out += QStringLiteral("trailer\n<< /Size %1 /Root 1 0 R >>\nstartxref\n%2\n%%EOF\n")
-               .arg(objects.size() + 1)
-               .arg(xref)
-               .toUtf8();
-    return out;
-}
 
 const QString kThreeLines = QStringLiteral(
     "BT /F1 20 Tf 72 700 Td (Hello World) Tj 0 -30 Td (Second line of text) Tj 0 -30 Td "

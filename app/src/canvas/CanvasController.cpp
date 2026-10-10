@@ -425,6 +425,37 @@ void CanvasController::goToDestination(const Destination& destination) {
     noteCurrentPage();
 }
 
+void CanvasController::revealRect(quint32 page, const QRectF& points) {
+    if (m_layout.rowCount() == 0 || m_viewport.isEmpty()) {
+        return;
+    }
+    page = std::min(page, m_layout.pageCount() - 1);
+    if (!m_mode.continuous) {
+        const quint32 row = m_layout.rowOf(page);
+        if (row != std::min(m_row, m_layout.rowCount() - 1)) {
+            showRow(row, false);
+        }
+    }
+    if (!points.isValid()) {
+        if (m_mode.continuous) {
+            goToPage(page);
+        }
+        return;
+    }
+    const PageDraw draw{page, pageScreenRect(page), m_layout.pageSize(page), m_mode.rotation,
+                        m_zoom};
+    const QRectF target = draw.map(points);
+    const QRectF view(QPointF(0.0, 0.0), QSizeF(m_viewport));
+    // Well inside: a margin of a fifth of the window on each side, so that a hit at the very edge
+    // is brought towards the middle.
+    const QRectF comfortable = view.adjusted(view.width() / 5.0, view.height() / 5.0,
+                                             -view.width() / 5.0, -view.height() / 5.0);
+    if (comfortable.contains(target)) {
+        return;
+    }
+    setScrollPosition(m_scroll + target.center() - view.center());
+}
+
 void CanvasController::nextPage() {
     if (m_layout.rowCount() == 0) {
         return;

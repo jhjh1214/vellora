@@ -120,6 +120,14 @@ add_library(vellora_shell STATIC
   src/links/UriConfirmDialog.h
   src/navigation/NavigationHistory.cpp
   src/navigation/NavigationHistory.h
+  src/search/FindBar.cpp
+  src/search/FindBar.h
+  src/search/SearchController.cpp
+  src/search/SearchController.h
+  src/search/SearchOverlay.cpp
+  src/search/SearchOverlay.h
+  src/search/SearchResultsView.cpp
+  src/search/SearchResultsView.h
   src/sidebar/OutlineView.cpp
   src/sidebar/OutlineView.h
   src/text/SelectionOverlay.cpp

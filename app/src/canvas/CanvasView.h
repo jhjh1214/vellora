@@ -22,6 +22,8 @@ class QRubberBand;
 namespace vellora {
 
 class CanvasWidget;
+class SearchController;
+class SearchOverlay;
 class SelectionOverlay;
 
 class CanvasView : public QAbstractScrollArea {
@@ -40,6 +42,9 @@ public:
     TextLayer* text() { return &m_text; }
     TextSelection* selection() { return &m_selection; }
     SelectionOverlay* selectionOverlay() { return m_overlay; }
+    SearchOverlay* searchOverlay() { return m_searchOverlay; }
+    // The search whose hits are painted over the pages (not owned); null for none.
+    void setSearch(SearchController* search);
 
     // A place on a page: the page and a point in points of the page as shown.
     struct PagePoint {
@@ -134,6 +139,7 @@ private:
     std::optional<Link> m_pressedLink;
     quint32 m_pressedPage = 0;
     QPoint m_pressPos;
+    SearchOverlay* m_searchOverlay = nullptr;
     SelectionOverlay* m_overlay = nullptr;
     // Selecting: the button is down on text. Clicks counted for word and line selection.
     bool m_selecting = false;

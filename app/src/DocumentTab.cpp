@@ -4,6 +4,7 @@
 #include "RepairBar.h"
 #include "links/LinkActions.h"
 #include "links/UriConfirmDialog.h"
+#include "search/FindBar.h"
 #include "sidebar/ThumbnailSidebar.h"
 
 #include <QDesktopServices>
@@ -40,8 +41,13 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     contentLayout->setSpacing(0);
     m_repairBar = new RepairBar(content);
     m_canvas = new CanvasView(&m_session, content);
+    m_search = new SearchController(&m_session, m_canvas->controller(), this);
+    m_findBar = new FindBar(m_search, content);
+    m_canvas->setSearch(m_search);
     m_sidebar = new ThumbnailSidebar(&m_session, m_canvas->controller(), m_splitter);
+    m_sidebar->setSearch(m_search);
     contentLayout->addWidget(m_repairBar);
+    contentLayout->addWidget(m_findBar);
     contentLayout->addWidget(m_canvas, 1);
     m_splitter->addWidget(m_sidebar);
     m_splitter->addWidget(content);
@@ -86,6 +92,19 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     m_canvas->setLinkDescriber([this](const Link& link) {
         return LinkActions::describe(link, [this](quint32 page) { return pageLabel(page); });
     });
+    m_sidebar->results()->model().setPageLabeler([this](quint32 page) { return pageLabel(page); });
+    connect(m_search, &SearchController::currentChanged, this, &DocumentTab::onSearchCurrent);
+    connect(m_findBar, &FindBar::closed, this, [this] { m_canvas->setFocus(); });
+    connect(m_findBar, &FindBar::resultsRequested, this, &DocumentTab::showSearchResults);
+    connect(m_sidebar->results(), &SearchResultsView::hitChosen, this, [this](int index) {
+        // Choosing a hit in the list is a jump; stepping with F3 is not.
+        m_history.recordJump(currentPlace());
+        if (index == m_search->current()) {
+            onSearchCurrent(index); // already current: bring the view back to it
+        } else {
+            m_search->setCurrent(index);
+        }
+    });
 
     m_zoomStatus = tr("%1%").arg(qRound(m_canvas->controller()->zoom() * 100.0));
     // A new tab arranges its pages the way the user last chose.
@@ -125,8 +144,10 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
 
 DocumentTab::~DocumentTab() {
     // Qt would delete the children after the members, i.e. after the session they draw from.
+    delete m_findBar;
     delete m_sidebar;
     delete m_canvas;
+    delete m_search;
 }
 
 bool DocumentTab::sidebarVisible() const {
@@ -169,6 +190,7 @@ bool DocumentTab::open(const QString& path) {
     m_history.clear();
     m_trustedHosts.clear();
     m_canvas->links()->reset();
+    m_findBar->reset();
     m_labels.clear();
     m_labelsDefined = false;
     m_labelRequest = 0;
@@ -400,6 +422,7 @@ void DocumentTab::onPageLabels(quint64 request, quint32 first, bool defined,
         return;
     }
     m_sidebar->thumbnails().setPageLabels(m_labels);
+    m_sidebar->results()->model().refreshLabels();
     refreshPageStatus();
 }
 
@@ -563,6 +586,43 @@ void DocumentTab::selectPage() {
 
 void DocumentTab::copy() {
     m_canvas->copySelection();
+}
+
+void DocumentTab::showFind() {
+    m_findBar->open();
+}
+
+void DocumentTab::findNext() {
+    if (m_findBar->isHidden()) {
+        showFind();
+    } else {
+        m_search->next();
+    }
+}
+
+void DocumentTab::findPrevious() {
+    if (m_findBar->isHidden()) {
+        showFind();
+    } else {
+        m_search->previous();
+    }
+}
+
+void DocumentTab::showSearchResults() {
+    setSidebarVisible(true);
+    m_sidebar->setCurrentTab(ThumbnailSidebar::Tab::Search);
+}
+
+void DocumentTab::onSearchCurrent(int index) {
+    if (index < 0 || index >= m_search->count()) {
+        return;
+    }
+    const SearchHit& hit = m_search->hits().at(index);
+    QRectF area;
+    for (const QRectF& box : hit.boxes) {
+        area = area.isNull() ? box : area.united(box);
+    }
+    m_canvas->controller()->revealRect(hit.page, area);
 }
 
 void DocumentTab::showOutline() {

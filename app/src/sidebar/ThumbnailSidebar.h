@@ -1,7 +1,8 @@
-// The left sidebar of a document tab: two tabs, the page thumbnails (with a slider for their size
-// under them) and the document outline.
+// The left sidebar of a document tab: the page thumbnails (with a slider for their size under
+// them), the document outline and, once `setSearch` gave it a search, the list of search results.
 #pragma once
 
+#include "search/SearchResultsView.h"
 #include "sidebar/OutlineView.h"
 #include "sidebar/ThumbnailView.h"
 
@@ -17,7 +18,7 @@ class ThumbnailSidebar : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Tab { Thumbnails = 0, Outline = 1 };
+    enum class Tab { Thumbnails = 0, Outline = 1, Search = 2 };
 
     ThumbnailSidebar(EngineSession* session, CanvasController* controller,
                      QWidget* parent = nullptr);
@@ -25,6 +26,11 @@ public:
     ThumbnailView& thumbnails() { return *m_view; }
     OutlineView& outline() { return *m_outline; }
     QSlider& sizeSlider() { return *m_slider; }
+    // Adds the Search tab, which lists the hits of `search` (not owned). Once; later calls do
+    // nothing.
+    void setSearch(SearchController* search);
+    // Null until `setSearch`.
+    SearchResultsView* results() { return m_results; }
 
     Tab currentTab() const;
     void setCurrentTab(Tab tab);
@@ -46,6 +52,7 @@ private:
     ThumbnailView* m_view;
     OutlineView* m_outline;
     QSlider* m_slider;
+    SearchResultsView* m_results = nullptr;
 };
 
 } // namespace vellora
