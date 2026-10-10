@@ -119,6 +119,10 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     for (const char* id : {"file.clearRecent", "file.removeUnavailableRecent"}) {
         m_recentFixedActions.append(m_commands.createAction(QString::fromLatin1(id), this));
     }
+    auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    for (const char* id : {"edit.copy", "edit.selectAll", "edit.selectPage"}) {
+        editMenu->addAction(m_commands.createAction(QString::fromLatin1(id), this));
+    }
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     const auto addView = [this](QMenu* menu, const char* id, bool checkable = false) {
         QAction* action = m_commands.createAction(QString::fromLatin1(id), this);
@@ -210,6 +214,11 @@ void MainWindow::registerCommands() {
                 setCurrentTabIndex((currentTabIndex() + tabCount() - 1) % tabCount());
             }
         });
+    add("edit.copy", tr("Copy"), {QKeySequence::Copy}, [this] { currentTab().copy(); });
+    add("edit.selectAll", tr("Select All"), {QKeySequence::SelectAll},
+        [this] { currentTab().selectAll(); });
+    add("edit.selectPage", tr("Select All on Page"),
+        {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A)}, [this] { currentTab().selectPage(); });
     add("view.thumbnails", tr("Page Thumbnails"), {QKeySequence(Qt::Key_F4)}, [this] {
         currentTab().setSidebarVisible(!currentTab().sidebarVisible());
         updateViewActions();

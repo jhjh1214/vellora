@@ -7,8 +7,12 @@
 
 #include "canvas/CanvasController.h"
 #include "canvas/LinkLayer.h"
+#include "text/TextLayer.h"
+#include "text/TextSelection.h"
 
 #include <QAbstractScrollArea>
+#include <QElapsedTimer>
+#include <QTimer>
 #include <functional>
 #include <optional>
 
@@ -18,6 +22,7 @@ class QRubberBand;
 namespace vellora {
 
 class CanvasWidget;
+class SelectionOverlay;
 
 class CanvasView : public QAbstractScrollArea {
     Q_OBJECT
@@ -32,6 +37,22 @@ public:
 
     CanvasController* controller() { return &m_controller; }
     LinkLayer* links() { return &m_links; }
+    TextLayer* text() { return &m_text; }
+    TextSelection* selection() { return &m_selection; }
+    SelectionOverlay* selectionOverlay() { return m_overlay; }
+
+    // A place on a page: the page and a point in points of the page as shown.
+    struct PagePoint {
+        quint32 page = 0;
+        QPointF point;
+    };
+    // The page under `viewportPos`; with `nearest`, the nearest page when none is under it.
+    std::optional<PagePoint> pagePointAt(QPointF viewportPos, bool nearest = false) const;
+    // Whether the pointer at `viewportPos` is over a character.
+    bool isOverText(QPointF viewportPos) const;
+    // Copies the selected text to the clipboard (read from the engine, so it may take a moment;
+    // `copied` follows with the number of characters). Nothing if nothing is selected.
+    void copySelection();
     CanvasWidget* canvas() { return m_canvas; }
 
     // Forgets the old document's view; call before the session opens another file.
@@ -71,6 +92,8 @@ public:
 signals:
     // The reader clicked (pressed and released on) a link. What it does is the owner's to decide.
     void linkActivated(const vellora::Link& link);
+    // The selected text is on the clipboard.
+    void copied(int characters);
 
 protected:
     bool viewportEvent(QEvent* event) override;
@@ -80,6 +103,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
 
 private:
@@ -87,10 +111,14 @@ private:
     void placeBanner();
     void updateCursor();
     void refreshHover();
+    void startSelection(QMouseEvent* event);
+    void dragSelection();
     void endDrag(bool zoom);
 
     CanvasController m_controller;
     LinkLayer m_links;
+    TextLayer m_text;
+    TextSelection m_selection;
     CanvasWidget* m_canvas;
     QLabel* m_banner = nullptr;
     bool m_syncing = false;
@@ -106,6 +134,15 @@ private:
     std::optional<Link> m_pressedLink;
     quint32 m_pressedPage = 0;
     QPoint m_pressPos;
+    SelectionOverlay* m_overlay = nullptr;
+    // Selecting: the button is down on text. Clicks counted for word and line selection.
+    bool m_selecting = false;
+    QElapsedTimer m_clickClock;
+    QPoint m_clickPos;
+    int m_clicks = 0;
+    int m_minimumClicks = 1;
+    // While the pointer is dragged outside the viewport the view scrolls and the selection grows.
+    QTimer m_autoScroll;
 };
 
 } // namespace vellora

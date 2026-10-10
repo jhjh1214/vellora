@@ -174,6 +174,8 @@ public:
 
     // What to draw now. Cheap: geometry only.
     Frame frame() const;
+    // Just the pages on screen, without the tiles: where each is and how it is turned and scaled.
+    QVector<PageDraw> visiblePages() const;
 
     // Tiles with an outstanding request (for tests and diagnostics).
     int tilesInFlight() const { return static_cast<int>(m_inFlight.size()); }

@@ -72,7 +72,17 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
         box.setTextFormat(Qt::PlainText); // the text includes the document's own words
         box.exec();
     };
+    m_selectAllConfirmer = [this](quint32 pageCount) {
+        return QMessageBox::question(this, tr("Select All"),
+                                     tr("This document has %n page(s). Selecting all of its text "
+                                        "means reading all of "
+                                        "it when you copy.\n\nSelect it anyway?",
+                                        nullptr, static_cast<int>(pageCount))) == QMessageBox::Yes;
+    };
     connect(m_canvas, &CanvasView::linkActivated, this, &DocumentTab::activateLink);
+    connect(m_canvas, &CanvasView::copied, this, [this](int characters) {
+        emit message(tr("Copied %n character(s)", nullptr, characters));
+    });
     m_canvas->setLinkDescriber([this](const Link& link) {
         return LinkActions::describe(link, [this](quint32 page) { return pageLabel(page); });
     });
@@ -532,6 +542,27 @@ void DocumentTab::openUri(const QString& uri) {
 void DocumentTab::notify(const QString& text) {
     emit message(text.section(QLatin1Char('\n'), 0, 0));
     m_notifier(text);
+}
+
+void DocumentTab::selectAll() {
+    const quint32 count = m_canvas->controller()->pageCount();
+    if (count == 0) {
+        return;
+    }
+    if (count > kSelectAllConfirmPages && !m_selectAllConfirmer(count)) {
+        return;
+    }
+    m_canvas->selection()->selectAll(count);
+}
+
+void DocumentTab::selectPage() {
+    if (m_canvas->controller()->pageCount() != 0) {
+        m_canvas->selection()->selectPage(m_canvas->controller()->currentPage());
+    }
+}
+
+void DocumentTab::copy() {
+    m_canvas->copySelection();
 }
 
 void DocumentTab::showOutline() {

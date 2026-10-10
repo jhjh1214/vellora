@@ -129,9 +129,9 @@ struct Fixture {
             return true;
         });
         tab->setNotifier([this](const QString& text) { notices.append(text); });
-        QSignalSpy opened(&window.session(), &vellora::EngineSession::opened);
+        QSignalSpy openedSpy(&window.session(), &vellora::EngineSession::opened);
         if (!window.openDocument(dir.filePath(QStringLiteral("links.pdf"))) ||
-            !opened.wait(kWaitMs)) {
+            !openedSpy.wait(kWaitMs)) {
             qFatal("could not open the test document");
         }
         // The whole page fits, so that every link is on screen.
