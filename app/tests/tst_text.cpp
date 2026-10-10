@@ -25,6 +25,10 @@ using vellora::TextSelection;
 namespace {
 
 constexpr int kWaitMs = 60'000;
+// The fixtures use the base-14 Helvetica, which each platform replaces with its own font, so the
+// boxes differ by a fraction of a point from one machine to the next (0.3 pt between Windows and
+// Linux). A selection that is wrong moves a rectangle by a whole character, at least 4 points.
+constexpr double kGoldenTolerance = 1.0;
 
 // Pages of 612 x 792 points with the given text streams, in Helvetica 20, turned `rotate` degrees.
 QByteArray textPdf(const QStringList& contents, int rotate = 0) {
@@ -538,7 +542,7 @@ private slots:
         for (auto it = actual.cbegin(); it != actual.cend(); ++it) {
             QString why;
             QVERIFY2(
-                sameRects(it.value(), golden.value(it.key()), 0.3, &why),
+                sameRects(it.value(), golden.value(it.key()), kGoldenTolerance, &why),
                 qPrintable(QStringLiteral("%1: %2\nactual:\n%3").arg(it.key(), why, it.value())));
         }
     }
