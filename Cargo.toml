@@ -52,6 +52,10 @@ zeroize = "1"
 # of encryption revision 6. MIT/Apache-2.0, with unicode-normalization, unicode-bidi and
 # unicode-properties (MIT/Apache-2.0) and tinyvec (Zlib/Apache-2.0/MIT).
 stringprep = "0.1"
+# `vellora-engine` only: the search (task 15). Matches in time linear in the text, which a document
+# cannot turn into a denial of service; the compiled size is capped. MIT/Apache-2.0, with
+# regex-automata, regex-syntax, aho-corasick and memchr (MIT/Apache-2.0 or Unlicense/MIT).
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 # Standard Security Handler (RustCrypto, one release line: digest 0.10 / cipher 0.4).
 md-5 = "0.10"
 aes = "0.8"

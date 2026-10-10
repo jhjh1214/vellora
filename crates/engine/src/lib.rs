@@ -35,6 +35,7 @@ mod navigation;
 #[cfg(target_os = "linux")]
 pub mod sandbox;
 mod scheduler;
+mod search;
 mod session;
 mod text;
 

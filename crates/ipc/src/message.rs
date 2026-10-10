@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
 /// revision 6 password and 32 of an older one, so this is generous.
@@ -47,6 +47,17 @@ pub const MAX_URI_BYTES: usize = 2048;
 pub const MAX_LINK_KIND_BYTES: usize = 64;
 /// Most characters one `TextPage` may carry.
 pub const MAX_TEXT_CHARS_PER_MESSAGE: usize = 8192;
+/// Longest search text in bytes.
+pub const MAX_SEARCH_BYTES: usize = 1024;
+/// Most hits one `SearchHits` may carry.
+pub const MAX_SEARCH_HITS_PER_MESSAGE: usize = 64;
+/// Most boxes one [`SearchHit`] may carry (one per line it spans; the rest are joined into the
+/// last).
+pub const MAX_HIT_RECTS: usize = 16;
+/// Longest [`SearchHit::snippet`] in bytes.
+pub const MAX_SNIPPET_BYTES: usize = 512;
+/// Most hits a search reports; it ends there with [`SearchOutcome::TooManyHits`].
+pub const MAX_SEARCH_HITS: u32 = 10_000;
 /// [`TextChar::flags`] bit: PDFium inserted this character (the space between two words, the break
 /// between two lines); it is not in the content stream and its box is empty.
 pub const TEXT_GENERATED: u8 = 1;
@@ -253,6 +264,52 @@ pub struct TextChar {
     pub line: u32,
 }
 
+/// What to search for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchQuery {
+    /// The text, or the regular expression if `regex`; 1 to [`MAX_SEARCH_BYTES`] bytes.
+    pub text: String,
+    /// Match letters by case.
+    pub case_sensitive: bool,
+    /// The match must start and end at word boundaries.
+    pub whole_word: bool,
+    /// `text` is a regular expression (Rust `regex` syntax: no look-around, no back-references,
+    /// time linear in the text) and not plain text.
+    pub regex: bool,
+}
+
+/// One place the search text was found.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SearchHit {
+    /// Zero-based page.
+    pub page: u32,
+    /// Index of the first matched character in the page's text, as `GetTextPage` counts them.
+    pub first: u32,
+    /// How many characters of that text the match covers (at least 1).
+    pub count: u32,
+    /// Where to highlight: one `[left, top, right, bottom]` box per line the match spans, in
+    /// points of the page as shown, at most [`MAX_HIT_RECTS`].
+    pub rects: Vec<[f32; 4]>,
+    /// The match with some text around it, on one line, at most [`MAX_SNIPPET_BYTES`] bytes.
+    pub snippet: String,
+    /// Byte offset of the match in `snippet`, on a character boundary.
+    pub match_start: u32,
+    /// Length of the match in `snippet` in bytes, ending on a character boundary. A very long
+    /// match is cut.
+    pub match_len: u32,
+}
+
+/// How a search ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchOutcome {
+    /// Every page was searched.
+    Finished,
+    /// Cancelled (by `Cancel` or by a newer search).
+    Cancelled,
+    /// Stopped after [`MAX_SEARCH_HITS`] hits.
+    TooManyHits,
+}
+
 /// A document password as the user typed it (UTF-8 text).
 ///
 /// The text is overwritten with zeros when the value is dropped, and `Debug` never shows it, so a
@@ -444,6 +501,15 @@ pub enum Request {
         /// Most characters wanted, in `1..=`[`MAX_TEXT_CHARS_PER_MESSAGE`].
         limit: u32,
     },
+    /// Searches the text of every page, from the first. Answered with any number of `SearchHits`
+    /// and then one `SearchDone`, or with `Error` if the query is not valid. A new `Search`
+    /// cancels the one before it; `Cancel` with this `req_id` cancels it too.
+    Search {
+        /// Correlation id.
+        req_id: RequestId,
+        /// What to look for.
+        query: SearchQuery,
+    },
 }
 
 /// Messages from the engine to the UI.
@@ -542,6 +608,27 @@ pub enum Response {
         total: u32,
         /// The characters from `skip`, at most [`MAX_TEXT_CHARS_PER_MESSAGE`].
         chars: Vec<TextChar>,
+    },
+    /// Hits of a `Search`, in page order, and how far the search has got. Sent as hits are found
+    /// and from time to time without any, so that progress shows.
+    SearchHits {
+        /// The search.
+        req_id: RequestId,
+        /// New hits, at most [`MAX_SEARCH_HITS_PER_MESSAGE`].
+        hits: Vec<SearchHit>,
+        /// How many pages have been searched so far.
+        pages_done: u32,
+    },
+    /// The last message of a `Search`.
+    SearchDone {
+        /// The search.
+        req_id: RequestId,
+        /// How it ended.
+        outcome: SearchOutcome,
+        /// How many hits were reported in all.
+        hits: u32,
+        /// How many pages were searched.
+        pages_done: u32,
     },
 }
 
@@ -642,6 +729,12 @@ impl Validate for Request {
                 }
                 Ok(())
             }
+            Request::Search { query, .. } => {
+                if query.text.is_empty() || query.text.len() > MAX_SEARCH_BYTES {
+                    return Err(Error::Invalid("search text must be 1..=1024 bytes"));
+                }
+                Ok(())
+            }
             Request::Hello { .. }
             | Request::Open { .. }
             | Request::Cancel { .. }
@@ -724,11 +817,40 @@ impl Validate for Response {
                 chars, skip, total, ..
             } => validate_text(chars, *skip, *total),
             Response::Links { links, .. } => validate_links(links),
-            Response::Hello { .. } | Response::TileReady { .. } | Response::PageFound { .. } => {
-                Ok(())
-            }
+            Response::SearchHits { hits, .. } => validate_hits(hits),
+            Response::Hello { .. }
+            | Response::TileReady { .. }
+            | Response::PageFound { .. }
+            | Response::SearchDone { .. } => Ok(()),
         }
     }
+}
+
+/// The rules of a `SearchHits` message.
+fn validate_hits(hits: &[SearchHit]) -> Result<(), Error> {
+    if hits.len() > MAX_SEARCH_HITS_PER_MESSAGE {
+        return Err(Error::Invalid("too many hits in one message"));
+    }
+    for hit in hits {
+        if hit.count == 0 {
+            return Err(Error::Invalid("a hit covers at least one character"));
+        }
+        if hit.rects.len() > MAX_HIT_RECTS {
+            return Err(Error::Invalid("too many boxes in a hit"));
+        }
+        if !hit.rects.iter().flatten().all(|v| v.is_finite()) {
+            return Err(Error::Invalid("hit box must be finite"));
+        }
+        if hit.snippet.len() > MAX_SNIPPET_BYTES {
+            return Err(Error::Invalid("snippet too long"));
+        }
+        let start = usize::try_from(hit.match_start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(usize::try_from(hit.match_len).unwrap_or(usize::MAX));
+        if !(hit.snippet.is_char_boundary(start) && hit.snippet.is_char_boundary(end)) {
+            return Err(Error::Invalid("match is not inside the snippet"));
+        }
+    }
+    Ok(())
 }
 
 /// The rules of a `Links` message.

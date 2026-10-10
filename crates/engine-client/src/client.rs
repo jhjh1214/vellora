@@ -74,7 +74,8 @@ use std::time::{Duration, Instant};
 use vellora_engine::{DEFAULT_MAX_DOCUMENT_BYTES, Deadlines};
 use vellora_ipc::{
     ErrorKind, Link, OutlineEntry, PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request,
-    RequestId, Response, SlotId, TextChar, TileRect, check_version, read_frame, write_frame,
+    RequestId, Response, SearchHit, SearchOutcome, SearchQuery, SlotId, TextChar, TileRect,
+    check_version, read_frame, write_frame,
 };
 use vellora_shm::{SlotGeometry, TileRegion};
 
@@ -339,6 +340,27 @@ pub enum Event {
         /// The characters from `skip`.
         chars: Vec<TextChar>,
     },
+    /// New hits of a search ([`Client::request_search`]), in page order, with how far it has got.
+    /// Also sent without hits while the search goes on, so that progress shows.
+    SearchHits {
+        /// The search.
+        request: RequestId,
+        /// The hits found since the last message.
+        hits: Vec<SearchHit>,
+        /// How many pages have been searched so far.
+        pages_done: u32,
+    },
+    /// The end of a search. Nothing follows for that request.
+    SearchDone {
+        /// The search.
+        request: RequestId,
+        /// How it ended.
+        outcome: SearchOutcome,
+        /// How many hits it reported in all.
+        hits: u32,
+        /// How many pages it searched.
+        pages_done: u32,
+    },
     /// A request failed, or the engine reported a problem of its own (`request` is `None`).
     RequestFailed {
         /// The failed request.
@@ -481,6 +503,36 @@ impl Ledger {
                     message,
                 }),
             },
+            // A search answers many times; it stays in flight until `SearchDone`.
+            Response::SearchHits {
+                req_id,
+                hits,
+                pages_done,
+            } => {
+                if self.pending.contains(&req_id) {
+                    Accepted::Event(Event::SearchHits {
+                        request: req_id,
+                        hits,
+                        pages_done,
+                    })
+                } else {
+                    Accepted::Dropped
+                }
+            }
+            Response::SearchDone {
+                req_id,
+                outcome,
+                hits,
+                pages_done,
+            } => self.answered(
+                req_id,
+                Event::SearchDone {
+                    request: req_id,
+                    outcome,
+                    hits,
+                    pages_done,
+                },
+            ),
             // The answers to navigation requests. A cancelled request may still be answered, and
             // the caller was told it is gone.
             answer => navigation_event(answer)
@@ -1267,6 +1319,24 @@ impl Client {
         })
     }
 
+    /// Searches the whole document for `query`, from the first page. The answers are
+    /// [`Event::SearchHits`], many of them, in page order, and then [`Event::SearchDone`]; a
+    /// query the engine cannot use (an expression that does not parse or is too big) is
+    /// [`Event::RequestFailed`] with the reason. A new search ends the one before it (which then
+    /// reports `Cancelled`, unless its events were dropped by `cancel`); [`cancel`](Self::cancel)
+    /// stops it and drops what it still sends.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile); [`ClientError::Protocol`] for text that is empty
+    /// or over 1,024 bytes.
+    pub fn request_search(&self, query: &SearchQuery) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::Search {
+            req_id,
+            query: query.clone(),
+        })
+    }
+
     /// Registers a request, sends it, and forgets it again if it could not be sent.
     fn request_navigation(
         &self,
@@ -2008,6 +2078,53 @@ mod tests {
             })
         );
         assert_eq!(ledger.accept(response), Accepted::Dropped);
+    }
+
+    #[test]
+    fn a_search_stays_in_flight_until_it_is_done_and_late_messages_are_dropped() {
+        let mut ledger = Ledger::new(3);
+        let id = ledger.begin();
+        let hits = |pages_done| Response::SearchHits {
+            req_id: id,
+            hits: vec![],
+            pages_done,
+        };
+        for pages_done in [1, 2] {
+            assert_eq!(
+                ledger.accept(hits(pages_done)),
+                Accepted::Event(Event::SearchHits {
+                    request: id,
+                    hits: vec![],
+                    pages_done
+                })
+            );
+            assert!(ledger.pending.contains(&id), "still in flight");
+        }
+        let done = Response::SearchDone {
+            req_id: id,
+            outcome: SearchOutcome::Finished,
+            hits: 0,
+            pages_done: 2,
+        };
+        assert!(matches!(
+            ledger.accept(done.clone()),
+            Accepted::Event(Event::SearchDone { .. })
+        ));
+        assert!(ledger.pending.is_empty());
+        assert_eq!(ledger.accept(hits(3)), Accepted::Dropped);
+        assert_eq!(ledger.accept(done), Accepted::Dropped);
+
+        // A cancelled search is not heard from again.
+        let id = ledger.begin();
+        assert!(ledger.forget(id));
+        assert_eq!(
+            ledger.accept(Response::SearchHits {
+                req_id: id,
+                hits: vec![],
+                pages_done: 1
+            }),
+            Accepted::Dropped
+        );
     }
 
     #[test]

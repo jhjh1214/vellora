@@ -34,12 +34,14 @@ mod message;
 pub use error::Error;
 pub use frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 pub use message::{
-    Destination, ErrorKind, Fit, Link, LinkAction, MAX_ERROR_MESSAGE_BYTES, MAX_LABEL_BYTES,
-    MAX_LABELS_PER_MESSAGE, MAX_LINK_KIND_BYTES, MAX_LINKS_PER_MESSAGE,
+    Destination, ErrorKind, Fit, Link, LinkAction, MAX_ERROR_MESSAGE_BYTES, MAX_HIT_RECTS,
+    MAX_LABEL_BYTES, MAX_LABELS_PER_MESSAGE, MAX_LINK_KIND_BYTES, MAX_LINKS_PER_MESSAGE,
     MAX_OUTLINE_ITEMS_PER_MESSAGE, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES,
     MAX_PAGE_SIZES_PER_MESSAGE, MAX_PASSWORD_BYTES, MAX_REPAIR_CODE_BYTES,
-    MAX_REPAIR_MESSAGE_BYTES, MAX_REPAIRS, MAX_TEXT_CHARS_PER_MESSAGE, MAX_TILE_AREA,
+    MAX_REPAIR_MESSAGE_BYTES, MAX_REPAIRS, MAX_SEARCH_BYTES, MAX_SEARCH_HITS,
+    MAX_SEARCH_HITS_PER_MESSAGE, MAX_SNIPPET_BYTES, MAX_TEXT_CHARS_PER_MESSAGE, MAX_TILE_AREA,
     MAX_TILE_ORIGIN, MAX_TILE_SCALE, MAX_TILE_SIDE, MAX_URI_BYTES, NamedAction, OutlineEntry,
-    PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request, RequestId, Response, SlotId,
-    TEXT_GENERATED, TEXT_HYPHEN, TextChar, TileRect, TitleStyle, Validate, check_version,
+    PROTOCOL_VERSION, PageSize, Password, Priority, Repair, Request, RequestId, Response,
+    SearchHit, SearchOutcome, SearchQuery, SlotId, TEXT_GENERATED, TEXT_HYPHEN, TextChar, TileRect,
+    TitleStyle, Validate, check_version,
 };

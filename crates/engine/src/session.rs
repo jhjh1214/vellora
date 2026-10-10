@@ -9,7 +9,9 @@
 //! - the **worker** takes tiles in priority order, renders them one at a time into their shared
 //!   memory slots and sends `TileReady`;
 //! - the **navigator** ([`crate::navigation`]) answers outline, page label and section requests,
-//!   which the reader hands over once the document is open.
+//!   which the reader hands over once the document is open;
+//! - the **searcher** ([`crate::search`]) runs one search at a time through the text of the
+//!   pages; the reader makes a new search the wanted one (which ends the one before) or cancels it.
 //!
 //! A [`Watchdog`] thread times the tile being rendered against the [`Deadlines`]. Responses can
 //! therefore arrive in a different order than their requests; each carries its `req_id`.
@@ -31,6 +33,7 @@ use vellora_shm::{HandleToken, TileRegion};
 use crate::document::Document;
 use crate::navigation::{self, OpenDocument};
 use crate::scheduler::{Deadlines, Queue, Watchdog};
+use crate::search;
 
 /// How a conversation ended without an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +171,8 @@ impl Engine {
         let queue = Queue::new();
         let watchdog = Watchdog::new();
         let (to_navigator, navigator_inbox) = mpsc::channel();
+        let (to_searcher, searcher_inbox) = mpsc::channel();
+        let control = search::Control::default();
         let mut host = Host {
             renderer,
             file,
@@ -177,6 +182,8 @@ impl Engine {
             document,
             queue: &queue,
             navigator: Some(to_navigator),
+            searcher: Some(to_searcher),
+            search: &control,
         };
 
         thread::scope(|scope| {
@@ -184,12 +191,16 @@ impl Engine {
             scope.spawn(|| watchdog.run(*deadlines, &**on_hard_deadline));
             let output = &output;
             scope.spawn(move || navigation::run(&navigator_inbox, output));
+            let control = &control;
+            scope.spawn(move || search::run(&searcher_inbox, output, control));
             let result = host.read_loop(&mut input, output);
-            // Wakes the worker, the watchdog and the navigator; the scope then waits for all three
-            // to finish.
+            // Wakes the worker, the watchdog, the navigator and the searcher (a search that is
+            // running stops at its next page); the scope then waits for all four to finish.
             queue.close();
             watchdog.close();
+            control.stop();
             host.navigator = None;
+            host.searcher = None;
             result
         })
     }
@@ -206,6 +217,10 @@ struct Host<'a> {
     queue: &'a Queue<TileJob>,
     /// The navigator's inbox; dropped when the conversation ends, which ends that thread.
     navigator: Option<Sender<navigation::Message>>,
+    /// The searcher's inbox; dropped when the conversation ends.
+    searcher: Option<Sender<search::Message>>,
+    /// Which search is wanted.
+    search: &'a search::Control,
 }
 
 /// A validated tile request waiting for the worker.
@@ -267,7 +282,7 @@ impl Host<'_> {
     /// must not end the session (`panic = "unwind"` in the release profile exists for this).
     fn handle_guarded(&mut self, request: &Request) -> (Option<Response>, Flow) {
         let req_id = match request {
-            Request::RenderTile { req_id, .. } => Some(*req_id),
+            Request::RenderTile { req_id, .. } | Request::Search { req_id, .. } => Some(*req_id),
             other => navigation::request_id(other),
         };
         catch_unwind(AssertUnwindSafe(|| self.handle(request))).unwrap_or_else(|_| {
@@ -318,10 +333,12 @@ impl Host<'_> {
             // No answer either way: what was queued is dropped, what is rendering is not sent.
             Request::Cancel { req_id } => {
                 let found = self.queue.cancel(req_id);
+                self.search.cancel(req_id);
                 tracing::debug!(req_id = req_id.0, ?found, "cancel");
                 (None, Flow::Continue)
             }
             Request::Close => (None, Flow::Stop),
+            Request::Search { req_id, ref query } => (self.search(req_id, query), Flow::Continue),
             Request::GetOutline { .. }
             | Request::GetOutlinePath { .. }
             | Request::GetPageLabels { .. }
@@ -350,6 +367,34 @@ impl Host<'_> {
         (!sent).then(|| error_response(req_id, ErrorKind::Internal, &"navigation is not available"))
     }
 
+    /// Makes `query` the wanted search, which ends the one before it, and hands it to the
+    /// searcher. `Some` is a refusal to send at once.
+    fn search(&self, req_id: RequestId, query: &vellora_ipc::SearchQuery) -> Option<Response> {
+        if self.document.is_none() {
+            return Some(error_response(
+                Some(req_id),
+                ErrorKind::InvalidRequest,
+                &"no document is open",
+            ));
+        }
+        self.search.begin(req_id);
+        let sent = self.searcher.as_ref().is_some_and(|inbox| {
+            inbox
+                .send(search::Message::Start {
+                    req_id,
+                    query: query.clone(),
+                })
+                .is_ok()
+        });
+        (!sent).then(|| {
+            error_response(
+                Some(req_id),
+                ErrorKind::Internal,
+                &"search is not available",
+            )
+        })
+    }
+
     fn open(&mut self, handle_token: u64, password: Option<&Password>) -> Response {
         if self.document.is_some() {
             return error_response(
@@ -376,6 +421,12 @@ impl Host<'_> {
                 // `Opened` finds the navigator told. A closed inbox shows up in `navigate`.
                 let unlock = std::mem::take(&mut document.unlock);
                 let document = Arc::new(document);
+                if let Some(inbox) = &self.searcher {
+                    let _ = inbox.send(search::Message::Open {
+                        document: Arc::clone(&document),
+                        page_count: document.page_count,
+                    });
+                }
                 if let Some(inbox) = &self.navigator {
                     let _ = inbox.send(navigation::Message::Open(OpenDocument {
                         document: Arc::clone(&document),
