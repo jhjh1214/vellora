@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use tracing::Level;
 use vellora_ipc::{
     Destination, ErrorKind, Fit, Link, LinkAction, NamedAction, OutlineEntry, PageSize, Priority,
-    RequestId, TextChar,
+    RequestId, SearchHit, SearchOutcome, SearchQuery, TextChar,
 };
 
 use crate::cache::{DEFAULT_BUDGET_BYTES, ScaleBucket, TileCache, TileKey};
@@ -89,6 +89,40 @@ mod ffi {
         /// `request`, `text_page`, `text_skip`, `text_total`, `glyphs`: the answer to
         /// `request_text_page`.
         TextPage,
+        /// `request`, `matches`, `pages_done`: new hits of a search, in page order (also sent
+        /// without hits to show progress).
+        SearchHits,
+        /// `request`, `search_end`, `search_hits`, `pages_done`: the last message of a search.
+        SearchDone,
+    }
+
+    /// How a search ended (the protocol's `SearchOutcome`).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum SearchEnd {
+        None,
+        Finished,
+        Cancelled,
+        /// Stopped at the limit of 10,000 hits.
+        TooManyHits,
+    }
+
+    /// One hit of a search (the protocol's `SearchHit`).
+    #[derive(Clone, Debug, PartialEq)]
+    struct SearchMatch {
+        /// Zero-based page.
+        page: u32,
+        /// Index of the first matched character in the page's text, as `request_text_page`
+        /// counts them, and how many characters the match covers.
+        first: u32,
+        count: u32,
+        /// `left, top, right, bottom` for each line the match spans, in points of the page as
+        /// shown, top left origin: four numbers per box.
+        boxes: Vec<f32>,
+        /// The match with some text around it, on one line.
+        snippet: String,
+        /// Where the match is in `snippet`, in UTF-8 bytes.
+        match_start: u32,
+        match_len: u32,
     }
 
     /// One character of a page's text (the protocol's `TextChar`). The box is in points of the
@@ -312,6 +346,13 @@ mod ffi {
         text_total: u32,
         /// `TextPage`: the characters from `text_skip`.
         glyphs: Vec<TextGlyph>,
+        /// `SearchHits`: the new hits.
+        matches: Vec<SearchMatch>,
+        /// `SearchHits`, `SearchDone`: how many pages have been searched.
+        pages_done: u32,
+        /// `SearchDone`: how it ended, and how many hits it reported in all.
+        search_end: SearchEnd,
+        search_hits: u32,
     }
 
     extern "Rust" {
@@ -471,6 +512,17 @@ mod ffi {
         /// (`TextPage`).
         fn request_text_page(self: &EngineClient, page: u32, skip: u32, limit: u32) -> Result<u64>;
 
+        /// Searches the whole document (`SearchHits`, many, then `SearchDone`). `text` is 1 to
+        /// 1024 bytes; with `regex` it is a regular expression, and one that does not parse is
+        /// a `RequestFailed` with the reason. A new search ends the one before it.
+        fn request_search(
+            self: &EngineClient,
+            text: &str,
+            case_sensitive: bool,
+            whole_word: bool,
+            regex: bool,
+        ) -> Result<u64>;
+
         /// Withdraws a request; it is never reported. `false` if it was not in flight.
         fn cancel(self: &EngineClient, request: u64) -> bool;
 
@@ -484,8 +536,8 @@ mod ffi {
 
 pub use ffi::{
     EngineEvent, EventKind, FailureKind, FitKind, LinkKind, LinkNode, LogLevel, NamedKind,
-    OutlineNode, PageExtent, RepairNote, TextGlyph, TilePriority, TileState, TileTicket,
-    TimeoutStage,
+    OutlineNode, PageExtent, RepairNote, SearchEnd, SearchMatch, TextGlyph, TilePriority,
+    TileState, TileTicket, TimeoutStage,
 };
 
 /// Crash reporting behind the bridge's opaque handle. `None` after `stop`.
@@ -868,6 +920,30 @@ impl EngineClient {
         client.request_text_page(page, skip, limit).map(|id| id.0)
     }
 
+    /// Searches the document; see [`Client::request_search`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or the text is empty or too
+    /// long.
+    pub fn request_search(
+        &self,
+        text: &str,
+        case_sensitive: bool,
+        whole_word: bool,
+        regex: bool,
+    ) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client
+            .request_search(&SearchQuery {
+                text: text.to_owned(),
+                case_sensitive,
+                whole_word,
+                regex,
+            })
+            .map(|id| id.0)
+    }
+
     /// Withdraws a request; false if it was not in flight.
     pub fn cancel(&self, request: u64) -> bool {
         self.client
@@ -971,6 +1047,10 @@ impl EngineEvent {
             text_skip: 0,
             text_total: 0,
             glyphs: Vec::new(),
+            matches: Vec::new(),
+            pages_done: 0,
+            search_end: SearchEnd::None,
+            search_hits: 0,
         }
     }
 }
@@ -1045,6 +1125,48 @@ impl From<Event> for EngineEvent {
             | Event::PageFound { .. }
             | Event::Links { .. }
             | Event::TextPage { .. }) => Self::navigation_answer(answer),
+            Event::SearchHits {
+                request,
+                hits,
+                pages_done,
+            } => Self {
+                request: request.0,
+                has_request: true,
+                matches: hits.into_iter().map(SearchMatch::from).collect(),
+                pages_done,
+                ..Self::empty(EventKind::SearchHits)
+            },
+            Event::SearchDone {
+                request,
+                outcome,
+                hits,
+                pages_done,
+            } => Self {
+                request: request.0,
+                has_request: true,
+                search_end: match outcome {
+                    SearchOutcome::Finished => SearchEnd::Finished,
+                    SearchOutcome::Cancelled => SearchEnd::Cancelled,
+                    SearchOutcome::TooManyHits => SearchEnd::TooManyHits,
+                },
+                search_hits: hits,
+                pages_done,
+                ..Self::empty(EventKind::SearchDone)
+            },
+        }
+    }
+}
+
+impl From<SearchHit> for SearchMatch {
+    fn from(hit: SearchHit) -> Self {
+        Self {
+            page: hit.page,
+            first: hit.first,
+            count: hit.count,
+            boxes: hit.rects.into_iter().flatten().collect(),
+            snippet: hit.snippet,
+            match_start: hit.match_start,
+            match_len: hit.match_len,
         }
     }
 }
@@ -1433,6 +1555,55 @@ mod tests {
                 event.text_total
             ),
             (EventKind::TextPage, 9, 3, 4, 10)
+        );
+    }
+
+    #[test]
+    fn search_events_convert() {
+        let hit = SearchHit {
+            page: 2,
+            first: 10,
+            count: 4,
+            rects: vec![[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]],
+            snippet: "a word here".into(),
+            match_start: 2,
+            match_len: 4,
+        };
+        let event = bridged(Event::SearchHits {
+            request: RequestId(4),
+            hits: vec![hit],
+            pages_done: 17,
+        });
+        assert_eq!(
+            (
+                event.kind,
+                event.request,
+                event.pages_done,
+                event.matches.len()
+            ),
+            (EventKind::SearchHits, 4, 17, 1)
+        );
+        let found = &event.matches[0];
+        assert_eq!((found.page, found.first, found.count), (2, 10, 4));
+        assert_eq!(found.boxes, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        assert_eq!(
+            &found.snippet[found.match_start as usize..][..found.match_len as usize],
+            "word"
+        );
+        let done = bridged(Event::SearchDone {
+            request: RequestId(4),
+            outcome: SearchOutcome::TooManyHits,
+            hits: 10_000,
+            pages_done: 99,
+        });
+        assert_eq!(
+            (
+                done.kind,
+                done.search_end,
+                done.search_hits,
+                done.pages_done
+            ),
+            (EventKind::SearchDone, SearchEnd::TooManyHits, 10_000, 99)
         );
     }
 

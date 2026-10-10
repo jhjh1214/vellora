@@ -1309,6 +1309,135 @@ mod tests {
         assert_eq!(round_trip(&full), full);
     }
 
+    fn query(text: &str) -> SearchQuery {
+        SearchQuery {
+            text: text.into(),
+            case_sensitive: true,
+            whole_word: false,
+            regex: true,
+        }
+    }
+
+    fn hit() -> SearchHit {
+        SearchHit {
+            page: 7,
+            first: 40,
+            count: 5,
+            rects: vec![[1.0, 2.0, 30.0, 14.0], [1.0, 16.0, 12.0, 28.0]],
+            snippet: "a few words before the match, then after".into(),
+            match_start: 22,
+            match_len: 5,
+        }
+    }
+
+    #[test]
+    fn search_messages_round_trip_and_follow_the_older_variants_on_the_wire() {
+        let request = Request::Search {
+            req_id: RequestId(30),
+            query: query("wor[dk]"),
+        };
+        assert_eq!(round_trip(&request), request);
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &request).unwrap();
+        assert_eq!(wire[4], 11, "after GetTextPage (10)");
+
+        let hits = Response::SearchHits {
+            req_id: RequestId(30),
+            hits: vec![hit(), hit()],
+            pages_done: 12,
+        };
+        let done = Response::SearchDone {
+            req_id: RequestId(30),
+            outcome: SearchOutcome::TooManyHits,
+            hits: MAX_SEARCH_HITS,
+            pages_done: 12,
+        };
+        for (message, variant) in [(hits, 10), (done, 11)] {
+            assert_eq!(round_trip(&message), message);
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &message).unwrap();
+            assert_eq!(wire[4], variant, "after TextPage (9)");
+        }
+    }
+
+    #[test]
+    fn search_limits_are_enforced_on_both_sides_of_the_wire() {
+        let search = |text: &str| Request::Search {
+            req_id: RequestId(1),
+            query: query(text),
+        };
+        for good in [search("a"), search(&"é".repeat(MAX_SEARCH_BYTES / 2))] {
+            assert_eq!(round_trip(&good), good);
+        }
+        for bad in [search(""), search(&"a".repeat(MAX_SEARCH_BYTES + 1))] {
+            assert!(matches!(bad.validate(), Err(Error::Invalid(_))), "{bad:?}");
+            let mut wire = Vec::new();
+            assert!(matches!(
+                write_frame(&mut wire, &bad),
+                Err(Error::Invalid(_))
+            ));
+        }
+
+        let hits = |hits| Response::SearchHits {
+            req_id: RequestId(1),
+            hits,
+            pages_done: 0,
+        };
+        let bad = [
+            hits(vec![hit(); MAX_SEARCH_HITS_PER_MESSAGE + 1]),
+            hits(vec![SearchHit { count: 0, ..hit() }]),
+            hits(vec![SearchHit {
+                rects: vec![[0.0; 4]; MAX_HIT_RECTS + 1],
+                ..hit()
+            }]),
+            hits(vec![SearchHit {
+                rects: vec![[0.0, f32::NAN, 1.0, 1.0]],
+                ..hit()
+            }]),
+            hits(vec![SearchHit {
+                snippet: "a".repeat(MAX_SNIPPET_BYTES + 1),
+                match_start: 0,
+                match_len: 1,
+                ..hit()
+            }]),
+            // The match leaves the snippet, or starts inside a character.
+            hits(vec![SearchHit {
+                match_start: 38,
+                match_len: 5,
+                ..hit()
+            }]),
+            hits(vec![SearchHit {
+                match_start: u32::MAX,
+                match_len: u32::MAX,
+                ..hit()
+            }]),
+            hits(vec![SearchHit {
+                snippet: "é".into(),
+                match_start: 1,
+                match_len: 1,
+                ..hit()
+            }]),
+        ];
+        for message in &bad {
+            assert!(
+                matches!(message.validate(), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+        }
+        // The largest message fits a frame, with the widest numbers.
+        let widest = SearchHit {
+            page: u32::MAX,
+            first: u32::MAX,
+            count: u32::MAX,
+            rects: vec![[f32::MAX, f32::MIN_POSITIVE, 1.0e30, -1.0e30]; MAX_HIT_RECTS],
+            snippet: "é".repeat(MAX_SNIPPET_BYTES / 2),
+            match_start: 0,
+            match_len: u32::try_from(MAX_SNIPPET_BYTES).unwrap(),
+        };
+        let full = hits(vec![widest; MAX_SEARCH_HITS_PER_MESSAGE]);
+        assert_eq!(round_trip(&full), full);
+    }
+
     fn repair(code: &str, message: &str) -> Repair {
         Repair {
             code: code.into(),
