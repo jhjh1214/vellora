@@ -8,6 +8,7 @@
 #include "diagnostics/Application.h"
 #include "diagnostics/DiagnosticsScript.h"
 #include "diagnostics/UiWatchdog.h"
+#include "search/SearchController.h"
 
 #include <QFile>
 #include <QSignalSpy>
@@ -121,7 +122,7 @@ struct SessionResult {
 // One scripted session on a window of its own, so that every attempt starts with a cold tile
 // cache. Everything but the budget is checked here and fails the test outright.
 void runScriptedSession(const QString& path, bool continuous, int spread, int rotation,
-                        SessionResult& result) {
+                        bool searching, SessionResult& result) {
     vellora::MainWindow window;
     window.resize(900, 700);
     window.show();
@@ -141,6 +142,11 @@ void runScriptedSession(const QString& path, bool continuous, int spread, int ro
     vellora::CanvasController* controller = window.canvas().controller();
     vellora::DiagnosticsScript script(controller);
     QSignalSpy finished(&script, &vellora::DiagnosticsScript::finished);
+    if (searching) {
+        // The engine searches all 10,000 pages and streams a thousand hits while the session
+        // scrolls and zooms (the pages say "Page 1" ... "Page 10000").
+        window.currentTab().search().start({QStringLiteral("Page 1"), false, false, false});
+    }
     const quint64 framesBefore = canvas->framesRendered();
     watchdog.start();
     script.start();
@@ -162,8 +168,40 @@ void runScriptedSession(const QString& path, bool continuous, int spread, int ro
     QVERIFY2(watchdog.handlers().samples >= 2000, qPrintable(result.summary));
     // Nothing is left asking the engine for tiles that are no longer wanted.
     QTRY_VERIFY_WITH_TIMEOUT(controller->tilesInFlight() <= 64, kWaitMs);
+    if (searching) {
+        // It found them all: page 1, 10-19, 100-199, 1000-1999 and 10000.
+        vellora::SearchController& search = window.currentTab().search();
+        QTRY_VERIFY_WITH_TIMEOUT(!search.isRunning(), kWaitMs);
+        QCOMPARE(search.state(), vellora::SearchController::State::Finished);
+        QCOMPARE(search.count(), 1 + 10 + 100 + 1000 + 1);
+    }
 }
 
+// Runs the scripted session on up to `kAttempts` cold sessions and passes when one stays within
+// the frame budget (see the comment on the test that uses it).
+void judgeWithinBudget(const QString& path, bool continuous, int spread, int rotation,
+                       bool searching) {
+    constexpr int kAttempts = 3;
+    QStringList attempts;
+    for (int attempt = 1; attempt <= kAttempts; ++attempt) {
+        SessionResult result;
+        runScriptedSession(path, continuous, spread, rotation, searching, result);
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        if (result.overBudget == 0) {
+            if (attempt > 1) {
+                qWarning("%s: within budget on attempt %d after: %s", QTest::currentDataTag(),
+                         attempt, qPrintable(attempts.join(QStringLiteral(" | "))));
+            }
+            return;
+        }
+        attempts << QStringLiteral("attempt %1: %2").arg(attempt).arg(result.summary);
+    }
+    QFAIL(qPrintable(QStringLiteral("over budget on all %1 attempts: %2")
+                         .arg(kAttempts)
+                         .arg(attempts.join(QStringLiteral(" | ")))));
+}
 } // namespace
 
 class TstCanvasRender : public QObject {
@@ -397,7 +435,6 @@ private slots:
         QFETCH(bool, continuous);
         QFETCH(int, spread);
         QFETCH(int, rotation);
-        constexpr int kAttempts = 3;
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString path = dir.filePath(QStringLiteral("10k.pdf"));
@@ -406,26 +443,21 @@ private slots:
         file.write(syntheticPdf(10'000));
         file.close();
 
-        QStringList attempts;
-        for (int attempt = 1; attempt <= kAttempts; ++attempt) {
-            SessionResult result;
-            runScriptedSession(path, continuous, spread, rotation, result);
-            if (QTest::currentTestFailed()) {
-                return;
-            }
-            if (result.overBudget == 0) {
-                if (attempt > 1) {
-                    qWarning("%s: within budget on attempt %d after: %s", QTest::currentDataTag(),
-                             attempt, qPrintable(attempts.join(QStringLiteral(" | "))));
-                }
-                return;
-            }
-            attempts << QStringLiteral("attempt %1: %2").arg(attempt).arg(result.summary);
-        }
-        QFAIL(qPrintable(QStringLiteral("over budget on all %1 attempts: %2")
-                             .arg(kAttempts)
-                             .arg(attempts.join(QStringLiteral(" | ")))));
+        judgeWithinBudget(path, continuous, spread, rotation, false);
     }
+
+    // The same, while the engine searches the whole document and streams its hits (M1 task 15).
+    void scrollingWhileSearchingStaysWithinTheFrameBudget() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath(QStringLiteral("10k.pdf"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(syntheticPdf(10'000));
+        file.close();
+        judgeWithinBudget(path, true, 0, 0, true);
+    }
+
     void drawingContinuesAfterTheEngineIsKilled() {
         vellora::MainWindow window;
         window.resize(700, 500);

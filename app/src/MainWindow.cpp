@@ -123,6 +123,10 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     for (const char* id : {"edit.copy", "edit.selectAll", "edit.selectPage"}) {
         editMenu->addAction(m_commands.createAction(QString::fromLatin1(id), this));
     }
+    editMenu->addSeparator();
+    for (const char* id : {"edit.find", "edit.findNext", "edit.findPrevious"}) {
+        editMenu->addAction(m_commands.createAction(QString::fromLatin1(id), this));
+    }
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     const auto addView = [this](QMenu* menu, const char* id, bool checkable = false) {
         QAction* action = m_commands.createAction(QString::fromLatin1(id), this);
@@ -132,6 +136,7 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     };
     addView(viewMenu, "view.thumbnails", true);
     addView(viewMenu, "view.outline");
+    addView(viewMenu, "view.searchResults");
     viewMenu->addSeparator();
     auto* layoutMenu = viewMenu->addMenu(tr("Page &Layout"));
     for (const char* id : {"view.layout.single", "view.layout.continuous", "view.layout.twoUp",
@@ -219,6 +224,16 @@ void MainWindow::registerCommands() {
         [this] { currentTab().selectAll(); });
     add("edit.selectPage", tr("Select All on Page"),
         {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A)}, [this] { currentTab().selectPage(); });
+    add("edit.find", tr("Find…"), {QKeySequence::Find}, [this] { currentTab().showFind(); });
+    add("edit.findNext", tr("Find Next"), {QKeySequence(Qt::Key_F3)},
+        [this] { currentTab().findNext(); });
+    add("edit.findPrevious", tr("Find Previous"), {QKeySequence(Qt::SHIFT | Qt::Key_F3)},
+        [this] { currentTab().findPrevious(); });
+    add("view.searchResults", tr("Search Results"),
+        {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F)}, [this] {
+            currentTab().showSearchResults();
+            updateViewActions();
+        });
     add("view.thumbnails", tr("Page Thumbnails"), {QKeySequence(Qt::Key_F4)}, [this] {
         currentTab().setSidebarVisible(!currentTab().sidebarVisible());
         updateViewActions();

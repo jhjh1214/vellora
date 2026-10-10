@@ -168,6 +168,11 @@ public:
     // the origin; in a turned view only the page is followed. The `B` variants are treated as the
     // plain ones (the content box is not known here).
     void goToDestination(const Destination& destination);
+    // Brings `points` (a rectangle of `page`, in points of the page as shown) into view: nothing
+    // moves if it is already well inside the window, else the view scrolls to put its centre in the
+    // middle (when the view shows one row at a time, the row of `page` is shown first). The zoom
+    // does not change.
+    void revealRect(quint32 page, const QRectF& points);
     void nextPage();
     void previousPage();
     const PageLayout& layout() const { return m_layout; }

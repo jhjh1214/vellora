@@ -2,6 +2,7 @@
 
 #include "canvas/CanvasWidget.h"
 #include "links/LinkActions.h"
+#include "search/SearchOverlay.h"
 #include "text/SelectionOverlay.h"
 
 #include <QApplication>
@@ -40,6 +41,8 @@ CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     // The canvas is a child of the viewport, not the viewport itself: the scroll area consumes the
     // viewport's paint events, so a QRhiWidget used as viewport would never be asked to render.
     m_canvas = new CanvasWidget(session, &m_controller, viewport());
+    // The hits of a search are under the selection, which stays visible on a hit.
+    m_searchOverlay = new SearchOverlay(&m_controller, viewport());
     m_overlay = new SelectionOverlay(&m_controller, &m_selection, viewport());
     m_banner = new QLabel(viewport());
     m_banner->setTextFormat(Qt::PlainText); // engine-derived text must never be read as markup
@@ -123,6 +126,10 @@ void CanvasView::copySelection() {
     });
 }
 
+void CanvasView::setSearch(SearchController* search) {
+    m_searchOverlay->setSearch(search);
+}
+
 void CanvasView::reset() {
     m_selection.clear();
     m_text.reset();
@@ -151,6 +158,7 @@ bool CanvasView::viewportEvent(QEvent* event) {
     if (event->type() == QEvent::Resize) {
         // Also when a scroll bar appears or disappears, which resizes only the viewport.
         m_canvas->setGeometry(viewport()->rect());
+        m_searchOverlay->setGeometry(viewport()->rect());
         m_overlay->setGeometry(viewport()->rect());
         placeBanner();
         m_controller.setViewportSize(viewport()->size());
