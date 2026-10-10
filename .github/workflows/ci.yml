@@ -61,6 +61,18 @@ jobs:
         run: cargo xtask corpus fetch --manifest tests/corpus/ci-manifest.toml
       - name: Writer invariants on the CI corpus subset
         run: cargo test --locked -p vellora-invariants -- --ignored --nocapture
+      # The text the engine extracts against Poppler's `pdftotext`, an external test tool that is
+      # never linked or shipped. One platform: the text does not depend on it, and a second
+      # `pdftotext` version would only add noise.
+      - name: Install pdftotext
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y poppler-utils
+      - name: Fetch the text comparison subset
+        if: runner.os == 'Linux'
+        run: cargo xtask corpus fetch --manifest tests/corpus/text-manifest.toml
+      - name: Engine text against pdftotext
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p vellora-engine --test text_compare -- --ignored --nocapture
 
   fuzz:
     name: fuzz smoke (${{ matrix.target }})
