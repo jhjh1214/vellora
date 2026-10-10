@@ -1,0 +1,259 @@
+# The corpus subset the text comparison runs on (M1 task 14c): documents whose extracted text the
+# engine and Poppler's `pdftotext` agree on, within 2%, over the first 10 pages (at most 6,000
+# characters, white space ignored, ligatures expanded). Every entry is a verbatim copy of its entry in
+# manifest.toml.
+#
+# How it was chosen: `VELLORA_TEXT_SURVEY=1 cargo test -p vellora-engine --test text_compare -- --ignored
+# --nocapture` measures every document of manifest.toml; 70 of the 275 have at least 30 characters to
+# compare (most are image, graphics or annotation test files without text). 42 of those agree within 2%;
+# this file lists them all except that of the 13 near-identical veraPDF PDF/UA templates only two (one
+# per text length) are kept. So the subset is chosen by agreement, and the 28 measured documents that
+# differ are not in it: see docs/milestones/M1.md (Task 14c) for what they are.
+# Fetch it with: cargo xtask corpus fetch --manifest tests/corpus/text-manifest.toml
+[[doc]]
+id = "pdfjs-tracemonkey"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/tracemonkey.pdf"
+sha256 = "3662ff519e485810520552bf301d8c3b2b917fd2f83303f4965d7abed367e113"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-pdkids"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/pdkids.pdf"
+sha256 = "c4ea5ccc138bb58109aba4ec33c7841bf9bda637b20cec932904cbee700845b5"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-alphatrans"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/alphatrans.pdf"
+sha256 = "234c0ab8e9458f4d17133b08d2b66170eeb92be2a80e1508aa5117a2bf568f63"
+license = "Apache-2.0"
+categories = ["transparency"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-nonisolated_blend_smask"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/nonisolated_blend_smask.pdf"
+sha256 = "866d8d75177357eb29cf330a0c30676cc07e22c9e5bd759fbb29f1de79e51f33"
+license = "Apache-2.0"
+categories = ["transparency"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-standard_fonts"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/standard_fonts.pdf"
+sha256 = "4d48fc12e619a823bf70b3a4d8e9d916a85683ecb176d138af66a57351bd21f9"
+license = "Apache-2.0"
+categories = ["many-fonts"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-non-embedded-NuptialScript"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/non-embedded-NuptialScript.pdf"
+sha256 = "3bfb04490b14a02c8a100ce63ddb9119e65966b04c7a8fae8e9def072b1f35d5"
+license = "Apache-2.0"
+categories = ["many-fonts"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-border-styles"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-border-styles.pdf"
+sha256 = "ba3a3c67030f9be2ad2c1989b78ec302501f71cecb4e5ebf193f6ce9ca51ff56"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-highlight"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-highlight.pdf"
+sha256 = "72b6387356ccfdfb95a0a5eff5e1ceb9b7667019807d7b04abaf64dad7ea143a"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-strikeout"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-strikeout.pdf"
+sha256 = "ca7225dbdc6f8a26814cf0d67f5c509589e2cc09ace6bdb04a375a266db5b708"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-underline"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-underline.pdf"
+sha256 = "ef04b7049d5cab49c702887c423f20cfecf76d36905772209cc6781425d8f671"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-squiggly"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-squiggly.pdf"
+sha256 = "95a2af9d01c2e532711a1483d58a258e469f3ff0e7dd1c2ae45c70bd8f9bb6e8"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-highlights"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/highlights.pdf"
+sha256 = "025a8235824da8fdc2a73503d78ec0a658eb9f6620380108807e27013ae3a07d"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-xfa_issue14315"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/xfa_issue14315.pdf"
+sha256 = "d039a40ea28384bae8d1a24929a4288aae1aeb433c441fd39c04fad618fa6f19"
+license = "Apache-2.0"
+categories = ["forms", "xfa"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-signed_verified"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/signed_verified.pdf"
+sha256 = "1fe9051d9ac1f39828988040db471916251dc2953c1a32efd6596e4975da848c"
+license = "Apache-2.0"
+categories = ["signed"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-attachment"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/attachment.pdf"
+sha256 = "9acec9f83f1557183c83a87111b85141e657849ac2aa92864ffd63cc91572379"
+license = "Apache-2.0"
+categories = ["attachments"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-rotation"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/rotation.pdf"
+sha256 = "5087c2afe763d145537d652bb3bc6c321ace3a267b2679ae2c178add3ba7f1d9"
+license = "Apache-2.0"
+categories = ["navigation", "structure"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-nested_outline"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/nested_outline.pdf"
+sha256 = "1283aa2173bc57def82323ea2601a4e08ada5beb2466873aec8aa04ddd74c013"
+license = "Apache-2.0"
+categories = ["navigation", "structure"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-structure_simple"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/structure_simple.pdf"
+sha256 = "5b5510bb5f91c86aa0bbd4882842d4583c814e0e69a0cfbff0e70dc250a8d0f3"
+license = "Apache-2.0"
+categories = ["navigation", "structure"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-doc_1_3_pages"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/doc_1_3_pages.pdf"
+sha256 = "aa14b7d6f0bda78b664420324567cb03d07c1e3b803fb35628a2bd3ce83a0ec4"
+license = "Apache-2.0"
+categories = ["small-synthetic"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-boundingBox_invalid"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/boundingBox_invalid.pdf"
+sha256 = "f85be7aaf217f8f1864b910501d4aeea53f3d7a503df5b81dd6aaa267e5968ad"
+license = "Apache-2.0"
+categories = ["malformed"]
+notes = "structurally broken or adversarial input"
+
+[[doc]]
+id = "pdfjs-bomb_giant"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/bomb_giant.pdf"
+sha256 = "a33bc9ff49df11644e5790add536df87b702684b729999539df32ae655fd6dd1"
+license = "Apache-2.0"
+categories = ["malformed"]
+notes = "structurally broken or adversarial input"
+
+[[doc]]
+id = "pdfium-latin_extended"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/latin_extended.pdf"
+sha256 = "3c52b991b6669e07d5c67c478ff4dee6a843cb44d390fd29ecdf6d9e85ea1038"
+license = "BSD-3-Clause"
+categories = ["small-synthetic"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-annots"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/annots.pdf"
+sha256 = "e5e11af7437553924363d1a499b7671e1eb9cd72c13a41b9c9c8e40a931c2aa4"
+license = "BSD-3-Clause"
+categories = ["many-annotations"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-annotation_highlight_square_with_ap"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/annotation_highlight_square_with_ap.pdf"
+sha256 = "e553d46b65227646d6f2103cd380cc8355226d4b8f6a9c4a181ee0455e8b3217"
+license = "BSD-3-Clause"
+categories = ["many-annotations"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-annotation_stamp_with_ap"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/annotation_stamp_with_ap.pdf"
+sha256 = "b3952e8ed5fac840f178b38fb08676ce59bc903bacdec14b868eacafdeca1a07"
+license = "BSD-3-Clause"
+categories = ["many-annotations"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-click_form"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/click_form.pdf"
+sha256 = "afbd6e340f4f8c35e97baad6f4459cae8a55aec109c5f242827974158dbbd417"
+license = "BSD-3-Clause"
+categories = ["forms", "acroform"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-bug_1029"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/bug_1029.pdf"
+sha256 = "9c227f598edba2311fb7ec91d3573ab2c73f8c1d256cd73877adce63214a7fa5"
+license = "BSD-3-Clause"
+categories = ["regression"]
+notes = "PDFium bug regression file; not necessarily corrupt"
+
+[[doc]]
+id = "pdfa20-pdf-2-0-image-with-bpc"
+url = "https://raw.githubusercontent.com/pdf-association/pdf20examples/c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa/PDF%202.0%20image%20with%20BPC.pdf"
+sha256 = "fc517dd0d4c72d1b11e3449acc3e816d2719dc14e69a7e14b84da02808103370"
+license = "CC-BY-SA-4.0"
+categories = ["pdf20", "small-synthetic"]
+notes = "PDF Association PDF 2.0 example"
+
+[[doc]]
+id = "pdfa20-pdf-2-0-with-page-level-output-intent"
+url = "https://raw.githubusercontent.com/pdf-association/pdf20examples/c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa/PDF%202.0%20with%20page%20level%20output%20intent.pdf"
+sha256 = "7c13afe3078a4c202184edce3169f7bc842c8fd3db9da7140af6bc0b3b2fa44a"
+license = "CC-BY-SA-4.0"
+categories = ["pdf20", "small-synthetic"]
+notes = "PDF Association PDF 2.0 example"
+
+[[doc]]
+id = "vera-pdf_ua-1-5-t01-pass-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_UA-1/5%20Version%20identification/5-t01-pass-a.pdf"
+sha256 = "853fc52f5dca32dd257cac1da4ca9c1702623e357b48a361f835c4f271bd2c68"
+license = "CC-BY-4.0"
+categories = ["pdfua", "structure"]
+notes = "veraPDF PDF/UA-1 corpus file"
+
+[[doc]]
+id = "vera-pdf_ua-1-5-t02-pass-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_UA-1/5%20Version%20identification/5-t02-pass-a.pdf"
+sha256 = "e5e67f1304d0c2acb880b2af47c4210fccbf34dc342c54810b0a4f6735d7db23"
+license = "CC-BY-4.0"
+categories = ["pdfua", "structure"]
+notes = "veraPDF PDF/UA-1 corpus file"
