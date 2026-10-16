@@ -9,6 +9,8 @@
 
 namespace vellora {
 
+class CaretBrowser;
+
 class SelectionOverlay : public QWidget {
     Q_OBJECT
 
@@ -19,6 +21,10 @@ public:
 
     // The rectangles painted, in viewport pixels (for tests and for the accessibility tree).
     QList<QRectF> highlights() const;
+    // The caret to paint while caret browsing is on (not owned); null for none.
+    void setCaretBrowser(CaretBrowser* caret);
+    // The caret as painted, in viewport pixels; empty when there is none on screen.
+    QRectF caretRect() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -26,6 +32,7 @@ protected:
 private:
     CanvasController* m_controller;
     TextSelection* m_selection;
+    CaretBrowser* m_caret = nullptr;
 };
 
 } // namespace vellora

@@ -54,6 +54,9 @@ public:
     // The text of one page (`kToEnd` carets), or of the whole document.
     void selectPage(quint32 page);
     void selectAll(quint32 pageCount);
+    // Selects from caret `anchor` to caret `focus` (either may come first), as keyboard selection
+    // does.
+    void setRange(Position anchor, Position focus);
 
     // The part of `page` that is selected, as carets (`to` may be `kToEnd`); false if none of it.
     bool rangeOn(quint32 page, quint32* from, quint32* to) const;

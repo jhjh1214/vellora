@@ -586,6 +586,20 @@ void DocumentTab::notify(const QString& text) {
     m_notifier(text);
 }
 
+void DocumentTab::toggleCaretBrowsing() {
+    if (m_path.isEmpty()) {
+        return;
+    }
+    const bool on = !m_canvas->caret()->isOn();
+    m_canvas->caret()->setOn(on);
+    if (on) {
+        m_canvas->setFocus();
+    }
+    emit message(on ? tr("Caret browsing is on: move through the text with the arrow keys, F7 "
+                         "turns it off")
+                    : tr("Caret browsing is off"));
+}
+
 void DocumentTab::selectAll() {
     const quint32 count = m_canvas->controller()->pageCount();
     if (count == 0) {

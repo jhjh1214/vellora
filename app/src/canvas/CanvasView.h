@@ -7,6 +7,7 @@
 
 #include "canvas/CanvasController.h"
 #include "canvas/LinkLayer.h"
+#include "text/CaretBrowser.h"
 #include "text/TextLayer.h"
 #include "text/TextSelection.h"
 
@@ -41,6 +42,8 @@ public:
     LinkLayer* links() { return &m_links; }
     TextLayer* text() { return &m_text; }
     TextSelection* selection() { return &m_selection; }
+    // The text cursor of caret browsing (F7), moved with the arrow keys while it is on.
+    CaretBrowser* caret() { return &m_caret; }
     SelectionOverlay* selectionOverlay() { return m_overlay; }
     SearchOverlay* searchOverlay() { return m_searchOverlay; }
     // The search whose hits are painted over the pages (not owned); null for none.
@@ -140,6 +143,10 @@ private:
     void startSelection(QMouseEvent* event);
     void dragSelection();
     void endDrag(bool zoom);
+    // Caret browsing: a key that moves the caret; false if the key is not one.
+    bool handleCaretKey(QKeyEvent* event);
+    // Tells a screen reader where the caret went.
+    void announceCaret();
     // Tells a screen reader that the page on screen changed.
     void announcePage(quint32 page);
 
@@ -147,6 +154,7 @@ private:
     LinkLayer m_links;
     TextLayer m_text;
     TextSelection m_selection;
+    CaretBrowser m_caret;
     CanvasWidget* m_canvas;
     QLabel* m_banner = nullptr;
     bool m_syncing = false;

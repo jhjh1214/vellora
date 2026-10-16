@@ -27,4 +27,7 @@ void installCanvasAccessibility();
 // for the view or there is no such link. Owned by the accessibility layer.
 QAccessibleInterface* canvasLinkInterface(CanvasView* view, quint32 page, int index);
 
+// The accessible interface of `page`, or null if there is none.
+QAccessibleInterface* canvasPageInterface(CanvasView* view, quint32 page);
+
 } // namespace vellora

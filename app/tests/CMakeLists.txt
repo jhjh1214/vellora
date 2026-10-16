@@ -40,6 +40,7 @@ vellora_add_test(tst_links tst_links.cpp)
 vellora_add_test(tst_search tst_search.cpp)
 vellora_add_test(tst_print tst_print.cpp)
 vellora_add_test(tst_accessibility tst_accessibility.cpp)
+vellora_add_test(tst_caret tst_caret.cpp)
 vellora_add_test(tst_text tst_text.cpp)
 # The rectangles the selection highlights, per scenario (regenerate with VELLORA_UPDATE_GOLDEN=1).
 target_compile_definitions(tst_text PRIVATE VELLORA_TEXT_GOLDEN="${CMAKE_CURRENT_SOURCE_DIR}/golden/selection.txt")
