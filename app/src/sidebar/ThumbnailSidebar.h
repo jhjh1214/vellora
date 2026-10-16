@@ -3,6 +3,7 @@
 #pragma once
 
 #include "search/SearchResultsView.h"
+#include "sidebar/InspectorView.h"
 #include "sidebar/OutlineView.h"
 #include "sidebar/ThumbnailView.h"
 
@@ -18,7 +19,7 @@ class ThumbnailSidebar : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Tab { Thumbnails = 0, Outline = 1, Search = 2 };
+    enum class Tab { Thumbnails = 0, Outline = 1, Search = 2, Inspector = 3 };
 
     ThumbnailSidebar(EngineSession* session, CanvasController* controller,
                      QWidget* parent = nullptr);
@@ -31,6 +32,10 @@ public:
     void setSearch(SearchController* search);
     // Null until `setSearch`.
     SearchResultsView* results() { return m_results; }
+    // Adds the Inspector tab (once). The report is asked for when the tab is first shown.
+    void addInspector();
+    // Null until `addInspector`.
+    InspectorView* inspector() { return m_inspector; }
 
     Tab currentTab() const;
     void setCurrentTab(Tab tab);
@@ -39,6 +44,9 @@ public:
     void reset() {
         m_view->reset();
         m_outline->forgetDocument();
+        if (m_inspector != nullptr) {
+            m_inspector->reset();
+        }
     }
 
 signals:
@@ -47,12 +55,14 @@ signals:
     void currentTabChanged(vellora::ThumbnailSidebar::Tab tab);
 
 private:
+    EngineSession* m_session;
     QTabBar* m_tabs;
     QStackedWidget* m_pages;
     ThumbnailView* m_view;
     OutlineView* m_outline;
     QSlider* m_slider;
     SearchResultsView* m_results = nullptr;
+    InspectorView* m_inspector = nullptr;
 };
 
 } // namespace vellora

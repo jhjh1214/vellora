@@ -8,11 +8,14 @@
 #include "sidebar/ThumbnailSidebar.h"
 
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QProgressDialog>
+#include <QSaveFile>
 #include <QSplitter>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -47,6 +50,7 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     m_canvas->setSearch(m_search);
     m_sidebar = new ThumbnailSidebar(&m_session, m_canvas->controller(), m_splitter);
     m_sidebar->setSearch(m_search);
+    m_sidebar->addInspector();
     contentLayout->addWidget(m_repairBar);
     contentLayout->addWidget(m_findBar);
     contentLayout->addWidget(m_canvas, 1);
@@ -97,6 +101,17 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
         [this](quint32 page) { return tr("Page %1 of %2").arg(pageLabel(page)).arg(m_pageCount); });
     m_sidebar->results()->model().setPageLabeler([this](quint32 page) { return pageLabel(page); });
     connect(m_search, &SearchController::currentChanged, this, &DocumentTab::onSearchCurrent);
+    connect(m_sidebar->inspector(), &InspectorView::loaded, this, [this] {
+        if (m_exportPending) {
+            writeReport();
+        }
+    });
+    connect(m_sidebar->inspector(), &InspectorView::loadFailed, this, [this](const QString& why) {
+        if (m_exportPending) {
+            m_exportPending = false;
+            notify(tr("The report could not be made: %1").arg(why));
+        }
+    });
     connect(m_findBar, &FindBar::closed, this, [this] { m_canvas->setFocus(); });
     connect(m_findBar, &FindBar::resultsRequested, this, &DocumentTab::showSearchResults);
     connect(m_sidebar->results(), &SearchResultsView::hitChosen, this, [this](int index) {
@@ -584,6 +599,48 @@ void DocumentTab::openUri(const QString& uri) {
 void DocumentTab::notify(const QString& text) {
     emit message(text.section(QLatin1Char('\n'), 0, 0));
     m_notifier(text);
+}
+
+void DocumentTab::showInspector() {
+    setSidebarVisible(true);
+    m_sidebar->setCurrentTab(ThumbnailSidebar::Tab::Inspector);
+    m_sidebar->inspector()->refresh();
+}
+
+void DocumentTab::exportReport() {
+    if (m_path.isEmpty() || !m_session.isOpen()) {
+        return;
+    }
+    InspectorView* inspector = m_sidebar->inspector();
+    if (inspector->isLoaded()) {
+        writeReport();
+        return;
+    }
+    // Saved as soon as it arrives.
+    m_exportPending = true;
+    inspector->refresh();
+}
+
+void DocumentTab::writeReport() {
+    m_exportPending = false;
+    const QString suggested = QFileInfo(m_path).completeBaseName() + QStringLiteral(".report.json");
+    const QString target =
+        m_exportChooser ? m_exportChooser(suggested)
+                        : QFileDialog::getSaveFileName(this, tr("Export Report"),
+                                                       QFileInfo(m_path).dir().filePath(suggested),
+                                                       tr("JSON files (*.json)"));
+    if (target.isEmpty()) {
+        return;
+    }
+    // The text the engine sent, as it is, with the final newline the command line prints. Written
+    // to a temporary file and moved into place, so a failure leaves nothing half written.
+    QSaveFile file(target);
+    if (!file.open(QIODevice::WriteOnly) ||
+        file.write(m_sidebar->inspector()->json().toUtf8() + '\n') < 0 || !file.commit()) {
+        notify(tr("The report could not be saved: %1").arg(file.errorString()));
+        return;
+    }
+    emit message(tr("Report saved to %1").arg(QDir::toNativeSeparators(target)));
 }
 
 void DocumentTab::toggleCaretBrowsing() {
