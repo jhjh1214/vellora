@@ -106,9 +106,7 @@ struct Fixture {
 };
 
 QList<QString> g_announcements;
-QList<int> g_eventTypes;
 void collect(QAccessibleEvent* event) {
-    g_eventTypes.append(static_cast<int>(event->type()));
     if (event->type() == QAccessible::Announcement) {
         g_announcements.append(static_cast<QAccessibleAnnouncementEvent*>(event)->message());
     }
@@ -288,48 +286,25 @@ private slots:
 
     void aPageChangeIsAnnouncedToAScreenReader() {
         Fixture f;
-        // Accessibility is on only while the announcements are collected, whatever the outcome.
-        struct Active {
+        // The handler stands in for the platform's bridge, and is removed whatever the outcome.
+        struct Handler {
             QAccessible::UpdateHandler previous;
-            Active() {
-                QAccessible::setActive(true);
+            Handler() {
                 g_announcements.clear();
                 previous = QAccessible::installUpdateHandler(&collect);
             }
-            ~Active() {
-                QAccessible::installUpdateHandler(previous);
-                QAccessible::setActive(false);
-            }
-        };
-        qInfo("announcement test: on, active %d", QAccessible::isActive());
-        {
-            Active active;
-            qInfo("active with handler %d, page %u", QAccessible::isActive(),
-                  f.controller()->currentPage());
-            f.controller()->goToPage(1);
-            QTest::qWait(1000);
-            QString types;
-            for (const int t : std::as_const(g_eventTypes)) {
-                types += QString::number(t) + QLatin1Char(' ');
-            }
-            qInfo("page now %u, %d events: %s", f.controller()->currentPage(),
-                  static_cast<int>(g_eventTypes.size()), qPrintable(types));
-            QTRY_VERIFY_WITH_TIMEOUT(!g_announcements.isEmpty(), 10'000);
-            qInfo("announcement test: first %s",
-                  qPrintable(g_announcements.join(QLatin1Char('|'))));
-            // What is announced is the page the view reports, named as the tab names it.
-            QCOMPARE(g_announcements.last(),
-                     QStringLiteral("Page %1 of 3").arg(f.controller()->currentPage() + 1));
-            const qsizetype before = g_announcements.size();
-            f.controller()->goToPage(2);
-            f.controller()->goToPage(0);
-            QTRY_VERIFY_WITH_TIMEOUT(g_announcements.size() > before, 10'000);
-            QCOMPARE(g_announcements.last(),
-                     QStringLiteral("Page %1 of 3").arg(f.controller()->currentPage() + 1));
-            qInfo("announcement test: second %s",
-                  qPrintable(g_announcements.join(QLatin1Char('|'))));
-        }
-        qInfo("announcement test: off");
+            ~Handler() { QAccessible::installUpdateHandler(previous); }
+        } handler;
+        f.controller()->goToPage(1);
+        QTRY_VERIFY_WITH_TIMEOUT(!g_announcements.isEmpty(), 10'000);
+        // What is announced is the page the view reports, named as the tab names it.
+        QCOMPARE(g_announcements.last(),
+                 QStringLiteral("Page %1 of 3").arg(f.controller()->currentPage() + 1));
+        QVERIFY(g_announcements.last() != QStringLiteral("Page 1 of 3"));
+        const qsizetype before = g_announcements.size();
+        f.controller()->goToPage(0);
+        QTRY_VERIFY_WITH_TIMEOUT(g_announcements.size() > before, 10'000);
+        QCOMPARE(g_announcements.last(), QStringLiteral("Page 1 of 3"));
     }
 
     void pagesAreNamedWithTheDocumentsOwnLabels() {

@@ -250,9 +250,7 @@ bool CanvasView::activateFocusedLink() {
 }
 
 void CanvasView::announcePage(quint32 page) {
-    if (!QAccessible::isActive()) {
-        return;
-    }
+    // Qt drops the event itself when no assistive technology is listening.
     QAccessibleAnnouncementEvent event(this, describePage(page));
     event.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
     QAccessible::updateAccessibility(&event);
