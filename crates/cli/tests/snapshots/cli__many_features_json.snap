@@ -28,5 +28,35 @@ expression: "stdout(&run_inspect(&path, &[\"--json\"]))"
     "optional_content": true,
     "signature_fields": true
   },
-  "problems": []
+  "problems": [],
+  "info": null,
+  "tagged": false,
+  "linearized": false,
+  "page_sizes": [
+    {
+      "width": 10.0,
+      "height": 10.0,
+      "pages": 1
+    }
+  ],
+  "page_sizes_truncated": false,
+  "revision_ranges": [
+    {
+      "number": 1,
+      "start": 0,
+      "end": 860
+    }
+  ],
+  "uris": {
+    "items": [
+      "http://example.com"
+    ],
+    "total": 1,
+    "truncated": false
+  },
+  "embedded_files": {
+    "items": [],
+    "total": 0,
+    "truncated": false
+  }
 }

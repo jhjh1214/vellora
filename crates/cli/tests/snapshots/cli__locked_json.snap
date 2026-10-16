@@ -33,5 +33,19 @@ expression: stdout(&out)
   "locked": true,
   "pages": null,
   "features": null,
-  "problems": []
+  "problems": [],
+  "info": null,
+  "tagged": null,
+  "linearized": false,
+  "page_sizes": null,
+  "page_sizes_truncated": false,
+  "revision_ranges": [
+    {
+      "number": 1,
+      "start": 0,
+      "end": 1873
+    }
+  ],
+  "uris": null,
+  "embedded_files": null
 }

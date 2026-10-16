@@ -2,9 +2,11 @@
 //!
 //! **Responsibility:** read-only analysis of a parsed document:
 //!
-//! - document summary: version, page count, object count, revisions, encryption
+//! - document summary: version, page count, object count, revisions (with byte ranges),
+//!   encryption, the information dictionary, page sizes, tagging and linearization
 //! - feature detection: JavaScript, embedded files, launch / URI / submit
-//!   actions, AcroForm, XFA, optional content, signatures
+//!   actions, AcroForm, XFA, optional content, signatures, with the URIs and the names of
+//!   the embedded files
 //! - later: object browser data, size attribution, fonts and images
 //!
 //! Every report type is serialisable, so the CLI (`--json`) and the UI share it.
@@ -21,7 +23,10 @@ mod summary;
 use vellora_cos::{Error, Limits, ObjectStore};
 
 pub use scan::MAX_PROBLEMS;
-pub use summary::{EncryptionSummary, Features, Permissions, Summary};
+pub use summary::{
+    DocumentInfo, EncryptionSummary, Features, MAX_LIST_ITEMS, MAX_PAGE_SIZES, MAX_REVISION_RANGES,
+    MAX_TEXT_CHARS, PageSizeCount, Permissions, RevisionRange, StringList, Summary,
+};
 
 /// How to read the document.
 #[derive(Debug, Clone, Default)]
@@ -86,11 +91,19 @@ pub fn summarize(store: &ObjectStore<'_>) -> Summary {
         problems.push(format!("cross-reference: {error}"));
     }
     let locked = store.is_locked();
+    let mut extras = (None, None, false, None, None);
     let (pages, features, scan_problems) = if locked {
         (None, None, Vec::new())
     } else {
         let mut scanner = scan::Scanner::new(store);
         scanner.run();
+        extras = (
+            Some(scanner.tagged),
+            Some(scanner.page_sizes()),
+            scanner.sizes_truncated,
+            Some(scanner.uris.clone()),
+            Some(scanner.embedded_files.clone()),
+        );
         (
             Some(scanner.pages),
             Some(scanner.features),
@@ -99,6 +112,8 @@ pub fn summarize(store: &ObjectStore<'_>) -> Summary {
     };
     problems.extend(scan_problems);
     problems.truncate(MAX_PROBLEMS);
+
+    let (tagged, page_sizes, page_sizes_truncated, uris, embedded_files) = extras;
 
     // After the scan: reading objects can find damage and repair it.
     let repair_reasons: Vec<String> = store.repaired().iter().map(ToString::to_string).collect();
@@ -118,5 +133,62 @@ pub fn summarize(store: &ObjectStore<'_>) -> Summary {
         pages,
         features,
         problems,
+        info: if locked { None } else { document_info(store) },
+        tagged,
+        linearized: is_linearized(store.data()),
+        page_sizes,
+        page_sizes_truncated,
+        revision_ranges: store
+            .revision_ranges()
+            .into_iter()
+            .take(MAX_REVISION_RANGES)
+            .enumerate()
+            .map(|(index, range)| RevisionRange::new(index as u64 + 1, range.start, range.end))
+            .collect(),
+        uris,
+        embedded_files,
     }
+}
+
+/// The entries of the `/Info` dictionary that are strings.
+fn document_info(store: &ObjectStore<'_>) -> Option<DocumentInfo> {
+    let info = store.info().ok()??;
+    let dict = info.as_dict()?;
+    let text = |key: &[u8]| -> Option<String> {
+        let value = store.deref(dict.get(key)?).ok()?;
+        match &value.kind {
+            vellora_cos::ObjectKind::String(bytes) => Some(vellora_cos::textstring::truncated(
+                vellora_cos::textstring::decode_text_string(bytes),
+                MAX_TEXT_CHARS,
+            )),
+            _ => None,
+        }
+    };
+    Some(DocumentInfo {
+        title: text(b"Title"),
+        author: text(b"Author"),
+        subject: text(b"Subject"),
+        keywords: text(b"Keywords"),
+        creator: text(b"Creator"),
+        producer: text(b"Producer"),
+        creation_date: text(b"CreationDate"),
+        modification_date: text(b"ModDate"),
+    })
+}
+
+/// Whether the first object of the file is a linearization dictionary (§F.2): within the first
+/// kilobyte after the header there is an `obj` whose dictionary has a `/Linearized` key before the
+/// object ends. Only the dictionary is looked for; nothing else about linearization is checked.
+fn is_linearized(data: &[u8]) -> bool {
+    const WINDOW: usize = 1024;
+    let head = &data[..data.len().min(WINDOW)];
+    let Some(obj) = head.windows(3).position(|w| w == b"obj") else {
+        return false;
+    };
+    let after = &head[obj + 3..];
+    let end = after
+        .windows(6)
+        .position(|w| w == b"endobj")
+        .unwrap_or(after.len());
+    after[..end].windows(11).any(|w| w == b"/Linearized")
 }

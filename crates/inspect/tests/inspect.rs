@@ -1,6 +1,7 @@
 //! Tests of the summary and the feature scan on small synthetic files, plus the encrypted
 //! fixtures of `vellora-cos`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::cast_possible_truncation)] // test sizes are tiny
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -14,6 +15,10 @@ use vellora_inspect::{Features, Options, Summary, inspect};
 struct Pdf {
     data: Vec<u8>,
     offsets: BTreeMap<u32, usize>,
+    /// The catalog's object number.
+    root: u32,
+    /// Entries added to the trailer.
+    trailer_extra: String,
 }
 
 impl Pdf {
@@ -21,6 +26,8 @@ impl Pdf {
         Self {
             data: b"%PDF-1.7\n".to_vec(),
             offsets: BTreeMap::new(),
+            root: 1,
+            trailer_extra: String::new(),
         }
     }
 
@@ -44,7 +51,8 @@ impl Pdf {
         }
         write!(
             table,
-            "trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{at}\n%%EOF\n"
+            "trailer\n<< /Size {size} /Root {} 0 R {} >>\nstartxref\n{at}\n%%EOF\n",
+            self.root, self.trailer_extra
         )
         .unwrap();
         data.extend(table.bytes());
@@ -462,4 +470,359 @@ fn a_wrong_password_fails_even_when_the_empty_one_would_open_the_file() {
 fn a_password_on_an_unencrypted_document_is_accepted() {
     let summary = inspect(&doc("", "", &[]), &options("whatever")).unwrap();
     assert!(summary.encryption.is_none());
+}
+
+// ---- Task 18a: the properties and lists of the report ----
+
+#[test]
+fn the_document_information_is_read_as_text() {
+    let mut pdf = Pdf::new();
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    pdf.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>");
+    pdf.object(
+        4,
+        // A literal string, a UTF-16 string with a byte order mark, and an indirect string.
+        "<< /Title (Annual \\(draft\\) report) /Author <FEFF00440075006E006E0065> /Producer 5 0 R \
+         /CreationDate (D:20260102030405+01'00') /Subject (caf\\351) >>",
+    );
+    pdf.object(5, "(Vellora test)");
+    pdf.trailer_extra = "/Info 4 0 R".to_owned();
+    let summary = run(&pdf.finish());
+    let info = summary.info.expect("an information dictionary");
+    assert_eq!(info.title.as_deref(), Some("Annual (draft) report"));
+    assert_eq!(info.author.as_deref(), Some("Dunne"));
+    assert_eq!(info.producer.as_deref(), Some("Vellora test"));
+    assert_eq!(
+        info.creation_date.as_deref(),
+        Some("D:20260102030405+01'00'")
+    );
+    assert_eq!(info.subject.as_deref(), Some("caf\u{e9}"));
+    // Entries the file does not have are absent, not empty.
+    assert_eq!(info.keywords, None);
+    assert_eq!(info.creator, None);
+    assert_eq!(info.modification_date, None);
+}
+
+#[test]
+fn a_file_without_information_has_none_and_a_long_text_is_cut() {
+    assert_eq!(run(&doc("", "", &[])).info, None);
+
+    let long = "x".repeat(5000);
+    let mut pdf = Pdf::new();
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    pdf.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>");
+    pdf.object(4, &format!("<< /Title ({long}) >>"));
+    pdf.trailer_extra = "/Info 4 0 R".to_owned();
+    let title = run(&pdf.finish()).info.unwrap().title.unwrap();
+    assert_eq!(title.chars().count(), vellora_inspect::MAX_TEXT_CHARS + 1);
+    assert!(title.ends_with('\u{2026}'));
+}
+
+#[test]
+fn tagged_follows_the_mark_info_of_the_catalog() {
+    assert_eq!(run(&doc("", "", &[])).tagged, Some(false));
+    assert_eq!(
+        run(&doc("/MarkInfo << /Marked true >>", "", &[])).tagged,
+        Some(true)
+    );
+    assert_eq!(
+        run(&doc("/MarkInfo << /Marked false >>", "", &[])).tagged,
+        Some(false)
+    );
+    assert_eq!(
+        run(&doc("/MarkInfo << >>", "", &[])).tagged,
+        Some(false),
+        "an empty MarkInfo does not mark the document"
+    );
+}
+
+#[test]
+fn a_linearization_dictionary_first_in_the_file_is_noticed() {
+    assert!(!run(&doc("", "", &[])).linearized);
+
+    let mut pdf = Pdf::new();
+    pdf.object(
+        1,
+        "<< /Linearized 1 /L 1000 /H [100 20] /O 4 /E 500 /N 1 /T 900 >>",
+    );
+    pdf.object(2, "<< /Type /Catalog /Pages 3 0 R >>");
+    pdf.object(3, "<< /Type /Pages /Kids [4 0 R] /Count 1 >>");
+    pdf.object(4, "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 10 10] >>");
+    pdf.root = 2;
+    assert!(run(&pdf.finish()).linearized);
+
+    // The key later in the file (a page with a stray /Linearized) is not the dictionary.
+    let data = doc("", "/Linearized 1", &[]);
+    assert!(!run(&data).linearized);
+}
+
+#[test]
+fn page_sizes_are_counted_as_displayed() {
+    let mut pdf = Pdf::new();
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    // The tree sets the media box and the turn; pages may override them.
+    pdf.object(
+        2,
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 612 792] >>",
+    );
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R >>");
+    pdf.object(4, "<< /Type /Page /Parent 2 0 R >>");
+    // Turned a quarter: shown landscape.
+    pdf.object(5, "<< /Type /Page /Parent 2 0 R /Rotate 90 >>");
+    // A crop box wins over the media box, whatever its corner order.
+    pdf.object(
+        6,
+        "<< /Type /Page /Parent 2 0 R /CropBox [100.5 700 400 400.25] >>",
+    );
+    pdf.object(
+        7,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.276 841.89] >>",
+    );
+    let summary = run(&pdf.finish());
+    let sizes = summary.page_sizes.expect("not locked");
+    let got: Vec<(f64, f64, u64)> = sizes.iter().map(|s| (s.width, s.height, s.pages)).collect();
+    assert_eq!(
+        got,
+        [
+            (612.0, 792.0, 2),
+            (299.5, 299.75, 1),
+            (595.28, 841.89, 1),
+            (792.0, 612.0, 1),
+        ],
+        "most pages first, then smaller first"
+    );
+    assert!(!summary.page_sizes_truncated);
+}
+
+#[test]
+fn the_list_of_page_sizes_is_bounded() {
+    let mut pdf = Pdf::new();
+    let pages = vellora_inspect::MAX_PAGE_SIZES as u32 + 5;
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    let kids: Vec<String> = (0..pages).map(|n| format!("{} 0 R", 3 + n)).collect();
+    pdf.object(
+        2,
+        &format!(
+            "<< /Type /Pages /Kids [{}] /Count {pages} >>",
+            kids.join(" ")
+        ),
+    );
+    for n in 0..pages {
+        pdf.object(
+            3 + n,
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} 100] >>",
+                100 + n
+            ),
+        );
+    }
+    let summary = run(&pdf.finish());
+    assert_eq!(
+        summary.page_sizes.unwrap().len(),
+        vellora_inspect::MAX_PAGE_SIZES
+    );
+    assert!(summary.page_sizes_truncated);
+    assert_eq!(summary.pages, Some(u64::from(pages)));
+}
+
+/// `data` with one more revision appended: object `number` and a cross-reference section that
+/// chains to the one before it.
+fn with_update(data: &[u8], number: u32, body: &str) -> Vec<u8> {
+    let text = String::from_utf8_lossy(data);
+    let previous: usize = text
+        .rsplit("startxref\n")
+        .next()
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut out = data.to_vec();
+    let object_at = out.len();
+    out.extend(format!("{number} 0 obj\n{body}\nendobj\n").bytes());
+    let xref_at = out.len();
+    out.extend(format!("xref\n{number} 1\n{object_at:010} 00000 n \n").bytes());
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R /Prev {previous} >>\nstartxref\n{xref_at}\n%%EOF\n",
+            number + 1
+        )
+        .bytes(),
+    );
+    out
+}
+
+#[test]
+fn revisions_are_listed_with_their_byte_ranges() {
+    let first = doc("", "", &[]);
+    let summary = run(&first);
+    assert_eq!(summary.revision_ranges.len(), 1);
+    let only = summary.revision_ranges[0];
+    assert_eq!((only.number, only.start), (1, 0));
+    assert!(only.end <= first.len() as u64 && only.end + 1 >= first.len() as u64);
+
+    let second = with_update(&first, 10, "<< /Updated true >>");
+    let third = with_update(&second, 11, "<< /Updated again >>");
+    let summary = run(&third);
+    assert_eq!(summary.revisions, 3);
+    let ranges = summary.revision_ranges;
+    assert_eq!(
+        ranges.iter().map(|r| r.number).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    // Oldest first, one after the other with no gap, covering the file.
+    assert_eq!(ranges[0].start, 0);
+    assert_eq!(ranges[0].end, ranges[1].start);
+    assert_eq!(ranges[1].end, ranges[2].start);
+    assert!(ranges[2].end + 1 >= third.len() as u64);
+    // The first revision is the file as it was before the update.
+    assert!(ranges[0].end <= first.len() as u64);
+    assert_eq!(
+        &third[(ranges[0].end - 5) as usize..ranges[0].end as usize],
+        b"%%EOF"
+    );
+}
+
+fn annotations(entries: &[String]) -> Vec<u8> {
+    let refs: Vec<String> = (0..entries.len())
+        .map(|n| format!("{} 0 R", 10 + n))
+        .collect();
+    let objects: Vec<(u32, &str)> = entries
+        .iter()
+        .enumerate()
+        .map(|(n, body)| (10 + n as u32, body.as_str()))
+        .collect();
+    doc("", &format!("/Annots [{}]", refs.join(" ")), &objects)
+}
+
+#[test]
+fn the_addresses_of_uri_actions_are_listed() {
+    let data = annotations(&[
+        "<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://example.org/a?x=1) >> >>"
+            .to_owned(),
+        "<< /Type /Annot /Subtype /Link /A << /S /URI /URI (mailto:me@example.org) >> >>"
+            .to_owned(),
+        "<< /Type /Annot /Subtype /Link /A << /S /GoTo /D [3 0 R /Fit] >> >>".to_owned(),
+    ]);
+    let uris = run(&data).uris.expect("not locked");
+    assert_eq!(
+        uris.items,
+        ["https://example.org/a?x=1", "mailto:me@example.org"]
+    );
+    assert_eq!((uris.total, uris.truncated), (2, false));
+}
+
+#[test]
+fn the_list_of_addresses_is_bounded_and_says_so() {
+    let many = vellora_inspect::MAX_LIST_ITEMS + 50;
+    let entries: Vec<String> = (0..many)
+        .map(|n| {
+            format!(
+                "<< /Type /Annot /Subtype /Link /A << /S /URI /URI (http://h.example/{n}) >> >>"
+            )
+        })
+        .collect();
+    let uris = run(&annotations(&entries)).uris.unwrap();
+    assert_eq!(uris.items.len(), vellora_inspect::MAX_LIST_ITEMS);
+    assert_eq!(uris.total, many as u64);
+    assert!(uris.truncated);
+    assert_eq!(uris.items[0], "http://h.example/0");
+
+    // One very long address is cut.
+    let long = format!(
+        "<< /Type /Annot /Subtype /Link /A << /S /URI /URI (http://h.example/{}) >> >>",
+        "a".repeat(5000)
+    );
+    let uris = run(&annotations(&[long])).uris.unwrap();
+    assert_eq!(
+        uris.items[0].chars().count(),
+        vellora_inspect::MAX_TEXT_CHARS + 1
+    );
+}
+
+#[test]
+fn embedded_file_names_come_from_the_name_tree_and_from_attachments() {
+    // A tree with names at the root and in a kid, and a file attachment annotation.
+    let data = doc(
+        "/Names << /EmbeddedFiles 10 0 R >>",
+        "/Annots [13 0 R 14 0 R]",
+        &[
+            (
+                10,
+                "<< /Names [(a.txt) 20 0 R (b.pdf) 21 0 R] /Kids [11 0 R] >>",
+            ),
+            (11, "<< /Limits [(c) (d)] /Names [(c\\351.csv) 22 0 R] >>"),
+            (
+                13,
+                "<< /Type /Annot /Subtype /FileAttachment /FS << /UF (attached.png) /F (x) >> >>",
+            ),
+            (
+                14,
+                "<< /Type /Annot /Subtype /FileAttachment /FS (plain.bin) >>",
+            ),
+        ],
+    );
+    let summary = run(&data);
+    assert!(summary.features.unwrap().embedded_files);
+    let files = summary.embedded_files.unwrap();
+    assert_eq!(
+        files.items,
+        ["a.txt", "b.pdf", "c\u{e9}.csv", "attached.png", "plain.bin"]
+    );
+    assert_eq!((files.total, files.truncated), (5, false));
+
+    // None, when there are none.
+    let none = run(&doc("", "", &[])).embedded_files.unwrap();
+    assert_eq!((none.items.len(), none.total), (0, 0));
+}
+
+#[test]
+fn a_name_tree_that_loops_or_nests_deeply_is_read_once() {
+    let data = doc(
+        "/Names << /EmbeddedFiles 10 0 R >>",
+        "",
+        &[
+            (10, "<< /Names [(one.txt) 20 0 R] /Kids [10 0 R 11 0 R] >>"),
+            (11, "<< /Names [(two.txt) 21 0 R] /Kids [10 0 R] >>"),
+        ],
+    );
+    let files = run(&data).embedded_files.unwrap();
+    assert_eq!(files.items, ["one.txt", "two.txt"]);
+}
+
+#[test]
+fn a_locked_document_reports_no_properties_or_lists() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cos/tests/fixtures/encryption/r6-aes-256-user-password.pdf");
+    let data = std::fs::read(path).unwrap();
+    let summary = run(&data);
+    assert!(summary.locked);
+    assert!(summary.info.is_none() && summary.tagged.is_none());
+    assert!(summary.page_sizes.is_none() && summary.uris.is_none());
+    assert!(summary.embedded_files.is_none());
+    // What the file structure says is still reported.
+    assert_eq!(summary.revision_ranges.len(), 1);
+    assert!(!summary.linearized);
+}
+
+#[test]
+fn a_list_that_is_full_costs_a_counter_and_a_long_string_is_cut_before_it_is_decoded() {
+    // Far more addresses than the list holds, each very long: the report stays small and says so.
+    let long = "a".repeat(100_000);
+    let entries: Vec<String> = (0..300)
+        .map(|n| {
+            format!("<< /Type /Annot /Subtype /Link /A << /S /URI /URI (http://h.example/{n}/{long}) >> >>")
+        })
+        .collect();
+    let uris = run(&annotations(&entries)).uris.unwrap();
+    assert_eq!(uris.total, 300);
+    assert_eq!(uris.items.len(), vellora_inspect::MAX_LIST_ITEMS);
+    assert!(uris.truncated);
+    for item in &uris.items {
+        assert_eq!(item.chars().count(), vellora_inspect::MAX_TEXT_CHARS + 1);
+        assert!(item.ends_with('\u{2026}'));
+    }
 }
