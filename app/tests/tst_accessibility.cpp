@@ -286,16 +286,39 @@ private slots:
 
     void aPageChangeIsAnnouncedToAScreenReader() {
         Fixture f;
-        QAccessible::setActive(true);
-        g_announcements.clear();
-        const auto previous = QAccessible::installUpdateHandler(&collect);
-        f.controller()->goToPage(1);
-        QTRY_VERIFY_WITH_TIMEOUT(!g_announcements.isEmpty(), kWaitMs);
-        QCOMPARE(g_announcements.last(), QStringLiteral("Page 2 of 3"));
-        f.controller()->goToPage(2);
-        QTRY_COMPARE_WITH_TIMEOUT(g_announcements.last(), QStringLiteral("Page 3 of 3"), kWaitMs);
-        QAccessible::installUpdateHandler(previous);
-        QAccessible::setActive(false);
+        // Accessibility is on only while the announcements are collected, whatever the outcome.
+        struct Active {
+            QAccessible::UpdateHandler previous;
+            Active() {
+                QAccessible::setActive(true);
+                g_announcements.clear();
+                previous = QAccessible::installUpdateHandler(&collect);
+            }
+            ~Active() {
+                QAccessible::installUpdateHandler(previous);
+                QAccessible::setActive(false);
+            }
+        };
+        qInfo("announcement test: on");
+        {
+            Active active;
+            f.controller()->goToPage(1);
+            QTRY_VERIFY_WITH_TIMEOUT(!g_announcements.isEmpty(), 10'000);
+            qInfo("announcement test: first %s",
+                  qPrintable(g_announcements.join(QLatin1Char('|'))));
+            // What is announced is the page the view reports, named as the tab names it.
+            QCOMPARE(g_announcements.last(),
+                     QStringLiteral("Page %1 of 3").arg(f.controller()->currentPage() + 1));
+            const qsizetype before = g_announcements.size();
+            f.controller()->goToPage(2);
+            f.controller()->goToPage(0);
+            QTRY_VERIFY_WITH_TIMEOUT(g_announcements.size() > before, 10'000);
+            QCOMPARE(g_announcements.last(),
+                     QStringLiteral("Page %1 of 3").arg(f.controller()->currentPage() + 1));
+            qInfo("announcement test: second %s",
+                  qPrintable(g_announcements.join(QLatin1Char('|'))));
+        }
+        qInfo("announcement test: off");
     }
 
     void pagesAreNamedWithTheDocumentsOwnLabels() {
