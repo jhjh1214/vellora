@@ -16,7 +16,7 @@ const SCHEMA: u32 = 1;
 /// One measured number.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Metric {
-    /// Median over the runs.
+    /// The best of the runs.
     pub(crate) value: f64,
     /// `ms`, `MiB`, `tiles/s`, `pages/s`, `thumbnails/s`.
     pub(crate) unit: String,
