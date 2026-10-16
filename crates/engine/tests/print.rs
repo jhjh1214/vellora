@@ -219,10 +219,13 @@ fn a_band_that_does_not_fit_its_slot_is_refused() {
     ));
 }
 
+/// A visible tile asked for while bands are queued is answered, and every band is answered too.
+/// That the tile goes first is the scheduler's rule and is tested there, deterministically
+/// (`print_bands_wait_for_visible_prefetch_and_thumbnail_tiles`): which request the worker has
+/// already taken when the tile arrives depends on timing, so only the answers are checked here.
 #[test]
-fn bands_wait_for_every_tile_the_reader_wants() {
+fn bands_and_a_visible_tile_are_all_answered() {
     let mut engine = opened(&annotated_pdf());
-    // Big bands keep the worker busy while the rest is queued behind the first.
     let big = TileRect {
         x: 0,
         y: 0,
@@ -240,15 +243,15 @@ fn bands_wait_for_every_tile_the_reader_wants() {
         slot: SlotId(0),
         priority: Priority::Visible,
     });
-    let mut order = Vec::new();
-    while order.len() < 4 {
+    let mut answered = Vec::new();
+    while answered.len() < 4 {
         match engine.recv() {
-            Response::TileReady { req_id, .. } => order.push(req_id.0),
+            Response::TileReady { req_id, .. } => answered.push(req_id.0),
             other => panic!("unexpected {other:?}"),
         }
     }
-    let at = |n: u64| order.iter().position(|x| *x == n).unwrap();
-    assert!(at(10) < at(2) && at(10) < at(3), "{order:?}");
+    answered.sort_unstable();
+    assert_eq!(answered, [1, 2, 3, 10]);
 }
 
 #[test]
