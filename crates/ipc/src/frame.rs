@@ -1351,6 +1351,43 @@ mod tests {
     }
 
     #[test]
+    fn the_summary_messages_round_trip_follow_the_older_variants_and_are_bounded() {
+        let ask = Request::GetSummary {
+            req_id: RequestId(60),
+        };
+        assert_eq!(round_trip(&ask), ask);
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &ask).unwrap();
+        assert_eq!(wire[4], 14, "after GetPermissions (13)");
+
+        let answer = Response::Summary {
+            req_id: RequestId(60),
+            json: "{\n  \"pages\": 1\n}".to_owned(),
+        };
+        assert_eq!(round_trip(&answer), answer);
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &answer).unwrap();
+        assert_eq!(wire[4], 13, "after Permissions (12)");
+
+        // The longest text fits a frame; one byte more is refused on both sides.
+        let longest = Response::Summary {
+            req_id: RequestId(61),
+            json: "x".repeat(crate::MAX_SUMMARY_JSON_BYTES),
+        };
+        assert_eq!(round_trip(&longest), longest);
+        let too_long = Response::Summary {
+            req_id: RequestId(61),
+            json: "x".repeat(crate::MAX_SUMMARY_JSON_BYTES + 1),
+        };
+        let mut wire = Vec::new();
+        assert!(matches!(
+            write_frame(&mut wire, &too_long),
+            Err(Error::Invalid(_))
+        ));
+        assert!(matches!(too_long.validate(), Err(Error::Invalid(_))));
+    }
+
+    #[test]
     fn print_band_limits_are_the_tile_limits() {
         let ok = rect();
         assert_eq!(round_trip(&print_band(64.0, ok)), print_band(64.0, ok));

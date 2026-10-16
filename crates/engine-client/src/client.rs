@@ -367,6 +367,13 @@ pub enum Event {
         /// How many pages it searched.
         pages_done: u32,
     },
+    /// The answer to [`Client::request_summary`].
+    Summary {
+        /// The request it answers.
+        request: RequestId,
+        /// The report as JSON, the text `vellora inspect --json` prints for this document.
+        json: String,
+    },
     /// The answer to [`Client::request_permissions`].
     Permissions {
         /// The request it answers.
@@ -651,6 +658,13 @@ fn navigation_event(response: Response) -> Option<(RequestId, Event)> {
                 skip,
                 total,
                 chars,
+            },
+        ),
+        Response::Summary { req_id, json } => (
+            req_id,
+            Event::Summary {
+                request: req_id,
+                json,
             },
         ),
         Response::Permissions {
@@ -1387,6 +1401,17 @@ impl Client {
             req_id,
             query: query.clone(),
         })
+    }
+
+    /// Asks for the document report. The answer is [`Event::Summary`]: the JSON `vellora inspect
+    /// --json` prints for the document, computed by the engine from the file it has open (with the
+    /// password it was opened with), so the shell never reads the document itself.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile).
+    pub fn request_summary(&self) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetSummary { req_id })
     }
 
     /// Asks what the document's security settings allow. The answer is [`Event::Permissions`].
@@ -2126,6 +2151,24 @@ mod tests {
             }) if r == id
         ));
         assert!(ledger.pending.is_empty());
+    }
+
+    #[test]
+    fn the_report_clears_its_request_and_a_second_answer_is_not_trusted() {
+        let mut ledger = Ledger::new(1);
+        let id = ledger.begin();
+        let answer = Response::Summary {
+            req_id: id,
+            json: "{}".into(),
+        };
+        assert_eq!(
+            ledger.accept(answer.clone()),
+            Accepted::Event(Event::Summary {
+                request: id,
+                json: "{}".into()
+            })
+        );
+        assert_eq!(ledger.accept(answer), Accepted::Dropped);
     }
 
     #[test]

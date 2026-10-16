@@ -381,7 +381,8 @@ impl Host<'_> {
             | Request::FindPageLabel { .. }
             | Request::GetLinks { .. }
             | Request::GetTextPage { .. }
-            | Request::GetPermissions { .. } => (self.navigate(request), Flow::Continue),
+            | Request::GetPermissions { .. }
+            | Request::GetSummary { .. } => (self.navigate(request), Flow::Continue),
         }
     }
 

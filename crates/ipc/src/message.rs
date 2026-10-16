@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
 /// revision 6 password and 32 of an older one, so this is generous.
@@ -19,6 +19,10 @@ pub const MAX_PASSWORD_BYTES: usize = 256;
 pub const MAX_PAGE_SIZES_PER_MESSAGE: usize = 4096;
 /// Longest `Error` message text in bytes.
 pub const MAX_ERROR_MESSAGE_BYTES: usize = 4096;
+
+/// Longest report text in a `Summary` answer (768 KiB): the report as the CLI prints it, with room
+/// in the 1 MiB frame for the envelope. The engine cuts the lists in the report to fit.
+pub const MAX_SUMMARY_JSON_BYTES: usize = 768 * 1024;
 /// Most [`Repair`] entries one `Opened` may carry. A file with more damage gets a last entry that
 /// says how many were left out.
 pub const MAX_REPAIRS: usize = 32;
@@ -535,6 +539,11 @@ pub enum Request {
         /// Correlation id.
         req_id: RequestId,
     },
+    /// The document report: what `vellora inspect --json` prints. Answered with `Summary`.
+    GetSummary {
+        /// Correlation id.
+        req_id: RequestId,
+    },
 }
 
 /// Messages from the engine to the UI.
@@ -669,6 +678,14 @@ pub enum Response {
         /// reader prints at low resolution only.
         print_high_quality: bool,
     },
+    /// The answer to `GetSummary`.
+    Summary {
+        /// The request it answers.
+        req_id: RequestId,
+        /// The report as JSON, exactly the text `vellora inspect --json` prints for the same
+        /// document (pretty-printed, no trailing newline), at most [`MAX_SUMMARY_JSON_BYTES`].
+        json: String,
+    },
 }
 
 /// Rules a decoded message must satisfy beyond being well-formed `postcard`.
@@ -762,7 +779,8 @@ impl Validate for Request {
             | Request::Cancel { .. }
             | Request::Close
             | Request::GetOutlinePath { .. }
-            | Request::GetPermissions { .. } => Ok(()),
+            | Request::GetPermissions { .. }
+            | Request::GetSummary { .. } => Ok(()),
         }
     }
 }
@@ -840,6 +858,12 @@ impl Validate for Response {
                 chars, skip, total, ..
             } => validate_text(chars, *skip, *total),
             Response::Links { links, .. } => validate_links(links),
+            Response::Summary { json, .. } => {
+                if json.len() > MAX_SUMMARY_JSON_BYTES {
+                    return Err(Error::Invalid("summary text is too long"));
+                }
+                Ok(())
+            }
             Response::SearchHits { hits, .. } => validate_hits(hits),
             Response::Hello { .. }
             | Response::TileReady { .. }

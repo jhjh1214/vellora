@@ -325,6 +325,17 @@ quint64 EngineSession::requestPermissions() {
     }
 }
 
+quint64 EngineSession::requestSummary() {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_summary();
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 quint64 EngineSession::requestPrintBand(quint32 page, float scale, quint32 x, quint32 y,
                                         quint32 width, quint32 height, bool grayscale) {
     if (!m_client) {
@@ -491,6 +502,9 @@ void EngineSession::dispatch(const EngineEvent& event) {
     }
     case EventKind::SearchDone:
         emit searchDone(event.request, event.search_end, event.search_hits, event.pages_done);
+        break;
+    case EventKind::Summary:
+        emit summaryReady(event.request, toQString(event.summary_json));
         break;
     case EventKind::Permissions:
         emit permissionsReady(event.request, event.perm_encrypted, event.perm_owner,
