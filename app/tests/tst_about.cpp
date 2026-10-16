@@ -109,14 +109,11 @@ private slots:
     void choosingAComponentShowsItsNotice() {
         vellora::LicensesDialog dialog;
         dialog.show();
-        qInfo("step 1: shown");
         QVERIFY(dialog.select(QStringLiteral("PDFium")));
         QCOMPARE(dialog.viewer()->textCursor().block().text(), QStringLiteral("PDFium"));
-        qInfo("step 2: PDFium selected");
         QVERIFY(dialog.select(QStringLiteral("libjpeg-turbo (in PDFium)")));
         QVERIFY(dialog.viewer()->textCursor().block().text().startsWith(
             QStringLiteral("--- libjpeg_turbo")));
-        qInfo("step 3: libjpeg selected");
         // One copy of the list: begin() and end() of two temporaries are not of the same array.
         const QStringList components = dialog.components();
         const auto found =
@@ -124,11 +121,9 @@ private slots:
                          [](const QString& c) { return c.startsWith(QStringLiteral("zeroize ")); });
         QVERIFY(found != components.cend());
         const QString crate = *found;
-        qInfo("step 4: crate %s", qPrintable(crate));
         QVERIFY(dialog.select(crate));
         QVERIFY(dialog.viewer()->textCursor().block().text().contains(crate));
         QVERIFY(!dialog.select(QStringLiteral("not a component")));
-        qInfo("step 5: crate selected");
 
         // Filtering narrows the list.
         dialog.filter()->setText(QStringLiteral("PDFIUM"));
@@ -139,7 +134,6 @@ private slots:
         QVERIFY(dialog.visibleComponents().isEmpty());
         dialog.filter()->clear();
         QCOMPARE(dialog.visibleComponents(), dialog.components());
-        qInfo("step 6: filtered");
     }
 
     void aMissingLicenseFileIsSaidNotHidden() {
