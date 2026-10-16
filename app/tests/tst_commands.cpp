@@ -267,12 +267,9 @@ private slots:
                               {QKeySequence(Qt::Key_F3)},
                               noop}));
         const QString page = vellora::shortcutsMarkdown(registry);
-        QVERIFY(page.contains(QStringLiteral("| Zoom In | `Ctrl++`, `Ctrl+=` |
-")));
-        QVERIFY(page.contains(QStringLiteral("| Open… | `Ctrl+Shift+O` |
-")));
-        QVERIFY(page.contains(QStringLiteral("| Other | `F3` |
-")));
+        QVERIFY(page.contains(QStringLiteral("| Zoom In | `Ctrl++`, `Ctrl+=` |\n")));
+        QVERIFY(page.contains(QStringLiteral("| Open… | `Ctrl+Shift+O` |\n")));
+        QVERIFY(page.contains(QStringLiteral("| Other | `F3` |\n")));
         QVERIFY(!page.contains(QStringLiteral("No keys")));
         // Groups appear in the order of the first command with a shortcut.
         QVERIFY(page.indexOf(QStringLiteral("## View")) < page.indexOf(QStringLiteral("## File")));
@@ -284,8 +281,7 @@ private slots:
         vellora::MainWindow window;
         const QString page = vellora::shortcutsMarkdown(window.commands());
         QVERIFY(page.contains(QStringLiteral("| Command Palette… | `Ctrl+Shift+P` |")));
-        QVERIFY(page.startsWith(QStringLiteral("# Keyboard shortcuts
-")));
+        QVERIFY(page.startsWith(QStringLiteral("# Keyboard shortcuts\n")));
     }
 };
 
