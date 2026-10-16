@@ -171,11 +171,29 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
-/// `text` with control characters shown as spaces, so that an entry stays on one line.
+/// `text` made safe to print on a terminal and on one line: control characters (the escape that
+/// starts a terminal sequence, line breaks, tabs), line and paragraph separators, and the invisible
+/// formatting characters that reorder or hide text (bidirectional overrides and isolates, zero
+/// width characters, the byte order mark) are shown as spaces. The text comes from the file, and
+/// the file's author does not get to move the cursor or rewrite the line.
 fn one_line(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if is_unsafe_to_print(c) { ' ' } else { c })
         .collect()
+}
+
+fn is_unsafe_to_print(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+        )
 }
 
 /// A heading with a count and the entries under it; an entry is shown as one line of plain text.
@@ -233,4 +251,23 @@ fn feature_rows(f: &Features) -> [(&'static str, bool); 13] {
         ("Optional content (layers)", f.optional_content),
         ("Signature fields", f.signature_fields),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::one_line;
+
+    #[test]
+    fn text_from_a_file_cannot_move_the_cursor_or_reorder_the_line() {
+        assert_eq!(one_line("a\u{1b}[2Jb\r\nc\td"), "a [2Jb  c d");
+        // Right-to-left override, isolates, zero width space, line separator, BOM.
+        assert_eq!(
+            one_line("x\u{202E}y\u{2066}z\u{200B}w\u{2028}v\u{FEFF}"),
+            "x y z w v "
+        );
+        assert_eq!(
+            one_line("plain caf\u{e9} \u{4e2d}\u{6587}"),
+            "plain caf\u{e9} \u{4e2d}\u{6587}"
+        );
+    }
 }

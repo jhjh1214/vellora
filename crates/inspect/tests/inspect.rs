@@ -807,3 +807,22 @@ fn a_locked_document_reports_no_properties_or_lists() {
     assert_eq!(summary.revision_ranges.len(), 1);
     assert!(!summary.linearized);
 }
+
+#[test]
+fn a_list_that_is_full_costs_a_counter_and_a_long_string_is_cut_before_it_is_decoded() {
+    // Far more addresses than the list holds, each very long: the report stays small and says so.
+    let long = "a".repeat(100_000);
+    let entries: Vec<String> = (0..300)
+        .map(|n| {
+            format!("<< /Type /Annot /Subtype /Link /A << /S /URI /URI (http://h.example/{n}/{long}) >> >>")
+        })
+        .collect();
+    let uris = run(&annotations(&entries)).uris.unwrap();
+    assert_eq!(uris.total, 300);
+    assert_eq!(uris.items.len(), vellora_inspect::MAX_LIST_ITEMS);
+    assert!(uris.truncated);
+    for item in &uris.items {
+        assert_eq!(item.chars().count(), vellora_inspect::MAX_TEXT_CHARS + 1);
+        assert!(item.ends_with('\u{2026}'));
+    }
+}

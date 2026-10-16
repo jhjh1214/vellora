@@ -220,9 +220,10 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 && let ObjectKind::Array(items) = &names.kind
             {
                 for pair in items.chunks(2) {
-                    if let Some(key) = pair.first().and_then(string_bytes) {
-                        self.embedded_files
-                            .push(vellora_cos::textstring::decode_text_string(&key));
+                    if let Some(key) = pair.first()
+                        && let ObjectKind::String(bytes) = &key.kind
+                    {
+                        self.embedded_files.push_bytes(bytes);
                     }
                 }
             }
@@ -398,16 +399,19 @@ impl<'s, 'a> Scanner<'s, 'a> {
         let Some(spec) = self.entry(annotation, b"FS") else {
             return;
         };
-        let name = match &spec.kind {
-            ObjectKind::String(bytes) => Some(bytes.to_vec()),
-            ObjectKind::Dict(dict) => [&b"UF"[..], b"F"]
-                .iter()
-                .find_map(|key| self.entry(dict, key).as_deref().and_then(string_of)),
-            _ => None,
-        };
-        if let Some(name) = name {
-            self.embedded_files
-                .push(vellora_cos::textstring::decode_text_string(&name));
+        match &spec.kind {
+            ObjectKind::String(bytes) => self.embedded_files.push_bytes(bytes),
+            ObjectKind::Dict(dict) => {
+                for key in [&b"UF"[..], b"F"] {
+                    if let Some(name) = self.entry(dict, key)
+                        && let ObjectKind::String(bytes) = &name.kind
+                    {
+                        self.embedded_files.push_bytes(bytes);
+                        break;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -475,9 +479,10 @@ impl<'s, 'a> Scanner<'s, 'a> {
             Some(b"Launch") => self.features.launch_actions = true,
             Some(b"URI") => {
                 self.features.uri_actions = true;
-                if let Some(uri) = self.entry(dict, b"URI").as_deref().and_then(string_of) {
-                    self.uris
-                        .push(vellora_cos::textstring::decode_text_string(&uri));
+                if let Some(uri) = self.entry(dict, b"URI")
+                    && let ObjectKind::String(bytes) = &uri.kind
+                {
+                    self.uris.push_bytes(bytes);
                 }
             }
             Some(b"SubmitForm") => self.features.submit_form_actions = true,
@@ -509,19 +514,6 @@ fn name_of(dict: &Dict<'_>, key: &[u8]) -> Option<Vec<u8>> {
         ObjectKind::Name(name) => Some(name.to_vec()),
         _ => None,
     }
-}
-
-/// The bytes of a string object.
-fn string_of(object: &Object<'_>) -> Option<Vec<u8>> {
-    match &object.kind {
-        ObjectKind::String(bytes) => Some(bytes.to_vec()),
-        _ => None,
-    }
-}
-
-/// The bytes of `object` if it is a direct string.
-fn string_bytes(object: &Object<'_>) -> Option<Vec<u8>> {
-    string_of(object)
 }
 
 /// The width and height of a rectangle array of four numbers; `None` for anything else, an

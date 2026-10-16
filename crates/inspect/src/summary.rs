@@ -141,10 +141,20 @@ pub struct StringList {
 }
 
 impl StringList {
-    /// Adds an entry, keeping it only while there is room.
-    pub(crate) fn push(&mut self, text: String) {
+    /// Counts an entry given as the bytes of a PDF text string, and keeps its text only while there
+    /// is room: once the list is full an entry costs a counter and nothing else, however many a
+    /// hostile file lists. Only the first bytes of a long string are decoded.
+    pub(crate) fn push_bytes(&mut self, bytes: &[u8]) {
+        // Enough for MAX_TEXT_CHARS characters in any of the encodings (UTF-16 takes two bytes,
+        // UTF-8 up to four), with the byte order mark.
+        const DECODED_BYTES: usize = 4 * MAX_TEXT_CHARS + 8;
         self.total += 1;
         if self.items.len() < MAX_LIST_ITEMS {
+            let head = &bytes[..bytes.len().min(DECODED_BYTES)];
+            let mut text = vellora_cos::textstring::decode_text_string(head);
+            if head.len() < bytes.len() && text.chars().count() <= MAX_TEXT_CHARS {
+                text.push('\u{2026}'); // cut before decoding, so say so
+            }
             self.items
                 .push(vellora_cos::textstring::truncated(text, MAX_TEXT_CHARS));
         } else {
