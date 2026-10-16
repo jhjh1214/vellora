@@ -92,6 +92,32 @@ impl Report {
         );
     }
 
+    /// Merges runs of the same machine into one report holding the best value of each metric.
+    pub(crate) fn best_of(reports: Vec<Self>) -> Result<Self> {
+        let mut reports = reports.into_iter();
+        let mut best = reports.next().ok_or("no result files")?;
+        for next in reports {
+            if next.os != best.os || next.arch != best.arch {
+                return Err("result files from different machines".into());
+            }
+            for (name, metric) in next.metrics {
+                match best.metrics.get_mut(&name) {
+                    Some(have) => {
+                        if (metric.higher_is_better && metric.value > have.value)
+                            || (!metric.higher_is_better && metric.value < have.value)
+                        {
+                            have.value = metric.value;
+                        }
+                    }
+                    None => {
+                        best.metrics.insert(name, metric);
+                    }
+                }
+            }
+        }
+        Ok(best)
+    }
+
     pub(crate) fn write(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
@@ -230,6 +256,15 @@ mod tests {
         assert_eq!(failed(&before, &now), no_names());
         now.time_ms("open".into(), 26.0, 5.0);
         assert_eq!(failed(&before, &now), ["open"]);
+    }
+
+    #[test]
+    fn merging_keeps_the_best_of_each_metric() {
+        let one = report(&[("time", 10.0, false, true), ("rate", 100.0, true, true)]);
+        let two = report(&[("time", 8.0, false, true), ("rate", 90.0, true, true)]);
+        let best = Report::best_of(vec![one, two]).expect("merge");
+        assert!((best.metrics["time"].value - 8.0).abs() < f64::EPSILON);
+        assert!((best.metrics["rate"].value - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]

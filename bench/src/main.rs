@@ -6,12 +6,13 @@
 //! vellora-bench generate [--dir <dir>] [--only <name>]
 //! vellora-bench run [--dir <dir>] [--only <name>] [--engine <exe>] [--pdfium <lib>] [--runs <n>]
 //!                   [--json <file>]
-//! vellora-bench compare <previous.json> <current.json> [--max-regression <percent>]
+//! vellora-bench compare --previous <file>... --current <file>... [--max-regression <percent>]
 //! ```
 //!
 //! `run` generates a missing document first. Documents live in `bench/data/` (git-ignored).
 //! `run --json` also writes every number to a file; `compare` is the performance gate: it exits 1
-//! when a tracked metric of the second file is worse than the first by more than the limit
+//! when a tracked metric of `--current` is worse than `--previous` by more than the limit
+//! (several files on a side are merged, taking the best value of each metric)
 //! (default 10 %). Exit codes: 0 success, 1 a measurement failed or the gate failed, 2 usage error.
 //!
 //! This is dev tooling: a boxed error instead of `thiserror`, and it reads only files it wrote.
@@ -32,7 +33,7 @@ pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const USAGE: &str = "usage:
   vellora-bench generate [--dir <dir>] [--only <name>]
   vellora-bench run [--dir <dir>] [--only <name>] [--engine <exe>] [--pdfium <lib>] [--runs <n>] [--json <file>]
-  vellora-bench compare <previous.json> <current.json> [--max-regression <percent>]
+  vellora-bench compare --previous <file>... --current <file>... [--max-regression <percent>]
 names: text-10k, images-500mb";
 
 #[derive(Default)]
@@ -118,26 +119,46 @@ fn run_command(command: &str, options: &Options) -> Result<()> {
     Ok(())
 }
 
-/// The gate: prints every tracked metric's change and fails if one is too much worse.
-fn compare_command(args: &[String]) -> ExitCode {
-    let (paths, limit) = match args {
-        [previous, current] => ([previous, current], 10.0),
-        [previous, current, flag, value] if flag == "--max-regression" => {
-            match value.parse::<f64>() {
-                Ok(percent) if percent > 0.0 => ([previous, current], percent),
-                _ => {
-                    eprintln!("{USAGE}");
-                    return ExitCode::from(2);
+/// The files after `--previous` and `--current`, and the limit in percent.
+fn parse_compare(args: &[String]) -> Option<(Vec<&Path>, Vec<&Path>, f64)> {
+    let (mut previous, mut current) = (Vec::new(), Vec::new());
+    let mut limit = 10.0;
+    let mut into: Option<bool> = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--previous" => into = Some(false),
+            "--current" => into = Some(true),
+            "--max-regression" => {
+                limit = args.next()?.parse().ok().filter(|&p: &f64| p > 0.0)?;
+            }
+            file => {
+                if into? {
+                    current.push(Path::new(file));
+                } else {
+                    previous.push(Path::new(file));
                 }
             }
         }
-        _ => {
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
+    }
+    (!previous.is_empty() && !current.is_empty()).then_some((previous, current, limit))
+}
+
+/// The gate: prints every tracked metric's change and fails if one is too much worse. Several
+/// files on one side are merged by taking the best value of each metric.
+fn compare_command(args: &[String]) -> ExitCode {
+    let Some((previous, current, limit)) = parse_compare(args) else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
     };
-    let read = |path: &String| report::Report::read(Path::new(path));
-    let (previous, current) = match (read(paths[0]), read(paths[1])) {
+    let read = |files: &[&Path]| {
+        files
+            .iter()
+            .map(|file| report::Report::read(file))
+            .collect::<Result<Vec<_>>>()
+            .and_then(report::Report::best_of)
+    };
+    let (previous, current) = match (read(&previous), read(&current)) {
         (Ok(previous), Ok(current)) => (previous, current),
         (Err(error), _) | (_, Err(error)) => {
             eprintln!("error: {error}");
