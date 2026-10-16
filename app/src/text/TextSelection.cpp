@@ -114,6 +114,15 @@ void TextSelection::selectAll(quint32 pageCount) {
     emit changed();
 }
 
+void TextSelection::setRange(Position anchor, Position focus) {
+    cancelCopy();
+    m_active = true;
+    m_unit = Unit::Character;
+    m_anchorLo = m_anchorHi = anchor;
+    m_focusLo = m_focusHi = focus;
+    emit changed();
+}
+
 bool TextSelection::rangeOn(quint32 page, quint32* from, quint32* to) const {
     if (isEmpty()) {
         return false;

@@ -140,6 +140,7 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     addView(viewMenu, "view.thumbnails", true);
     addView(viewMenu, "view.outline");
     addView(viewMenu, "view.searchResults");
+    viewMenu->addAction(m_commands.createAction(QStringLiteral("view.caretBrowsing"), this));
     viewMenu->addSeparator();
     auto* layoutMenu = viewMenu->addMenu(tr("Page &Layout"));
     for (const char* id : {"view.layout.single", "view.layout.continuous", "view.layout.twoUp",
@@ -229,6 +230,8 @@ void MainWindow::registerCommands() {
         [this] { currentTab().selectAll(); });
     add("edit.selectPage", tr("Select All on Page"),
         {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A)}, [this] { currentTab().selectPage(); });
+    add("view.caretBrowsing", tr("Caret Browsing"), {QKeySequence(Qt::Key_F7)},
+        [this] { currentTab().toggleCaretBrowsing(); });
     add("edit.find", tr("Find…"), {QKeySequence::Find}, [this] { currentTab().showFind(); });
     add("edit.findNext", tr("Find Next"), {QKeySequence(Qt::Key_F3)},
         [this] { currentTab().findNext(); });

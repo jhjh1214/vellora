@@ -31,3 +31,17 @@ Text is copied in the order the PDF engine extracts it ("reading order"), which 
 - **Characters without a Unicode value** (some old fonts) are left out of the copy, and the spaces that PDFium infers between words are copied but cannot be highlighted.
 - **Very large pages.** Only the first 524,288 characters of a page are read.
 - **Scanned pages** have no text to select.
+
+## Caret browsing
+
+F7 (View -> Caret Browsing) puts a text cursor in the document that you move with the keyboard, for reading and selecting without a mouse. It is off until you turn it on, and F7 turns it off again.
+
+| Key | Moves the caret |
+|---|---|
+| Left, Right | one character |
+| Ctrl+Left, Ctrl+Right | one word |
+| Up, Down | one line, keeping the column |
+| Home, End | to the start or end of the line |
+| Ctrl+Home, Ctrl+End | to the start or end of the document |
+
+The caret goes on across pages and skips a page that has no text. With Shift held, a move selects from where the caret was; without it, the selection is dropped. A click puts the caret where you clicked. The caret starts at the end of the selection if there is one, else at the top of the page you are on. Left and Right follow the order of the text in the file, so on right-to-left and vertical text they do not always go the way the arrow points.

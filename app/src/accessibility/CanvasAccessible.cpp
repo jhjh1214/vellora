@@ -131,8 +131,8 @@ public:
     void addSelection(int, int) override {}
     void removeSelection(int) override {}
     void setSelection(int, int, int) override {}
-    int cursorPosition() const override { return 0; }
-    void setCursorPosition(int) override {}
+    int cursorPosition() const override;
+    void setCursorPosition(int position) override;
     QString text(int startOffset, int endOffset) const override;
     int characterCount() const override { return static_cast<int>(content().text.size()); }
     QRect characterRect(int offset) const override;
@@ -534,6 +534,32 @@ void PageAccessible::selection(int selectionIndex, int* startOffset, int* endOff
     *endOffset = offsetOf(to);
 }
 
+int PageAccessible::cursorPosition() const {
+    CanvasView* v = view();
+    const auto caret = v == nullptr ? std::nullopt : v->caret()->position();
+    if (!caret || caret->page != m_page) {
+        return 0;
+    }
+    const PageString& c = content();
+    return caret->caret >= static_cast<quint32>(c.starts.size())
+               ? static_cast<int>(c.text.size())
+               : c.starts.at(static_cast<int>(caret->caret));
+}
+
+void PageAccessible::setCursorPosition(int position) {
+    CanvasView* v = view();
+    const PageText* text = v == nullptr ? nullptr : v->text()->page(m_page);
+    if (v == nullptr || text == nullptr || !v->caret()->isOn()) {
+        return;
+    }
+    const int index = std::max(characterAt(position), 0);
+    // A caret is placed by a point, so aim at the left edge of the character.
+    if (index < text->chars.size() && text->chars.at(index).hasBox()) {
+        const QRectF& box = text->chars.at(index).rect;
+        v->caret()->placeAt(m_page, QPointF(box.left() + box.width() / 4.0, box.center().y()));
+    }
+}
+
 int PageAccessible::selectionCount() const {
     CanvasView* v = view();
     quint32 from = 0;
@@ -581,6 +607,11 @@ void installCanvasAccessibility() {
         return true;
     }();
     Q_UNUSED(installed);
+}
+
+QAccessibleInterface* canvasPageInterface(CanvasView* view, quint32 page) {
+    auto* canvas = dynamic_cast<CanvasAccessible*>(QAccessible::queryAccessibleInterface(view));
+    return canvas == nullptr ? nullptr : canvas->pageInterface(page);
 }
 
 QAccessibleInterface* canvasLinkInterface(CanvasView* view, quint32 page, int index) {

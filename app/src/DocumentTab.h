@@ -153,6 +153,12 @@ public:
     // The print being done, or null.
     PrintJob* printJob() const { return m_printJob; }
 
+    // ---- caret browsing ----
+    // F7: a text cursor that the arrow keys move through the text (Ctrl for words, Home and End
+    // for lines, Ctrl+Home and Ctrl+End for the document); with Shift it selects. Off by default.
+    void toggleCaretBrowsing();
+    bool caretBrowsing() const { return m_canvas->caret()->isOn(); }
+
     // Shows the sidebar on its outline tab.
     void showOutline();
     // The label of a page: the document's own if it has page labels, else its number.

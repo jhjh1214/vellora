@@ -142,6 +142,8 @@ add_library(vellora_shell STATIC
   src/search/SearchResultsView.h
   src/sidebar/OutlineView.cpp
   src/sidebar/OutlineView.h
+  src/text/CaretBrowser.cpp
+  src/text/CaretBrowser.h
   src/text/SelectionOverlay.cpp
   src/text/SelectionOverlay.h
   src/text/TextLayer.cpp

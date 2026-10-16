@@ -39,13 +39,16 @@ int clampToInt(double value) {
 
 CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     : QAbstractScrollArea(parent), m_controller(session), m_links(session, &m_controller, this),
-      m_text(session, &m_controller, this), m_selection(&m_text, this), m_canvas(nullptr) {
+      m_text(session, &m_controller, this), m_selection(&m_text, this),
+      m_caret(&m_text, &m_selection, &m_controller, this), m_canvas(nullptr) {
     // The canvas is a child of the viewport, not the viewport itself: the scroll area consumes the
     // viewport's paint events, so a QRhiWidget used as viewport would never be asked to render.
     m_canvas = new CanvasWidget(session, &m_controller, viewport());
     // The hits of a search are under the selection, which stays visible on a hit.
     m_searchOverlay = new SearchOverlay(&m_controller, viewport());
     m_overlay = new SelectionOverlay(&m_controller, &m_selection, viewport());
+    m_overlay->setCaretBrowser(&m_caret);
+    connect(&m_caret, &CaretBrowser::changed, this, [this] { announceCaret(); });
     m_banner = new QLabel(viewport());
     m_banner->setTextFormat(Qt::PlainText); // engine-derived text must never be read as markup
     m_banner->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -137,6 +140,7 @@ void CanvasView::setSearch(SearchController* search) {
 
 void CanvasView::reset() {
     m_focusLink.reset();
+    m_caret.reset();
     m_selection.clear();
     m_text.reset();
     m_links.reset();
@@ -249,6 +253,19 @@ bool CanvasView::activateFocusedLink() {
     return true;
 }
 
+void CanvasView::announceCaret() {
+    const auto caret = m_caret.caret();
+    if (!caret) {
+        return;
+    }
+    if (QAccessibleInterface* page = canvasPageInterface(this, caret->page)) {
+        if (QAccessibleTextInterface* text = page->textInterface()) {
+            QAccessibleTextCursorEvent event(page, text->cursorPosition());
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+}
+
 void CanvasView::announcePage(quint32 page) {
     // Qt drops the event itself when no assistive technology is listening.
     QAccessibleAnnouncementEvent event(this, describePage(page));
@@ -306,6 +323,10 @@ void CanvasView::wheelEvent(QWheelEvent* event) {
 }
 
 void CanvasView::keyPressEvent(QKeyEvent* event) {
+    if (m_caret.isOn() && handleCaretKey(event)) {
+        event->accept();
+        return;
+    }
     if (m_focusLink && event->modifiers() == Qt::NoModifier) {
         if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
             event->key() == Qt::Key_Space) {
@@ -347,6 +368,33 @@ void CanvasView::keyPressEvent(QKeyEvent* event) {
         return;
     }
     QAbstractScrollArea::keyPressEvent(event);
+}
+
+bool CanvasView::handleCaretKey(QKeyEvent* event) {
+    const Qt::KeyboardModifiers modifiers =
+        event->modifiers() & ~(Qt::KeypadModifier | Qt::ShiftModifier);
+    const bool extend = event->modifiers().testFlag(Qt::ShiftModifier);
+    const bool word = modifiers == Qt::ControlModifier;
+    if (modifiers != Qt::NoModifier && !word) {
+        return false;
+    }
+    using Move = CaretBrowser::Move;
+    switch (event->key()) {
+    case Qt::Key_Left:
+        return m_caret.move(word ? Move::WordLeft : Move::Left, extend);
+    case Qt::Key_Right:
+        return m_caret.move(word ? Move::WordRight : Move::Right, extend);
+    case Qt::Key_Up:
+        return !word && m_caret.move(Move::Up, extend);
+    case Qt::Key_Down:
+        return !word && m_caret.move(Move::Down, extend);
+    case Qt::Key_Home:
+        return m_caret.move(word ? Move::DocumentStart : Move::LineStart, extend);
+    case Qt::Key_End:
+        return m_caret.move(word ? Move::DocumentEnd : Move::LineEnd, extend);
+    default:
+        return false;
+    }
 }
 
 void CanvasView::keyReleaseEvent(QKeyEvent* event) {
@@ -449,6 +497,9 @@ void CanvasView::startSelection(QMouseEvent* event) {
                                                      : TextSelection::Unit::Line;
     const bool extend = event->modifiers().testFlag(Qt::ShiftModifier);
     m_selecting = m_selection.begin(at->page, at->point, unit, extend);
+    if (m_caret.isOn()) {
+        m_caret.placeAt(at->page, at->point);
+    }
 }
 
 void CanvasView::dragSelection() {
