@@ -106,7 +106,9 @@ struct Fixture {
 };
 
 QList<QString> g_announcements;
+QList<int> g_eventTypes;
 void collect(QAccessibleEvent* event) {
+    g_eventTypes.append(static_cast<int>(event->type()));
     if (event->type() == QAccessible::Announcement) {
         g_announcements.append(static_cast<QAccessibleAnnouncementEvent*>(event)->message());
     }
@@ -299,10 +301,19 @@ private slots:
                 QAccessible::setActive(false);
             }
         };
-        qInfo("announcement test: on");
+        qInfo("announcement test: on, active %d", QAccessible::isActive());
         {
             Active active;
+            qInfo("active with handler %d, page %u", QAccessible::isActive(),
+                  f.controller()->currentPage());
             f.controller()->goToPage(1);
+            QTest::qWait(1000);
+            QString types;
+            for (const int t : std::as_const(g_eventTypes)) {
+                types += QString::number(t) + QLatin1Char(' ');
+            }
+            qInfo("page now %u, %d events: %s", f.controller()->currentPage(),
+                  static_cast<int>(g_eventTypes.size()), qPrintable(types));
             QTRY_VERIFY_WITH_TIMEOUT(!g_announcements.isEmpty(), 10'000);
             qInfo("announcement test: first %s",
                   qPrintable(g_announcements.join(QLatin1Char('|'))));
