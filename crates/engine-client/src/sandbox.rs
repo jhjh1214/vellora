@@ -208,18 +208,13 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
     ];
     handles.extend_from_slice(spec.inherit);
 
-    let (process, thread) = create_suspended(
-        spec,
-        &engine,
-        container.0,
-        &handles,
-        [
-            stdin_child.as_raw_handle(),
-            stdout_child.as_raw_handle(),
-            stderr_child.as_raw_handle(),
-        ],
-    )
-    .map_err(at("creating the process"))?;
+    let standard = [
+        stdin_child.as_raw_handle(),
+        stdout_child.as_raw_handle(),
+        stderr_child.as_raw_handle(),
+    ];
+    let (process, thread) = create_with_retries(spec, &engine, container.0, &handles, standard)
+        .map_err(at("creating the process"))?;
     let mut child = Child {
         id: process.1,
         process: process.0,
@@ -249,6 +244,44 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
         stderr: File::from(stderr_parent),
         guard,
     })
+}
+
+/// `ERROR_FILE_NOT_FOUND`: what `CreateProcess` answers, for an executable that is there, when the
+/// container's profile is not (yet) registered.
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+/// Creates the suspended process, trying again a few times when Windows says the file is missing
+/// although the engine was found: another process starting engines at the same moment may be
+/// registering the container's profile, and the profile is whole a moment later. Each retry makes
+/// sure the profile is registered first.
+fn create_with_retries(
+    spec: &Spec<'_>,
+    engine: &Path,
+    container: PSID,
+    handles: &[HANDLE],
+    standard: [HANDLE; 3],
+) -> io::Result<((OwnedHandle, u32), OwnedHandle)> {
+    let mut wait = DERIVE_FIRST_WAIT_MS;
+    for attempt in 1..=DERIVE_ATTEMPTS {
+        match create_suspended(spec, engine, container, handles, standard) {
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND)
+                    && engine.is_file()
+                    && attempt < DERIVE_ATTEMPTS =>
+            {
+                *PROFILE_READY
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+                if let Ok(name) = wide(OsStr::new(CONTAINER_NAME)) {
+                    let _ = ensure_profile(&name);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                wait *= 2;
+            }
+            other => return other,
+        }
+    }
+    unreachable!("the last attempt returns")
 }
 
 /// The `AppContainer` SID derived from [`CONTAINER_NAME`], released with `FreeSid`.

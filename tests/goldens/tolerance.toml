@@ -5,9 +5,16 @@
 #   - it has the size of the golden, and
 #   - the share of its pixels in which any channel differs from the golden by more than
 #     `pixel_delta` (of 255) is at most `max_ratio`.
-# The values are set from what the suite measured on the CI runners (see docs/dev/testing.md) with
-# room above the worst page; a change that makes a page differ more than this must be looked at,
-# never absorbed by raising a number.
+# The values are set from what the suite measured on the CI runners (the share of differing pixels at
+# each threshold is printed for every page, `-- --nocapture`), with room above the worst page. A
+# change that makes a page differ more than this must be looked at, never absorbed by raising a
+# number.
+#
+# Measured on the first run (43 pages), share of pixels differing by more than the threshold:
+#   Windows (the goldens were made here): 0 at every threshold.
+#   Linux:  0.0049 at 32, 0.0013 at 64, 0.0001 at 96 (worst page pdfium-zero_length_stream p1).
+#   macOS:  0.094 at 32, 0.045 at 64, 0.026 at 96, 0.015 at 128, 0.005 at 192 (worst page
+#           pdfjs-tracemonkey p2: its text is drawn with other font hinting and smoothing).
 
 [windows]
 pixel_delta = 32
@@ -15,8 +22,8 @@ max_ratio = 0.002
 
 [linux]
 pixel_delta = 64
-max_ratio = 0.02
+max_ratio = 0.005
 
 [macos]
-pixel_delta = 64
-max_ratio = 0.02
+pixel_delta = 128
+max_ratio = 0.03
