@@ -2,6 +2,7 @@
 
 #include "AboutDialog.h"
 #include "CrashDialog.h"
+#include "PlainText.h"
 #include "RepairBar.h"
 #include "diagnostics/CrashReports.h"
 #include "diagnostics/Logging.h"
@@ -111,6 +112,7 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     fileMenu->addAction(recent);
     connect(m_recentMenu, &QMenu::aboutToShow, this, &MainWindow::refreshRecentMenu);
     fileMenu->addSeparator();
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.exportReport"), this));
     fileMenu->addAction(m_commands.createAction(QStringLiteral("file.print"), this));
     fileMenu->addAction(m_commands.createAction(QStringLiteral("file.printPreview"), this));
     fileMenu->addSeparator();
@@ -140,6 +142,7 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     addView(viewMenu, "view.thumbnails", true);
     addView(viewMenu, "view.outline");
     addView(viewMenu, "view.searchResults");
+    addView(viewMenu, "view.inspector");
     viewMenu->addAction(m_commands.createAction(QStringLiteral("view.caretBrowsing"), this));
     viewMenu->addAction(m_commands.createAction(QStringLiteral("view.nextLink"), this));
     viewMenu->addAction(m_commands.createAction(QStringLiteral("view.previousLink"), this));
@@ -209,6 +212,8 @@ void MainWindow::registerCommands() {
     });
     add("file.removeUnavailableRecent", tr("Remove Unavailable Files"), {},
         [this] { removeUnavailableRecent(); });
+    add("file.exportReport", tr("Export Report as JSON…"), {},
+        [this] { currentTab().exportReport(); });
     add("file.print", tr("Print…"), {QKeySequence::Print}, [this] { currentTab().print(); });
     add("file.printPreview", tr("Print Preview…"), {}, [this] { currentTab().printPreview(); });
     add("file.close", tr("Close Tab"), {QKeySequence::Close}, [this] { closeCurrentTab(); });
@@ -254,6 +259,10 @@ void MainWindow::registerCommands() {
     });
     add("view.outline", tr("Outline"), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O)}, [this] {
         currentTab().showOutline();
+        updateViewActions();
+    });
+    add("view.inspector", tr("Document Info"), {QKeySequence(Qt::CTRL | Qt::Key_I)}, [this] {
+        currentTab().showInspector();
         updateViewActions();
     });
     add("view.goToPage", tr("Go to Page…"), {QKeySequence(Qt::CTRL | Qt::Key_G)},
@@ -444,7 +453,7 @@ void MainWindow::updateTabTitle(DocumentTab* tab) {
     const int index = m_tabs->indexOf(tab);
     if (index >= 0) {
         m_tabs->setTabText(index, tabTitle(tab->fileName()));
-        m_tabs->setTabToolTip(index, tab->path());
+        m_tabs->setTabToolTip(index, plainToolTip(tab->path()));
     }
     updateChrome();
 }
@@ -456,7 +465,7 @@ void MainWindow::updateChrome() {
     }
     DocumentTab& tab = currentTab();
     m_documentStatus->setText(tab.documentStatus());
-    m_documentStatus->setToolTip(tab.documentStatusTip());
+    m_documentStatus->setToolTip(plainToolTip(tab.documentStatusTip()));
     m_pageStatus->setText(tab.pageStatus());
     m_zoomStatus->setText(tab.zoomStatus());
     statusBar()->clearMessage();
@@ -636,7 +645,7 @@ void MainWindow::refreshRecentMenu() {
     for (const QString& path : files) {
         const QFileInfo info(path);
         QAction* entry = m_recentMenu->addAction(tabTitle(info.fileName()));
-        entry->setToolTip(path);
+        entry->setToolTip(plainToolTip(path));
         entry->setStatusTip(path);
         if (info.isReadable()) {
             connect(entry, &QAction::triggered, this, [this, path] { openDocument(path); });

@@ -2,6 +2,7 @@
 // the tab bar, and putting a document back where it was left.
 #include "KillProcess.h"
 #include "MainWindow.h"
+#include "PlainText.h"
 #include "RepairBar.h"
 #include "settings/AppSettings.h"
 
@@ -65,7 +66,8 @@ private slots:
         QCOMPARE(tabWidget(window)->tabText(0), QStringLiteral("a.pdf"));
         // The file name is text: an ampersand must not become a mnemonic.
         QCOMPARE(tabWidget(window)->tabText(1), QStringLiteral("b&&c.pdf"));
-        QCOMPARE(tabWidget(window)->tabToolTip(1), b);
+        // A tool tip holding a file name is escaped, so that a name cannot be read as markup.
+        QCOMPARE(tabWidget(window)->tabToolTip(1), vellora::plainToolTip(b));
 
         // The same file again switches to its tab, whatever way the path is written.
         QVERIFY(window.openDocument(dir.filePath(QStringLiteral("x/../a.pdf"))));
@@ -268,7 +270,7 @@ private slots:
             window.refreshRecentMenu();
             QList<QAction*> files;
             for (QAction* action : window.recentMenu()->actions()) {
-                if (!action->isSeparator() && action->toolTip().endsWith(QStringLiteral(".pdf"))) {
+                if (!action->isSeparator() && action->toolTip().contains(QStringLiteral(".pdf"))) {
                     files.append(action);
                 }
             }
@@ -276,7 +278,7 @@ private slots:
         };
         QCOMPARE(entries().size(), 3);
         QCOMPARE(entries().at(0)->text(), QStringLiteral("c.pdf"));
-        QCOMPARE(entries().at(0)->toolTip(), c);
+        QCOMPARE(entries().at(0)->toolTip(), vellora::plainToolTip(c));
         for (const QAction* action : entries()) {
             QVERIFY(action->isEnabled());
         }

@@ -159,6 +159,17 @@ public:
     void toggleCaretBrowsing();
     bool caretBrowsing() const { return m_canvas->caret()->isOn(); }
 
+    // ---- the Inspector ----
+    // Shows the sidebar on its Info tab: properties, security, revisions and repairs of the
+    // document, from the report the engine makes. It is asked for the first time the tab is shown.
+    void showInspector();
+    // Saves the report as JSON, the text `vellora inspect --json` prints, to a file the reader
+    // chooses (the report is asked for first if it is not here). `setExportChooser` replaces the
+    // file dialog, which tests do; an empty answer is "cancel".
+    using ExportChooser = std::function<QString(const QString& suggestedName)>;
+    void setExportChooser(ExportChooser chooser) { m_exportChooser = std::move(chooser); }
+    void exportReport();
+
     // Shows the sidebar on its outline tab.
     void showOutline();
     // The label of a page: the document's own if it has page labels, else its number.
@@ -236,6 +247,7 @@ private:
     void openUri(const QString& uri);
     void notify(const QString& text);
     void askToPrint(bool preview);
+    void writeReport();
     PrintContext printContext(bool lowResolutionOnly, bool preview) const;
     std::optional<PrintRequest> promptForPrint(const PrintContext& context);
     void startPrint(const PrintRequest& request);
@@ -288,6 +300,9 @@ private:
     quint64 m_permissionRequest = 0;
     bool m_previewAsked = false;
     PrintPrompt m_printPrompt;
+    ExportChooser m_exportChooser;
+    // The reader asked for the report to be saved while it was still being made.
+    bool m_exportPending = false;
     PrintRequest m_printRequest;
     PrintJob* m_printJob = nullptr;
     QProgressDialog* m_printProgress = nullptr;

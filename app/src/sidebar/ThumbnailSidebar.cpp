@@ -10,7 +10,7 @@ namespace vellora {
 
 ThumbnailSidebar::ThumbnailSidebar(EngineSession* session, CanvasController* controller,
                                    QWidget* parent)
-    : QWidget(parent) {
+    : QWidget(parent), m_session(session) {
     m_tabs = new QTabBar(this);
     m_tabs->setDrawBase(true);
     m_tabs->setExpanding(true);
@@ -47,6 +47,9 @@ ThumbnailSidebar::ThumbnailSidebar(EngineSession* session, CanvasController* con
 
     connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
         m_pages->setCurrentIndex(index);
+        if (m_inspector != nullptr && static_cast<Tab>(index) == Tab::Inspector) {
+            m_inspector->refresh();
+        }
         emit currentTabChanged(static_cast<Tab>(index));
     });
     connect(m_slider, &QSlider::valueChanged, m_view, &ThumbnailView::setThumbnailWidth);
@@ -74,6 +77,16 @@ void ThumbnailSidebar::setSearch(SearchController* search) {
     m_results = new SearchResultsView(search, this);
     m_pages->addWidget(m_results);
     m_tabs->addTab(tr("Search"));
+}
+
+void ThumbnailSidebar::addInspector() {
+    if (m_inspector != nullptr) {
+        return;
+    }
+    // After the Search tab, whose index the enum fixes at 2.
+    m_inspector = new InspectorView(m_session, this);
+    m_pages->addWidget(m_inspector);
+    m_tabs->addTab(tr("Info"));
 }
 
 } // namespace vellora

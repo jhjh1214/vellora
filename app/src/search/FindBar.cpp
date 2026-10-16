@@ -1,5 +1,7 @@
 #include "search/FindBar.h"
 
+#include "PlainText.h"
+
 #include <QCheckBox>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -136,8 +138,9 @@ void FindBar::searchNow() {
 
 void FindBar::refreshStatus() {
     m_status->setText(m_search->statusText());
-    m_status->setToolTip(m_search->state() == SearchController::State::Failed ? m_search->error()
-                                                                              : QString());
+    m_status->setToolTip(m_search->state() == SearchController::State::Failed
+                             ? plainToolTip(m_search->error())
+                             : QString());
 }
 
 bool FindBar::eventFilter(QObject* watched, QEvent* event) {
