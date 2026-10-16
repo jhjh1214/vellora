@@ -55,6 +55,7 @@ QString CrashReports::directory() {
 }
 
 QString CrashReports::systemDescription() {
+    // i18n-ok: the text of a report file for developers; reports are English
     return QStringLiteral("version: %1\ncommit: %2\nbuilt: %3\nqt: %4\nsystem: %5 (%6)")
         .arg(QLatin1String(buildinfo::kVersion), QLatin1String(buildinfo::kCommit),
              QLatin1String(buildinfo::kBuildDate), QString::fromLatin1(qVersion()),
@@ -139,6 +140,7 @@ QUrl CrashReports::issueUrl(const QList<Report>& reports) {
         names = names.mid(0, kMaxListed);
         names.append(QStringLiteral("..."));
     }
+    // i18n-ok: the draft of a public GitHub issue, which the project reads in English
     const QString what =
         QStringLiteral(
             "Vellora recorded a crash report (written locally; nothing was uploaded).\n\n"
@@ -151,6 +153,7 @@ QUrl CrashReports::issueUrl(const QList<Report>& reports) {
                                  : QStringLiteral("- ") + names.join(QStringLiteral("\n- ")));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("template"), QStringLiteral("bug_report.yml"));
+    // i18n-ok: issue title, see above
     query.addQueryItem(QStringLiteral("title"),
                        QStringLiteral("Crash: Vellora %1 on %2")
                            .arg(QLatin1String(buildinfo::kVersion), issueSystem()));
