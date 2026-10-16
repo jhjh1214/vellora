@@ -68,8 +68,8 @@ int main(int argc, char** argv) {
         const QByteArray page = vellora::shortcutsMarkdown(window.commands()).toUtf8();
         if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
             out.write(page) != page.size()) {
-            err << "vellora: cannot write " << out.fileName() << ": " << out.errorString() << '
-'; return 1;
+            err << "vellora: cannot write " << out.fileName() << ": " << out.errorString() << '\n';
+            return 1;
         }
         return 0;
     }
