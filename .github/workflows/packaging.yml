@@ -72,8 +72,12 @@ jobs:
           $here = (Get-Location).Path
           wix build packaging/windows/vellora.wxs -arch x64 -ext WixToolset.UI.wixext `
             -d "Version=$version" -d "StageDir=$here\dist\stage" -d "LicenseRtf=$here\dist\license.rtf" `
-            -sice ICE38 -sice ICE64 -sice ICE91 -o "dist/Vellora-$version-x64.msi"
+            -sval -o "dist/Vellora-$version-x64.msi"
           if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
+          # Validation with the checks that do not apply to a per-user install suppressed (files
+          # under the user's profile have no HKCU key path, ICE38/ICE64/ICE91).
+          wix msi validate -sice ICE38 -sice ICE64 -sice ICE91 "dist/Vellora-$version-x64.msi"
+          if ($LASTEXITCODE -ne 0) { throw 'MSI validation failed' }
       - name: Smoke test (install, run, association, uninstall)
         run: |
           $msi = (Get-ChildItem dist/Vellora-*-x64.msi).FullName
