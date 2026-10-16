@@ -92,6 +92,7 @@ private:
 
     // The sheet being printed.
     QTransform m_transform;
+    bool m_scaled = false;
     QRectF m_clip;
     QList<QRect> m_queue;
     QHash<quint64, QRect> m_inflight;

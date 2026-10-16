@@ -151,6 +151,7 @@ bool PrintJob::beginSheet(QString& error) {
         m_transform.rotate(90.0);
     }
     m_transform.scale(ratio, ratio);
+    m_scaled = std::abs(ratio - 1.0) > 1e-9;
     m_clip = QRectF(QPointF(0.0, 0.0), printable);
 
     const QSize band = bandSize(m_renderWidth, m_renderHeight, m_session.slotBytes());
@@ -231,7 +232,8 @@ void PrintJob::onTileReady(quint64 request) {
 void PrintJob::drawBand(const QRect& band, const QImage& image) {
     m_painter.save();
     m_painter.setClipRect(m_clip);
-    m_painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // Only a band that is scaled is smoothed: at one to one, interpolation would blur the pixels.
+    m_painter.setRenderHint(QPainter::SmoothPixmapTransform, m_scaled);
     m_painter.setTransform(m_transform, true);
     m_painter.drawImage(band.topLeft(), image);
     m_painter.restore();

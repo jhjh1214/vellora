@@ -548,6 +548,8 @@ private slots:
         EngineSession printed;
         QVERIFY(openSession(printed, path));
         QCOMPARE(printed.pageCount(), 3U);
+        QStringList report;
+        bool allWithin = true;
         for (quint32 page = 0; page < 3; ++page) {
             const QImage source = rasterise(f.tab->session(), page, 2.0F);
             const QImage output = rasterise(printed, page, 2.0F);
@@ -558,13 +560,20 @@ private slots:
             expected.fill(Qt::white);
             QPainter(&expected).drawImage(0, 0, source);
             const Difference d = difference(output, expected);
-            QVERIFY2(d.mean <= kMeanLimit && d.loud <= kLoudLimit,
-                     qPrintable(QStringLiteral("page %1: mean difference %2, %3 of the pixels are "
-                                               "off")
-                                    .arg(page + 1)
-                                    .arg(d.mean)
-                                    .arg(d.loud)));
+            report.append(QStringLiteral("page %1: mean difference %2, %3 of the pixels are off")
+                              .arg(page + 1)
+                              .arg(d.mean)
+                              .arg(d.loud));
+            allWithin &= d.mean <= kMeanLimit && d.loud <= kLoudLimit;
+            // The comparison can tell pages apart: another page of the source is far off.
+            const QImage other = rasterise(f.tab->session(), (page + 1) % 3, 2.0F);
+            QImage otherPaper(output.size(), QImage::Format_RGB32);
+            otherPaper.fill(Qt::white);
+            QPainter(&otherPaper).drawImage(0, 0, other);
+            QVERIFY2(difference(output, otherPaper).mean > 4.0 * kMeanLimit,
+                     "a different page is not told apart");
         }
+        QVERIFY2(allWithin, qPrintable(report.join(QStringLiteral("; "))));
     }
 
     void aPageIsTurnedFittedAndCentredOnThePaper() {

@@ -145,6 +145,7 @@ void DocumentTab::startPrint(const PrintRequest& request) {
     });
     connect(m_printProgress, &QProgressDialog::canceled, job, &PrintJob::cancel);
     connect(job, &PrintJob::finished, this, &DocumentTab::onPrintFinished);
+    emit printStarted(job);
     const QString error = job->start();
     if (!error.isEmpty()) {
         delete m_printProgress;
@@ -170,6 +171,8 @@ void DocumentTab::onPrintFinished(PrintJob::Result result, const QString& text) 
         m_printJob->deleteLater();
         m_printJob = nullptr;
     }
+    // The printer (and with it the file of a PDF printer) is let go once the job is.
+    m_printRequest = PrintRequest{};
     switch (result) {
     case PrintJob::Result::Completed:
         emit message(tr("Printed."));
