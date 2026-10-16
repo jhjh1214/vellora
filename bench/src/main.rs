@@ -5,15 +5,21 @@
 //! ```text
 //! vellora-bench generate [--dir <dir>] [--only <name>]
 //! vellora-bench run [--dir <dir>] [--only <name>] [--engine <exe>] [--pdfium <lib>] [--runs <n>]
+//!                   [--json <file>]
+//! vellora-bench compare <previous.json> <current.json> [--max-regression <percent>]
 //! ```
 //!
 //! `run` generates a missing document first. Documents live in `bench/data/` (git-ignored).
-//! Exit codes: 0 success, 1 a measurement failed, 2 usage error.
+//! `run --json` also writes every number to a file; `compare` is the performance gate: it exits 1
+//! when a tracked metric of the second file is worse than the first by more than the limit
+//! (default 10 %). Exit codes: 0 success, 1 a measurement failed or the gate failed, 2 usage error.
 //!
 //! This is dev tooling: a boxed error instead of `thiserror`, and it reads only files it wrote.
 
 mod generate;
 mod measure;
+mod report;
+mod scenarios;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -25,7 +31,8 @@ pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const USAGE: &str = "usage:
   vellora-bench generate [--dir <dir>] [--only <name>]
-  vellora-bench run [--dir <dir>] [--only <name>] [--engine <exe>] [--pdfium <lib>] [--runs <n>]
+  vellora-bench run [--dir <dir>] [--only <name>] [--engine <exe>] [--pdfium <lib>] [--runs <n>] [--json <file>]
+  vellora-bench compare <previous.json> <current.json> [--max-regression <percent>]
 names: text-10k, images-500mb";
 
 #[derive(Default)]
@@ -35,6 +42,7 @@ struct Options {
     engine: Option<PathBuf>,
     pdfium: Option<PathBuf>,
     runs: Option<usize>,
+    json: Option<PathBuf>,
 }
 
 fn parse(mut rest: &[String]) -> Option<Options> {
@@ -45,6 +53,7 @@ fn parse(mut rest: &[String]) -> Option<Options> {
             "--only" => options.only = Some(Kind::parse(value)?),
             "--engine" => options.engine = Some(PathBuf::from(value)),
             "--pdfium" => options.pdfium = Some(PathBuf::from(value)),
+            "--json" => options.json = Some(PathBuf::from(value)),
             "--runs" => options.runs = Some(value.parse().ok().filter(|&n| n > 0)?),
             _ => return None,
         }
@@ -100,7 +109,74 @@ fn run_command(command: &str, options: &Options) -> Result<()> {
         results.push(measure::measure(&setup, kind, &path, runs)?);
     }
     measure::print_table(&results, runs);
+    if let Some(json) = &options.json {
+        let mut report = report::Report::new(runs);
+        measure::record(&results, &mut report);
+        report.write(json)?;
+        eprintln!("wrote {}", json.display());
+    }
     Ok(())
+}
+
+/// The gate: prints every tracked metric's change and fails if one is too much worse.
+fn compare_command(args: &[String]) -> ExitCode {
+    let (paths, limit) = match args {
+        [previous, current] => ([previous, current], 10.0),
+        [previous, current, flag, value] if flag == "--max-regression" => {
+            match value.parse::<f64>() {
+                Ok(percent) if percent > 0.0 => ([previous, current], percent),
+                _ => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let read = |path: &String| report::Report::read(Path::new(path));
+    let (previous, current) = match (read(paths[0]), read(paths[1])) {
+        (Ok(previous), Ok(current)) => (previous, current),
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if previous.os != current.os || previous.arch != current.arch {
+        eprintln!(
+            "error: the files are from different machines ({}/{} and {}/{})",
+            previous.os, previous.arch, current.os, current.arch
+        );
+        return ExitCode::from(1);
+    }
+    let changes = report::compare(&previous, &current, limit / 100.0);
+    println!(
+        "{:<52} {:>12} {:>12} {:>8}",
+        "metric", "previous", "current", "worse"
+    );
+    for c in &changes {
+        println!(
+            "{:<52} {:>12.1} {:>12.1} {:>+7.1}% {}{}",
+            c.name,
+            c.previous,
+            c.current,
+            c.worse_by * 100.0,
+            c.unit,
+            if c.failed { "  FAIL" } else { "" }
+        );
+    }
+    let failed = changes.iter().filter(|c| c.failed).count();
+    if failed > 0 {
+        eprintln!("error: {failed} metric(s) are worse by more than {limit} %");
+        return ExitCode::from(1);
+    }
+    println!(
+        "ok: {} tracked metrics, none worse by more than {limit} %",
+        changes.len()
+    );
+    ExitCode::SUCCESS
 }
 
 fn main() -> ExitCode {
@@ -109,6 +185,9 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
+    if command == "compare" {
+        return compare_command(rest);
+    }
     let Some(options) = parse(rest).filter(|_| matches!(command.as_str(), "generate" | "run"))
     else {
         eprintln!("{USAGE}");

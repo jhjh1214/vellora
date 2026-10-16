@@ -1,0 +1,80 @@
+name: Benchmarks
+
+# The performance gate (M1 task 21, ADR-0016). `cargo xtask bench` measures the engine on each OS;
+# the result is compared with the last good one and the job fails if a tracked metric is worse by
+# more than 10 %. Called by `nightly.yml`; can also be started by hand.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [m1/task-21-bench-gate]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  bench:
+    name: benchmarks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch PDFium
+        run: cargo xtask pdfium fetch
+      # The last good result of this OS. A new key every run, so that the result of this run
+      # becomes the baseline of the next one (the newest cache with the prefix is restored).
+      - name: Restore the baseline
+        uses: actions/cache@v4
+        with:
+          path: bench-baseline
+          key: bench-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: bench-${{ runner.os }}-
+      - name: Measure
+        shell: bash
+        run: |
+          mkdir -p bench-results
+          cargo xtask bench run --runs 5 --json bench-results/results.json 2>&1 | tee bench-results/table.txt
+          # TEMPORARY (noise measurement for the thresholds): two more full runs.
+          for i in 2 3; do cargo xtask bench run --runs 5 --json bench-results/results-$i.json 2>&1 | grep -v '^\[engine ' > bench-results/table-$i.txt; done
+      - name: Compare with the baseline
+        shell: bash
+        run: |
+          if [ -f bench-baseline/results.json ]; then
+            cargo xtask bench compare bench-baseline/results.json bench-results/results.json | tee bench-results/comparison.txt
+          else
+            echo "No baseline yet: nothing to compare with." | tee bench-results/comparison.txt
+          fi
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Benchmarks (${{ matrix.os }})'
+            echo '```'
+            grep -v '^\[engine ' bench-results/table.txt || true
+            cat bench-results/comparison.txt 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep this result as the baseline
+        shell: bash
+        run: |
+          mkdir -p bench-baseline
+          cp bench-results/results.json bench-baseline/results.json
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ runner.os }}
+          path: bench-results
+          if-no-files-found: ignore

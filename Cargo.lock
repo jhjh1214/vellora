@@ -1463,6 +1463,8 @@ dependencies = [
 name = "vellora-bench"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "vellora-cos",
  "vellora-engine-client",
  "vellora-ipc",

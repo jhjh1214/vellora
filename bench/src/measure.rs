@@ -26,7 +26,9 @@ use vellora_ipc::{Priority, SlotId, TileRect};
 use vellora_shm::SlotGeometry;
 
 use crate::Result;
-use crate::generate::{Kind, commit_section};
+use crate::generate::{self, Kind, commit_section};
+use crate::report::Report;
+use crate::scenarios::{self, Mode, Outcome};
 
 /// How long to wait for the engine before calling a measurement failed.
 const PATIENCE: Duration = Duration::from_secs(120);
@@ -39,6 +41,18 @@ const SLOT_BYTES: u32 = 2 << 20;
 pub(crate) struct Setup {
     engine: PathBuf,
     pdfium: PathBuf,
+}
+
+impl Setup {
+    /// The client configuration for an engine with this PDFium and a tile region of `geometry`.
+    pub(crate) fn config(&self, geometry: SlotGeometry) -> ClientConfig {
+        let mut config = ClientConfig::new(&self.engine, geometry);
+        config.env.push((
+            vellora_render_env().into(),
+            self.pdfium.clone().into_os_string(),
+        ));
+        config
+    }
 }
 
 impl Setup {
@@ -106,11 +120,7 @@ struct Peak {
 }
 
 fn open_to_first_page(setup: &Setup, path: &Path) -> Result<Opened> {
-    let mut config = ClientConfig::new(&setup.engine, SlotGeometry::new(2, SLOT_BYTES)?);
-    config.env.push((
-        vellora_render_env().into(),
-        setup.pdfium.clone().into_os_string(),
-    ));
+    let config = setup.config(SlotGeometry::new(2, SLOT_BYTES)?);
     let started = Instant::now();
     let client = Client::open(config, path)?;
     let mut to_open = None;
@@ -245,6 +255,10 @@ pub(crate) struct Results {
     cos_open: Vec<Duration>,
     opens: Vec<Opened>,
     commits: Vec<Commit>,
+    /// Open -> first page with the file cache empty, and how that was arranged.
+    cold: Vec<Duration>,
+    cold_kind: &'static str,
+    scenarios: Vec<(String, Vec<Outcome>)>,
 }
 
 fn commit(
@@ -299,13 +313,109 @@ pub(crate) fn measure(setup: &Setup, kind: Kind, path: &Path, runs: usize) -> Re
         commit(setup, path, &original, "metadata edit", 0)?,
         commit(setup, path, &original, "5 MiB insert", LARGE_COMMIT_BYTES)?,
     ];
+    let (cold, cold_kind) = cold_opens(setup, kind, path, runs)?;
+    let scenarios = run_scenarios(setup, kind, path, runs)?;
     Ok(Results {
         name: kind.name(),
         file_bytes: original.len() as u64,
         cos_open,
         opens,
         commits,
+        cold,
+        cold_kind,
+        scenarios,
     })
+}
+
+/// Asks the OS to forget its cached file data. `true` if it did. Needs root (Linux) or `purge`
+/// (macOS, with passwordless `sudo` on the CI runners); Windows has no command for it.
+fn drop_file_cache() -> bool {
+    use std::process::{Command, Stdio};
+    let run = |program: &str, args: &[&str]| {
+        Command::new(program)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    if cfg!(target_os = "linux") {
+        run("sync", &[])
+            && (std::fs::write("/proc/sys/vm/drop_caches", b"3").is_ok()
+                || run(
+                    "sudo",
+                    &["-n", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches"],
+                ))
+    } else if cfg!(target_os = "macos") {
+        run("sync", &[]) && (run("purge", &[]) || run("sudo", &["-n", "purge"]))
+    } else {
+        false
+    }
+}
+
+/// Opens the document `runs` times with a cold file cache. Where the OS cannot drop its cache,
+/// each run opens a freshly written copy instead (which the OS usually still has cached, so that
+/// number is closer to a warm one; the returned label says which it was).
+fn cold_opens(
+    setup: &Setup,
+    kind: Kind,
+    path: &Path,
+    runs: usize,
+) -> Result<(Vec<Duration>, &'static str)> {
+    let mut times = Vec::new();
+    let mut label = "dropped";
+    for _ in 0..runs {
+        if drop_file_cache() {
+            times.push(open_to_first_page(setup, path)?.to_first_page);
+        } else {
+            label = "fresh-file";
+            let fresh = path.with_extension("fresh.pdf");
+            generate::generate(kind, &fresh)?;
+            let opened = open_to_first_page(setup, &fresh);
+            let _ = std::fs::remove_file(&fresh);
+            times.push(opened?.to_first_page);
+        }
+    }
+    Ok((times, label))
+}
+
+/// Scenario sizes per document: scroll steps (single, facing, continuous), thumbnails, pages
+/// printed. The search runs over the text document only (the other has no text to find).
+fn run_scenarios(
+    setup: &Setup,
+    kind: Kind,
+    path: &Path,
+    runs: usize,
+) -> Result<Vec<(String, Vec<Outcome>)>> {
+    let (steps, thumbs, printed) = match kind {
+        Kind::Text => ([60, 30, 80], 300, 12),
+        Kind::Images => ([40, 20, 60], 100, 8),
+    };
+    let mut out = Vec::new();
+    for (mode, steps) in Mode::ALL.into_iter().zip(steps) {
+        let mut outcomes = Vec::new();
+        for _ in 0..runs {
+            outcomes.push(scenarios::scroll(setup, path, mode, steps)?);
+        }
+        out.push((mode.name().to_owned(), outcomes));
+    }
+    let mut repeat = |name: &str, run: &dyn Fn() -> Result<Outcome>| -> Result<()> {
+        let mut outcomes = Vec::new();
+        for _ in 0..runs {
+            outcomes.push(run()?);
+        }
+        out.push((name.to_owned(), outcomes));
+        Ok(())
+    };
+    repeat("thumbnail-fling", &|| {
+        scenarios::thumbnails(setup, path, thumbs)
+    })?;
+    if kind == Kind::Text {
+        // The only page with this heading is the last one, so the engine reads every page.
+        repeat("search", &|| scenarios::search(setup, path, "Page 9999"))?;
+    }
+    repeat("print", &|| scenarios::print(setup, path, printed))?;
+    Ok(out)
 }
 
 fn median(mut values: Vec<Duration>) -> Duration {
@@ -365,6 +475,20 @@ pub(crate) fn print_table(results: &[Results], runs: usize) {
                     .max_by_key(|p| p.bytes)
             )
         );
+        println!(
+            "  engine: cold open -> first page {} ({})",
+            ms(median(r.cold.clone())),
+            r.cold_kind
+        );
+        for (scenario, outcomes) in &r.scenarios {
+            let rate = median_f64(outcomes.iter().map(Outcome::per_second).collect());
+            let step = if outcomes.iter().any(|o| !o.steps.is_empty()) {
+                format!(", median step {:.1} ms", step_ms(outcomes))
+            } else {
+                String::new()
+            };
+            println!("  {scenario:<24} {rate:>9.1} per s{step}");
+        }
         for c in &r.commits {
             println!(
                 "  commit ({}, {} B section): build {}, append+fsync {}, re-open -> first page {} (total {}), peak {}",
@@ -378,5 +502,83 @@ pub(crate) fn print_table(results: &[Results], runs: usize) {
             );
         }
         println!();
+    }
+}
+
+fn millis(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn median_f64(mut values: Vec<f64>) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values.get(values.len() / 2).copied().unwrap_or_default()
+}
+
+/// The median step time of each run, then the median of those.
+fn step_ms(outcomes: &[Outcome]) -> f64 {
+    median_f64(
+        outcomes
+            .iter()
+            .map(|o| median_f64(o.steps.iter().map(|d| millis(*d)).collect()))
+            .collect(),
+    )
+}
+
+/// Puts the numbers of `results` into `report`.
+pub(crate) fn record(results: &[Results], report: &mut Report) {
+    for r in results {
+        let name = r.name;
+        report.cold.insert(name.into(), r.cold_kind.into());
+        report.time_ms(
+            format!("{name}/cos-open"),
+            millis(median(r.cos_open.clone())),
+            2.0,
+        );
+        report.time_ms(
+            format!("{name}/open-first-page"),
+            millis(median(r.opens.iter().map(|o| o.to_first_page).collect())),
+            5.0,
+        );
+        report.time_ms(
+            format!("{name}/cold-open-first-page"),
+            millis(median(r.cold.clone())),
+            5.0,
+        );
+        if let Some(c) = r.commits.last() {
+            report.time_ms(
+                format!("{name}/reopen-after-commit"),
+                millis(c.reopen.to_first_page),
+                5.0,
+            );
+        }
+        if let Some(peak) = r
+            .opens
+            .iter()
+            .filter_map(|o| o.peak)
+            .max_by_key(|p| p.bytes)
+        {
+            #[allow(clippy::cast_precision_loss)]
+            report.memory_mib(
+                format!("{name}/engine-peak-memory"),
+                peak.bytes as f64 / (1024.0 * 1024.0),
+                peak.is_peak,
+            );
+        }
+        for (scenario, outcomes) in &r.scenarios {
+            let (unit, label) = match scenario.as_str() {
+                "thumbnail-fling" => ("thumbnails/s", "thumbnails-per-s"),
+                "search" | "print" => ("pages/s", "pages-per-s"),
+                _ => ("tiles/s", "tiles-per-s"),
+            };
+            report.rate(
+                format!("{name}/{scenario}/{label}"),
+                median_f64(outcomes.iter().map(Outcome::per_second).collect()),
+                unit,
+                0.0,
+            );
+            if outcomes.iter().any(|o| !o.steps.is_empty()) {
+                report.time_ms(format!("{name}/{scenario}/step-ms"), step_ms(outcomes), 5.0);
+            }
+        }
     }
 }
