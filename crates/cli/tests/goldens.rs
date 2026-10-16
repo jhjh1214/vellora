@@ -30,20 +30,43 @@ struct Tolerance {
     max_ratio: f64,
 }
 
-fn tolerance() -> Tolerance {
-    let text = std::fs::read_to_string(root("../../tests/goldens/tolerance.toml")).unwrap();
-    let table: toml::Table = text.parse().unwrap();
-    let os = if cfg!(windows) {
+fn os_name() -> &'static str {
+    if cfg!(windows) {
         "windows"
     } else if cfg!(target_os = "macos") {
         "macos"
     } else {
         "linux"
-    };
-    let entry = table[os].as_table().unwrap();
+    }
+}
+
+fn tolerance_table() -> toml::Table {
+    let text = std::fs::read_to_string(root("../../tests/goldens/tolerance.toml")).unwrap();
+    text.parse().unwrap()
+}
+
+fn tolerance() -> Tolerance {
+    let table = tolerance_table();
+    let entry = table[os_name()].as_table().unwrap();
     Tolerance {
         pixel_delta: u8::try_from(entry["pixel_delta"].as_integer().unwrap()).unwrap(),
         max_ratio: entry["max_ratio"].as_float().unwrap(),
+    }
+}
+
+/// What the document `id` may differ by on this system: its own allowance if it has one, else the
+/// system's.
+fn tolerance_for(id: &str) -> Tolerance {
+    let base = tolerance();
+    let table = tolerance_table();
+    let allowed = table[os_name()]
+        .get("allow")
+        .and_then(toml::Value::as_table)
+        .and_then(|allow| allow.get(id))
+        .and_then(toml::Value::as_float);
+    Tolerance {
+        max_ratio: allowed.unwrap_or(base.max_ratio).max(base.max_ratio),
+        ..base
     }
 }
 
@@ -214,6 +237,7 @@ fn the_rendering_matches_the_goldens() {
             "{} is missing: run `cargo xtask corpus fetch --manifest tests/corpus/golden-manifest.toml`",
             pdf.display()
         );
+        let tolerance = tolerance_for(id);
         let files = render(&pdf, &format!("1-{pages}"), dpi, &scratch.path().join(id));
         assert_eq!(files.len(), pages as usize, "{id}");
         for (page, file) in (1..).zip(&files) {
@@ -312,6 +336,17 @@ fn the_tolerances_are_set_for_every_system_and_are_strict_enough_to_mean_somethi
         let delta = entry["pixel_delta"].as_integer().unwrap();
         let ratio = entry["max_ratio"].as_float().unwrap();
         assert!((1..=96).contains(&delta), "{os}: pixel_delta {delta}");
-        assert!(ratio > 0.0 && ratio <= 0.05, "{os}: max_ratio {ratio}");
+        assert!(ratio > 0.0 && ratio <= 0.01, "{os}: max_ratio {ratio}");
+        // An allowance is for a document, not a way round the limit: bounded, and named.
+        if let Some(allow) = entry.get("allow").and_then(toml::Value::as_table) {
+            assert!(allow.len() <= 10, "{os}: too many allowances");
+            for (id, limit) in allow {
+                let limit = limit.as_float().unwrap();
+                assert!(
+                    limit > ratio && limit <= 0.1,
+                    "{os}: allowance of {id} is {limit}"
+                );
+            }
+        }
     }
 }

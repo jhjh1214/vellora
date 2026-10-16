@@ -11,10 +11,16 @@
 # number.
 #
 # Measured on the first run (43 pages), share of pixels differing by more than the threshold:
-#   Windows (the goldens were made here): 0 at every threshold.
+#   Windows (the goldens were made on this system, locally): 0 at every threshold.
 #   Linux:  0.0049 at 32, 0.0013 at 64, 0.0001 at 96 (worst page pdfium-zero_length_stream p1).
 #   macOS:  0.094 at 32, 0.045 at 64, 0.026 at 96, 0.015 at 128, 0.005 at 192 (worst page
 #           pdfjs-tracemonkey p2: its text is drawn with other font hinting and smoothing).
+
+# `[<os>.allow]` lists the few documents whose pages are noisier on that system than the rest, each
+# with the share of differing pixels it may have (the measured worst page of the document at the
+# system's `pixel_delta`, with room). They are text-heavy pages, drawn there with other font hinting
+# and smoothing. Everything not listed must meet the system's `max_ratio`: that keeps the suite able
+# to see a small real change (a page shifted by two pixels differs by about 1.5% at delta 128).
 
 [windows]
 pixel_delta = 32
@@ -25,5 +31,13 @@ pixel_delta = 64
 max_ratio = 0.005
 
 [macos]
-pixel_delta = 128
-max_ratio = 0.03
+pixel_delta = 64
+max_ratio = 0.003
+
+[macos.allow]
+"pdfjs-tracemonkey" = 0.07
+"pdfjs-TAMReview" = 0.04
+"pdfium-zero_length_stream" = 0.015
+"vera-pdf_ua-1-5-t01-fail-a" = 0.012
+"vera-pdf_ua-2-5-t03-fail-a" = 0.012
+"vera-pdf_ua-1-5-t03-pass-a" = 0.01
