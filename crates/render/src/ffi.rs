@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use libloading::Library;
 
-use crate::renderer::TextChar;
+use crate::renderer::{RenderMode, TextChar};
 use crate::{Error, LastError};
 
 /// The bytes of one document revision, kept alive for as long as PDFium may read them.
@@ -124,6 +124,10 @@ pub(crate) const BITMAP_BGRX: c_int = 3;
 
 /// `FPDF_ANNOT`: also render annotations that need no user interaction.
 pub(crate) const RENDER_ANNOT: c_int = 0x01;
+/// `FPDF_GRAYSCALE`: render in grey.
+pub(crate) const RENDER_GRAYSCALE: c_int = 0x08;
+/// `FPDF_PRINTING`: render for a printer.
+pub(crate) const RENDER_PRINTING: c_int = 0x800;
 
 /// Whether a `Pdfium` exists in this process. PDFium keeps global state, and
 /// `FPDF_InitLibrary` / `FPDF_DestroyLibrary` must pair up exactly once per process.
@@ -361,6 +365,7 @@ impl Api {
         index: usize,
         matrix: Matrix,
         (width, height): (u32, u32),
+        mode: RenderMode,
         pixels: &mut [u8],
     ) -> Result<(), Error> {
         let page_number = Self::page_number(document, index)?;
@@ -414,7 +419,13 @@ impl Api {
                     page,
                     &raw const matrix,
                     &raw const clip,
-                    RENDER_ANNOT,
+                    match mode {
+                        RenderMode::Screen => RENDER_ANNOT,
+                        RenderMode::Print => RENDER_ANNOT | RENDER_PRINTING,
+                        RenderMode::PrintGrayscale => {
+                            RENDER_ANNOT | RENDER_PRINTING | RENDER_GRAYSCALE
+                        }
+                    },
                 );
                 (self.close_page)(page);
             }

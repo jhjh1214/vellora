@@ -429,6 +429,7 @@ mod tests {
             (Priority::Visible, 0),
             (Priority::Prefetch, 1),
             (Priority::Thumbnail, 2),
+            (Priority::Print, 3),
         ] {
             let mut wire = Vec::new();
             write_frame(
@@ -1307,6 +1308,83 @@ mod tests {
         };
         let full = page(0, u32::MAX, vec![wide; MAX_TEXT_CHARS_PER_MESSAGE]);
         assert_eq!(round_trip(&full), full);
+    }
+
+    fn print_band(scale: f32, rect: TileRect) -> Request {
+        Request::RenderPrint {
+            req_id: RequestId(40),
+            page: 3,
+            scale,
+            rect,
+            slot: SlotId(2),
+            grayscale: true,
+        }
+    }
+
+    #[test]
+    fn print_and_permission_messages_round_trip_and_follow_the_older_variants_on_the_wire() {
+        for (message, variant) in [
+            (print_band(4.0, rect()), 12),
+            (
+                Request::GetPermissions {
+                    req_id: RequestId(41),
+                },
+                13,
+            ),
+        ] {
+            assert_eq!(round_trip(&message), message);
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &message).unwrap();
+            assert_eq!(wire[4], variant, "after Search (11)");
+        }
+        let permissions = Response::Permissions {
+            req_id: RequestId(41),
+            encrypted: true,
+            owner: false,
+            print: true,
+            print_high_quality: false,
+        };
+        assert_eq!(round_trip(&permissions), permissions);
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &permissions).unwrap();
+        assert_eq!(wire[4], 12, "after SearchDone (11)");
+    }
+
+    #[test]
+    fn print_band_limits_are_the_tile_limits() {
+        let ok = rect();
+        assert_eq!(round_trip(&print_band(64.0, ok)), print_band(64.0, ok));
+        let bad = [
+            print_band(0.0, ok),
+            print_band(f32::NAN, ok),
+            print_band(MAX_TILE_SCALE + 0.5, ok),
+            print_band(1.0, TileRect { width: 0, ..ok }),
+            print_band(
+                1.0,
+                TileRect {
+                    height: MAX_TILE_SIDE + 1,
+                    ..ok
+                },
+            ),
+            print_band(
+                1.0,
+                TileRect {
+                    x: MAX_TILE_ORIGIN + 1,
+                    ..ok
+                },
+            ),
+        ];
+        for message in &bad {
+            let mut wire = Vec::new();
+            assert!(
+                matches!(write_frame(&mut wire, message), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+            assert!(
+                matches!(message.validate(), Err(Error::Invalid(_))),
+                "{message:?}"
+            );
+        }
     }
 
     fn query(text: &str) -> SearchQuery {

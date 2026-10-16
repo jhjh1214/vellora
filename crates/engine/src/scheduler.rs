@@ -2,7 +2,7 @@
 //!
 //! [`Queue`] holds the tiles the UI has asked for and hands them to the single render worker in
 //! priority order: [`Priority::Visible`] before [`Priority::Prefetch`] before
-//! [`Priority::Thumbnail`], first in first out within one priority. A cancelled request that is
+//! [`Priority::Thumbnail`] before [`Priority::Print`], first in first out within one priority. A cancelled request that is
 //! still queued is dropped; one already rendering is allowed to finish (PDFium cannot be
 //! interrupted), but [`Queue::finish`] tells the worker to discard the result, so a cancelled
 //! request never gets an answer.
@@ -48,7 +48,7 @@ pub(crate) enum Cancelled {
 
 struct QueueState<T> {
     /// One FIFO per priority, indexed by [`lane`].
-    lanes: [VecDeque<(RequestId, T)>; 3],
+    lanes: [VecDeque<(RequestId, T)>; 4],
     running: Option<RequestId>,
     running_cancelled: bool,
     closed: bool,
@@ -67,6 +67,7 @@ const fn lane(priority: Priority) -> usize {
         Priority::Visible => 0,
         Priority::Prefetch => 1,
         Priority::Thumbnail => 2,
+        Priority::Print => 3,
     }
 }
 
@@ -80,7 +81,12 @@ impl<T> Queue<T> {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(QueueState {
-                lanes: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
+                lanes: [
+                    VecDeque::new(),
+                    VecDeque::new(),
+                    VecDeque::new(),
+                    VecDeque::new(),
+                ],
                 running: None,
                 running_cancelled: false,
                 closed: false,

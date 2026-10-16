@@ -94,6 +94,9 @@ mod ffi {
         SearchHits,
         /// `request`, `search_end`, `search_hits`, `pages_done`: the last message of a search.
         SearchDone,
+        /// `request`, `perm_encrypted`, `perm_owner`, `perm_print`, `perm_print_high_quality`: the
+        /// answer to `request_permissions`.
+        Permissions,
     }
 
     /// How a search ended (the protocol's `SearchOutcome`).
@@ -104,6 +107,20 @@ mod ffi {
         Cancelled,
         /// Stopped at the limit of 10,000 hits.
         TooManyHits,
+    }
+
+    /// A band of a page to print: `width` x `height` pixels at (`x`, `y`) of the page scaled by
+    /// `scale` device pixels per point. `width * height * 4` must fit a slot.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct PrintBand {
+        page: u32,
+        scale: f32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        /// Draw in grey.
+        grayscale: bool,
     }
 
     /// One hit of a search (the protocol's `SearchHit`).
@@ -353,6 +370,12 @@ mod ffi {
         /// `SearchDone`: how it ended, and how many hits it reported in all.
         search_end: SearchEnd,
         search_hits: u32,
+        /// `Permissions`: the document is encrypted; it was opened with the owner password;
+        /// printing is allowed; printing at full quality is allowed.
+        perm_encrypted: bool,
+        perm_owner: bool,
+        perm_print: bool,
+        perm_print_high_quality: bool,
     }
 
     extern "Rust" {
@@ -512,6 +535,18 @@ mod ffi {
         /// (`TextPage`).
         fn request_text_page(self: &EngineClient, page: u32, skip: u32, limit: u32) -> Result<u64>;
 
+        /// Asks what the document's security settings allow (`Permissions`). A document the engine
+        /// cannot read the settings of is a `RequestFailed`: do not print it.
+        fn request_permissions(self: &EngineClient) -> Result<u64>;
+
+        /// Asks for a band of a page for a printer, with annotations as they print. Returns the
+        /// request id (`TileReady` follows), or 0 when every print slot is busy.
+        fn request_print_band(self: &EngineClient, band: &PrintBand) -> Result<u64>;
+
+        /// Copies a finished band into `out` (exactly `width * height * 4` bytes, BGRx, no row
+        /// padding) and frees its slot. `false` if it is not finished.
+        fn read_print_band(self: &EngineClient, request: u64, out: &mut [u8]) -> Result<bool>;
+
         /// Searches the whole document (`SearchHits`, many, then `SearchDone`). `text` is 1 to
         /// 1024 bytes; with `regex` it is a regular expression, and one that does not parse is
         /// a `RequestFailed` with the reason. A new search ends the one before it.
@@ -536,8 +571,8 @@ mod ffi {
 
 pub use ffi::{
     EngineEvent, EventKind, FailureKind, FitKind, LinkKind, LinkNode, LogLevel, NamedKind,
-    OutlineNode, PageExtent, RepairNote, SearchEnd, SearchMatch, TextGlyph, TilePriority,
-    TileState, TileTicket, TimeoutStage,
+    OutlineNode, PageExtent, PrintBand, RepairNote, SearchEnd, SearchMatch, TextGlyph,
+    TilePriority, TileState, TileTicket, TimeoutStage,
 };
 
 /// Crash reporting behind the bridge's opaque handle. `None` after `stop`.
@@ -944,6 +979,45 @@ impl EngineClient {
             .map(|id| id.0)
     }
 
+    /// Asks what the document's security settings allow; see [`Client::request_permissions`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down or the handle is closed.
+    pub fn request_permissions(&self) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.request_permissions().map(|id| id.0)
+    }
+
+    /// Asks for a band of a page to print; see [`Client::request_print_band`]. 0 when every print
+    /// slot is busy.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down, the handle is closed or the band is invalid.
+    pub fn request_print_band(&self, band: &PrintBand) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        let rect = vellora_ipc::TileRect {
+            x: band.x,
+            y: band.y,
+            width: band.width,
+            height: band.height,
+        };
+        client
+            .request_print_band(band.page, band.scale, rect, band.grayscale)
+            .map(|id| id.map_or(0, |id| id.0))
+    }
+
+    /// Copies a finished band into `out`; see [`Client::read_print_band`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the handle is closed or `out` is not the size of the band.
+    pub fn read_print_band(&self, request: u64, out: &mut [u8]) -> Result<bool, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.read_print_band(RequestId(request), out)
+    }
+
     /// Withdraws a request; false if it was not in flight.
     pub fn cancel(&self, request: u64) -> bool {
         self.client
@@ -1051,6 +1125,10 @@ impl EngineEvent {
             pages_done: 0,
             search_end: SearchEnd::None,
             search_hits: 0,
+            perm_encrypted: false,
+            perm_owner: false,
+            perm_print: false,
+            perm_print_high_quality: false,
         }
     }
 }
@@ -1124,7 +1202,8 @@ impl From<Event> for EngineEvent {
             | Event::PageLabels { .. }
             | Event::PageFound { .. }
             | Event::Links { .. }
-            | Event::TextPage { .. }) => Self::navigation_answer(answer),
+            | Event::TextPage { .. }
+            | Event::Permissions { .. }) => Self::navigation_answer(answer),
             Event::SearchHits {
                 request,
                 hits,
@@ -1232,6 +1311,21 @@ impl EngineEvent {
                 text_total: total,
                 glyphs: chars.into_iter().map(TextGlyph::from).collect(),
                 ..Self::empty(EventKind::TextPage)
+            },
+            Event::Permissions {
+                request,
+                encrypted,
+                owner,
+                print,
+                print_high_quality,
+            } => Self {
+                request: request.0,
+                has_request: true,
+                perm_encrypted: encrypted,
+                perm_owner: owner,
+                perm_print: print,
+                perm_print_high_quality: print_high_quality,
+                ..Self::empty(EventKind::Permissions)
             },
             Event::PageFound { request, page } => Self {
                 request: request.0,

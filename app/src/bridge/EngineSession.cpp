@@ -441,6 +441,9 @@ void EngineSession::dispatch(const EngineEvent& event) {
     case EventKind::SearchDone:
         emit searchDone(event.request, event.search_end, event.search_hits, event.pages_done);
         break;
+    case EventKind::Permissions:
+        // Asked for by the print dialog (M1 task 16b); nothing in the shell sends the request yet.
+        break;
     }
 }
 

@@ -40,7 +40,8 @@ use std::path::{Path, PathBuf};
 mod renderer;
 
 pub use renderer::{
-    DocHandle, MAX_SCALE, MAX_TILE_PIXELS, MAX_TILE_SIDE, Renderer, TextChar, TileRect, TileRequest,
+    DocHandle, MAX_SCALE, MAX_TILE_PIXELS, MAX_TILE_SIDE, RenderMode, Renderer, TextChar, TileRect,
+    TileRequest,
 };
 
 /// Environment variable that overrides where [`Pdfium::locate`] looks for the library.

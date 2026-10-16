@@ -16,13 +16,14 @@ Passwords: the owner password is "owner-pw" in every file; files named *-user-pa
 user password "user-pw", all others the empty user password.
 
     uv venv .venv && uv pip install --python .venv/Scripts/python.exe pikepdf
-    .venv/Scripts/python.exe generate.py          (pikepdf 10.x, qpdf 12.4)
+    .venv/Scripts/python.exe generate.py [name ...]   (pikepdf 10.x, qpdf 12.4)
 """
 
+import sys
 from pathlib import Path
 
 import pikepdf
-from pikepdf import Dictionary, Encryption, Name, ObjectStreamMode, Pdf, String
+from pikepdf import Dictionary, Encryption, Name, ObjectStreamMode, Pdf, Permissions, String
 
 OUT = Path(__file__).parent
 OWNER = "owner-pw"
@@ -91,11 +92,31 @@ FIXTURES = {
     "r3-rc4-128-user-password": (dict(R=3, aes=False, metadata=False), USER, False),
     "r4-aes-128-user-password": (dict(R=4, aes=True), USER, True),
     "r6-aes-256-user-password": (dict(R=6), USER, True),
+    # What the user password does not allow (M1 task 16: the engine reports printing).
+    "r6-aes-256-no-print": (
+        dict(R=6, allow=Permissions(print_lowres=False, print_highres=False)),
+        "",
+        True,
+    ),
+    "r3-rc4-128-low-res-print": (
+        dict(R=3, aes=False, metadata=False, allow=Permissions(print_highres=False)),
+        "",
+        False,
+    ),
+    "r2-rc4-40-no-print": (
+        dict(R=2, aes=False, metadata=False, allow=Permissions(print_lowres=False, print_highres=False)),
+        "",
+        False,
+    ),
 }
 
 
 def main() -> None:
-    for name, (options, user, objstm) in FIXTURES.items():
+    # With names on the command line, only those fixtures are written (the output differs on every
+    # run, and the committed files are what the tests were written against).
+    wanted = sys.argv[1:] or list(FIXTURES)
+    for name in wanted:
+        options, user, objstm = FIXTURES[name]
         pdf = build()
         pdf.save(
             OUT / f"{name}.pdf",

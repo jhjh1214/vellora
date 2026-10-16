@@ -86,6 +86,7 @@ use crate::cache::{
 use crate::document::{self, Change, Seen};
 use crate::limits::ResourceLimits;
 use crate::logging::LineRing;
+use crate::print::{DEFAULT_PRINT_SLOTS, PrintPool};
 use crate::process::{Crash, EngineProcess, SpawnConfig, SpawnError};
 
 /// Engines restarted after crashes in a row, with no tile delivered in between, before the client
@@ -152,6 +153,10 @@ pub struct ClientConfig {
     /// own, added to the region after `geometry`'s, so thumbnails never take room from tiles;
     /// 0 turns thumbnails off.
     pub thumbnail_budget_bytes: u64,
+    /// How many bands of a page being printed may be in flight or waiting to be read at once. They
+    /// have slots of their own, added to the region after the thumbnails', so printing never takes
+    /// room from the tiles; 0 turns printing off.
+    pub print_slots: u32,
     /// How long a new engine may take to say `Hello` before it is killed ([`Stage::Hello`]).
     pub hello_timeout: Duration,
     /// How long the engine may take to answer `Open` after its `Hello` before it is killed
@@ -176,6 +181,7 @@ impl ClientConfig {
             max_restarts: DEFAULT_MAX_RESTARTS,
             cache_budget_bytes: DEFAULT_BUDGET_BYTES,
             thumbnail_budget_bytes: DEFAULT_THUMBNAIL_BUDGET_BYTES,
+            print_slots: DEFAULT_PRINT_SLOTS,
             hello_timeout: DEFAULT_HELLO_TIMEOUT,
             open_timeout: DEFAULT_OPEN_TIMEOUT,
             crash_dir: None,
@@ -360,6 +366,20 @@ pub enum Event {
         hits: u32,
         /// How many pages it searched.
         pages_done: u32,
+    },
+    /// The answer to [`Client::request_permissions`].
+    Permissions {
+        /// The request it answers.
+        request: RequestId,
+        /// The document is encrypted.
+        encrypted: bool,
+        /// It was opened with the owner password, which allows everything.
+        owner: bool,
+        /// Printing is allowed.
+        print: bool,
+        /// Printing at full quality is allowed. When printing is allowed and this is not, a reader
+        /// prints at low resolution only.
+        print_high_quality: bool,
     },
     /// A request failed, or the engine reported a problem of its own (`request` is `None`).
     RequestFailed {
@@ -633,6 +653,22 @@ fn navigation_event(response: Response) -> Option<(RequestId, Event)> {
                 chars,
             },
         ),
+        Response::Permissions {
+            req_id,
+            encrypted,
+            owner,
+            print,
+            print_high_quality,
+        } => (
+            req_id,
+            Event::Permissions {
+                request: req_id,
+                encrypted,
+                owner,
+                print,
+                print_high_quality,
+            },
+        ),
         _ => return None,
     })
 }
@@ -654,6 +690,8 @@ struct State {
     cache: TileCache,
     /// The thumbnails, in slots after the tile cache's.
     thumbnails: TileCache,
+    /// The slots of the bands of a page being printed, after the thumbnails'.
+    print: PrintPool,
     /// The cache entry each in-flight cached request is for.
     tile_keys: HashMap<RequestId, (Pool, TileKey)>,
     /// While the current engine is starting: what it owes us next and when that is overdue.
@@ -730,6 +768,8 @@ impl State {
                 if let Some((pool, key)) = self.tile_keys.remove(request) {
                     // `false`: invalidated while in flight, the slot is freed instead.
                     self.pool(pool).complete(&key);
+                } else {
+                    self.print.mark_ready(*request);
                 }
             }
             Event::RequestFailed {
@@ -738,6 +778,8 @@ impl State {
             } => {
                 if let Some((pool, key)) = self.tile_keys.remove(request) {
                     self.pool(pool).abandon(&key);
+                } else {
+                    self.print.release(*request);
                 }
             }
             _ => {}
@@ -859,9 +901,16 @@ impl Client {
         // the client sees (and the engine is started with) is the whole region.
         let tile_slots = config.geometry.slot_count();
         let thumbnail_slots = thumbnail_slots(config.geometry, config.thumbnail_budget_bytes);
-        if thumbnail_slots > 0 {
-            config.geometry =
-                SlotGeometry::new(tile_slots + thumbnail_slots, config.geometry.slot_bytes())?;
+        let print_slots = print_slots(
+            config.geometry,
+            tile_slots + thumbnail_slots,
+            config.print_slots,
+        );
+        if thumbnail_slots + print_slots > 0 {
+            config.geometry = SlotGeometry::new(
+                tile_slots + thumbnail_slots + print_slots,
+                config.geometry.slot_bytes(),
+            )?;
         }
         let (region, region_file) = TileRegion::create(config.geometry)?;
         let shared = Arc::new(Shared {
@@ -883,6 +932,9 @@ impl Client {
                     config.geometry,
                     tile_slots..tile_slots + thumbnail_slots,
                     config.thumbnail_budget_bytes,
+                ),
+                print: PrintPool::over_slots(
+                    tile_slots + thumbnail_slots..tile_slots + thumbnail_slots + print_slots,
                 ),
                 tile_keys: HashMap::new(),
                 startup: None,
@@ -1337,6 +1389,98 @@ impl Client {
         })
     }
 
+    /// Asks what the document's security settings allow. The answer is [`Event::Permissions`].
+    /// The engine reads them from the file itself, so a document it cannot read gets a
+    /// [`Event::RequestFailed`] instead, and the caller should not print it.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile).
+    pub fn request_permissions(&self) -> Result<RequestId, ClientError> {
+        self.request_navigation(|req_id| Request::GetPermissions { req_id })
+    }
+
+    /// Asks for a band of a page for a printer: `rect` of the page at `scale` device pixels per
+    /// point, drawn with the annotations that print and, with `grayscale`, in grey. The band is at
+    /// most one slot, `width * height * 4` bytes. Returns the id its answer will carry
+    /// ([`Event::TileReady`]), or `None` when every print slot is busy: read a finished band
+    /// ([`read_print_band`](Self::read_print_band)) or withdraw one ([`cancel`](Self::cancel)), then
+    /// ask again.
+    ///
+    /// The engine renders bands after every tile the reader is waiting for.
+    ///
+    /// # Errors
+    ///
+    /// As [`request_tile`](Self::request_tile), plus [`ClientError::InvalidTile`] for a band that
+    /// does not fit a slot or when printing is off.
+    pub fn request_print_band(
+        &self,
+        page: u32,
+        scale: f32,
+        rect: TileRect,
+        grayscale: bool,
+    ) -> Result<Option<RequestId>, ClientError> {
+        let bytes = u64::from(rect.width) * u64::from(rect.height) * 4;
+        if bytes > u64::from(self.shared.config.geometry.slot_bytes()) {
+            return Err(ClientError::InvalidTile);
+        }
+        let (id, slot) = {
+            let mut state = self.shared.state();
+            Self::check_running(&state)?;
+            let Some(slot) = state.print.take_slot() else {
+                return Ok(None);
+            };
+            let id = state.begin_request(Instant::now());
+            state.print.assign(id, slot, rect.width, rect.height);
+            (id, slot)
+        };
+        self.shared.watch.notify_all();
+        let request = Request::RenderPrint {
+            req_id: id,
+            page,
+            scale,
+            rect,
+            slot,
+            grayscale,
+        };
+        let sent = match self.shared.sink().0.as_mut() {
+            Some(writer) => write_frame(writer, &request).map_err(ClientError::from),
+            None => Err(ClientError::EngineUnavailable),
+        };
+        if let Err(error) = sent {
+            let mut state = self.shared.state();
+            state.ledger.forget(id);
+            state.print.release(id);
+            return Err(error);
+        }
+        Ok(Some(id))
+    }
+
+    /// Copies a finished band into `out`, which must be exactly `width * height * 4` bytes of the
+    /// band as it was asked for (`BGRx`, rows top to bottom with no padding), and gives its slot
+    /// back. `false` (and the slot stays) if the band is not ready.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Region`] for a buffer of the wrong length.
+    pub fn read_print_band(&self, request: RequestId, out: &mut [u8]) -> Result<bool, ClientError> {
+        // Held across the copy and the release: the slot can only be handed out again by a
+        // request, which needs this lock.
+        let mut state = self.shared.state();
+        let Some((slot, width, height)) = state.print.ready(request) else {
+            return Ok(false);
+        };
+        let bytes = u64::from(width) * u64::from(height) * 4;
+        if u64::try_from(out.len()).ok() != Some(bytes) {
+            return Err(ClientError::Region(vellora_shm::Error::InvalidGeometry(
+                "the buffer is not the size of the band",
+            )));
+        }
+        self.shared.region.read_slot_prefix(slot.0, out)?;
+        state.print.release(request);
+        Ok(true)
+    }
+
     /// Registers a request, sends it, and forgets it again if it could not be sent.
     fn request_navigation(
         &self,
@@ -1369,8 +1513,10 @@ impl Client {
     pub fn cancel(&self, request: RequestId) -> bool {
         {
             let mut state = self.shared.state();
+            // A band that was written but not read is withdrawn too, though it is not in flight.
+            let band = state.print.release(request);
             if !state.ledger.forget(request) {
-                return false;
+                return band;
             }
             if let Some((pool, key)) = state.tile_keys.remove(&request) {
                 state.pool(pool).abandon(&key);
@@ -1520,6 +1666,14 @@ fn thumbnail_slots(geometry: SlotGeometry, budget_bytes: u64) -> u32 {
     let room = vellora_shm::MAX_REGION_BYTES / slot_bytes - u64::from(geometry.slot_count());
     // At most the region limit over the slot size, so it fits `u32`.
     u32::try_from((budget_bytes / slot_bytes).min(room)).unwrap_or(0)
+}
+
+/// How many slots, added to a region that has `used` slots of `geometry`'s size, hold `wanted`
+/// print bands: as many as asked for, as far as the region limit allows.
+fn print_slots(geometry: SlotGeometry, used: u32, wanted: u32) -> u32 {
+    let slot_bytes = u64::from(geometry.slot_bytes());
+    let room = (vellora_shm::MAX_REGION_BYTES / slot_bytes).saturating_sub(u64::from(used));
+    u32::try_from(u64::from(wanted).min(room)).unwrap_or(0)
 }
 
 /// Starts an engine over the document and region and sends `Hello` and `Open`.
@@ -1768,6 +1922,7 @@ fn ended(shared: &Arc<Shared>, generation: u64, end: End) {
         // Their answers will never come; ready tiles stay valid (task 21).
         state.cache.abandon_pending();
         state.thumbnails.abandon_pending();
+        state.print.lose_unwritten();
         state.tile_keys.clear();
         if !will_restart {
             state.phase = Phase::Failed;
