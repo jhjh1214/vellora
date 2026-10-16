@@ -93,6 +93,8 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     m_canvas->setLinkDescriber([this](const Link& link) {
         return LinkActions::describe(link, [this](quint32 page) { return pageLabel(page); });
     });
+    m_canvas->setPageDescriber(
+        [this](quint32 page) { return tr("Page %1 of %2").arg(pageLabel(page)).arg(m_pageCount); });
     m_sidebar->results()->model().setPageLabeler([this](quint32 page) { return pageLabel(page); });
     connect(m_search, &SearchController::currentChanged, this, &DocumentTab::onSearchCurrent);
     connect(m_findBar, &FindBar::closed, this, [this] { m_canvas->setFocus(); });
@@ -216,6 +218,7 @@ bool DocumentTab::open(const QString& path) {
     m_documentTip.clear();
     m_path = path;
     m_fileName = QFileInfo(path).fileName();
+    m_canvas->setAccessibleName(m_fileName);
     const QFileInfo info(path);
     m_viewKey = AppSettings::viewKey(info);
     m_savedView = m_settings ? m_settings->viewState(m_viewKey) : std::nullopt;

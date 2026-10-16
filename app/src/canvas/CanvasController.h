@@ -176,6 +176,9 @@ public:
     void nextPage();
     void previousPage();
     const PageLayout& layout() const { return m_layout; }
+    // Where `page` is in the viewport now, on screen or not (logical pixels, as shown), with what
+    // maps a rectangle of it. An empty draw for a page the document does not have.
+    PageDraw drawFor(quint32 page) const;
 
     // What to draw now. Cheap: geometry only.
     Frame frame() const;

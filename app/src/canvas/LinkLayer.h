@@ -45,6 +45,9 @@ public:
     QList<Link> linksOf(quint32 page) const;
     bool isComplete(quint32 page) const;
     int requestsInFlight() const { return static_cast<int>(m_requests.size()); }
+    // Asks for the links of `page` if they are not here (the pages in view are asked for by
+    // themselves); `linksChanged` follows.
+    void ensure(quint32 page);
 
 signals:
     // More of the links of page have been read (the ones on screen may have changed).

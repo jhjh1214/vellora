@@ -105,6 +105,8 @@ add_library(vellora_shell STATIC
   src/PasswordDialog.h
   src/RepairBar.cpp
   src/RepairBar.h
+  src/accessibility/CanvasAccessible.cpp
+  src/accessibility/CanvasAccessible.h
   src/canvas/CanvasController.cpp
   src/canvas/CanvasController.h
   src/canvas/CanvasView.cpp

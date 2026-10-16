@@ -157,6 +157,13 @@ QRectF CanvasController::pageScreenRect(quint32 page) const {
         .translated(contentWidth() / 2.0 - m_scroll.x(), -m_scroll.y());
 }
 
+PageDraw CanvasController::drawFor(quint32 page) const {
+    if (page >= m_layout.pageCount()) {
+        return {};
+    }
+    return {page, pageScreenRect(page), m_layout.pageSize(page), m_mode.rotation, m_zoom};
+}
+
 PageLayout::Range CanvasController::visibleRows(double top, double bottom) const {
     if (m_layout.rowCount() == 0) {
         return {};
