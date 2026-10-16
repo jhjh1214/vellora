@@ -23,6 +23,7 @@ class QRubberBand;
 namespace vellora {
 
 class CanvasWidget;
+class LinkFocusOverlay;
 class SearchController;
 class SearchOverlay;
 class SelectionOverlay;
@@ -102,6 +103,13 @@ public:
     std::optional<LinkRef> focusedLink() const { return m_focusLink; }
     // Focuses link `index` of `page` (false if there is no such link yet).
     bool focusLink(quint32 page, int index);
+    // Moves the focus to the next (or previous) link in reading order, across pages: from the
+    // focused link, else from the page on screen. The links of a page not yet read are asked for
+    // and the step is made when they arrive. At most `kMaxLinkScan` pages are looked at; false if
+    // there is no such link (nothing moves).
+    static constexpr quint32 kMaxLinkScan = 64;
+    bool focusNextLink(bool forward);
+    LinkFocusOverlay* linkFocusOverlay() { return m_linkFocus; }
     void clearLinkFocus();
     // Follows the focused link, as a click on it does.
     bool activateFocusedLink();
@@ -123,6 +131,8 @@ signals:
     void linkActivated(const vellora::Link& link);
     // The selected text is on the clipboard.
     void copied(int characters);
+    // The focused link changed or was let go.
+    void linkFocusChanged();
 
 protected:
     bool viewportEvent(QEvent* event) override;
@@ -143,6 +153,8 @@ private:
     void startSelection(QMouseEvent* event);
     void dragSelection();
     void endDrag(bool zoom);
+    // Makes the step in `m_pendingLinkStep` if the links it needs are here.
+    void stepLink();
     // Caret browsing: a key that moves the caret; false if the key is not one.
     bool handleCaretKey(QKeyEvent* event);
     // Tells a screen reader where the caret went.
@@ -166,6 +178,9 @@ private:
     LinkDescriber m_describer;
     PageDescriber m_pageDescriber;
     std::optional<LinkRef> m_focusLink;
+    LinkFocusOverlay* m_linkFocus = nullptr;
+    // A step to the next (true) or previous (false) link waiting for a page's links.
+    std::optional<bool> m_pendingLinkStep;
     // Where the pointer is over the viewport, to look again when the view moves beneath it.
     std::optional<QPoint> m_pointer;
     // The link the left button went down on, and where.
