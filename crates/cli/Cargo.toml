@@ -15,8 +15,13 @@ path = "src/main.rs"
 
 [dependencies]
 vellora-inspect.workspace = true
+vellora-engine-client.workspace = true
+vellora-ipc.workspace = true
+vellora-shm.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+# PNG files of `vellora render`.
+png.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

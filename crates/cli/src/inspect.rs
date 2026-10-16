@@ -176,7 +176,7 @@ fn yes_no(value: bool) -> &'static str {
 /// formatting characters that reorder or hide text (bidirectional overrides and isolates, zero
 /// width characters, the byte order mark) are shown as spaces. The text comes from the file, and
 /// the file's author does not get to move the cursor or rewrite the line.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.chars()
         .map(|c| if is_unsafe_to_print(c) { ' ' } else { c })
         .collect()

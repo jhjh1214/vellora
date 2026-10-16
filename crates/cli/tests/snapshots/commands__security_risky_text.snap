@@ -1,0 +1,19 @@
+---
+source: crates/cli/tests/commands.rs
+expression: "stdout(&out).replace(path.to_str().unwrap(), \"<file>\")"
+---
+File     <file>
+Verdict  RISKY: 4 risky features found
+
+Findings
+  Runs a script when the file is opened
+      JavaScript that other PDF viewers may run as soon as the document opens. Vellora never runs PDF JavaScript.
+  Contains JavaScript actions
+      Scripts attached to links, buttons, form fields or bookmarks.
+  Can start a program or open a file
+      A Launch action asks a viewer to start another program or open a file on your computer.
+  Has embedded files
+      Files attached inside the PDF; opening one can run whatever program handles its type.
+
+Embedded files (1)
+  payload.exe

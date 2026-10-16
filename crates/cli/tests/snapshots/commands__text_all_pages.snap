@@ -1,0 +1,6 @@
+---
+source: crates/cli/tests/commands.rs
+expression: "all.replace('\\u{c}', \"<FF>\")"
+---
+First page, first line
+Second line of page one<FF>Page two<FF>The last page
