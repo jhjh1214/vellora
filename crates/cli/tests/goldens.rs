@@ -226,9 +226,29 @@ fn the_rendering_matches_the_goldens() {
             let verdict = compare(&Image::load(file), &Image::load(&golden_path), tolerance);
             pages_compared += 1;
             worst_ratio = worst_ratio.max(verdict.ratio);
+            // The share of differing pixels at other thresholds, to choose a tolerance from.
+            let at = |delta: u8| {
+                compare(
+                    &Image::load(file),
+                    &Image::load(&golden_path),
+                    Tolerance {
+                        pixel_delta: delta,
+                        ..tolerance
+                    },
+                )
+                .ratio
+            };
             println!(
-                "{id} p{page}: {} of the pixels differ ({} pixels, worst channel {})",
-                verdict.ratio, verdict.differing, verdict.worst
+                "{id} p{page}: {} of the pixels differ ({} pixels, worst channel {}); at delta 16/32/64/96/128/192: {:.5} {:.5} {:.5} {:.5} {:.5} {:.5}",
+                verdict.ratio,
+                verdict.differing,
+                verdict.worst,
+                at(16),
+                at(32),
+                at(64),
+                at(96),
+                at(128),
+                at(192)
             );
             if !verdict.passes(tolerance) {
                 failures.push(format!(

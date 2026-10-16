@@ -254,8 +254,34 @@ pub(crate) fn spawn(spec: &Spec<'_>) -> io::Result<Started> {
 /// The `AppContainer` SID derived from [`CONTAINER_NAME`], released with `FreeSid`.
 struct ContainerSid(PSID);
 
+/// How many times deriving the container is tried, and how long to wait before the second try
+/// (it doubles). Several processes can start engines at the same moment (`vellora render` in a
+/// script, parallel tests): the profile is registered once per process, and while another process
+/// is registering it Windows may answer `E_UNEXPECTED` to a derivation that works a moment later.
+const DERIVE_ATTEMPTS: u32 = 6;
+const DERIVE_FIRST_WAIT_MS: u64 = 20;
+
 impl ContainerSid {
     fn new() -> io::Result<Self> {
+        let mut wait = DERIVE_FIRST_WAIT_MS;
+        for attempt in 1..=DERIVE_ATTEMPTS {
+            match Self::derive() {
+                Ok(sid) => return Ok(sid),
+                Err(error) if attempt == DERIVE_ATTEMPTS => return Err(error),
+                Err(_) => {
+                    // Register the profile again on the next try, whatever failed.
+                    *PROFILE_READY
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+                    std::thread::sleep(std::time::Duration::from_millis(wait));
+                    wait *= 2;
+                }
+            }
+        }
+        unreachable!("the last attempt returns")
+    }
+
+    fn derive() -> io::Result<Self> {
         let name = wide(OsStr::new(CONTAINER_NAME))?;
         ensure_profile(&name)?;
         let mut sid: PSID = ptr::null_mut();
