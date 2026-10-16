@@ -46,11 +46,12 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Fetch PDFium
         run: cargo xtask pdfium fetch
-      - name: Build the app (Release)
+      - name: Configure (Release)
         shell: bash
-        run: |
-          cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
-          cmake --build build --target vellora
+        run: cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+      # Not in bash: Git's `link.exe` would shadow MSVC's.
+      - name: Build the app
+        run: cmake --build build --target vellora
       - name: Stage the files and deploy Qt
         run: pwsh packaging/windows/stage.ps1 -BuildDir build -Stage dist/stage
       - name: Install WiX
