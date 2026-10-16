@@ -335,7 +335,7 @@ private slots:
         const QPointF landed = f.controller()->scrollPosition();
         QTest::qWait(300);
         QCOMPARE(f.controller()->scrollPosition(), landed);
-        f.controller()->scrollBy(QPointF(0.0, 120.0));
+        f.controller()->scrollBy(QPointF(0.0, -120.0));
         const QPointF stepped = f.controller()->scrollPosition();
         QVERIFY(stepped != landed);
         QTest::qWait(300);
