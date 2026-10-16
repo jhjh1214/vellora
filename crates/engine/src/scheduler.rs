@@ -311,6 +311,20 @@ mod tests {
         assert_eq!(drain(&queue), [4, 6, 2, 5, 1, 3]);
     }
 
+    /// Print bands (M1 task 16) come after everything the reader waits for, however early they
+    /// were queued, and in the order they were asked for among themselves.
+    #[test]
+    fn print_bands_wait_for_visible_prefetch_and_thumbnail_tiles() {
+        let queue = Queue::new();
+        queue.push(Priority::Print, id(1), "band1");
+        queue.push(Priority::Print, id(2), "band2");
+        queue.push(Priority::Thumbnail, id(3), "thumbnail");
+        queue.push(Priority::Print, id(4), "band3");
+        queue.push(Priority::Prefetch, id(5), "prefetch");
+        queue.push(Priority::Visible, id(6), "visible");
+        assert_eq!(drain(&queue), [6, 5, 3, 1, 2, 4]);
+    }
+
     #[test]
     fn priority_holds_under_load_when_work_keeps_arriving() {
         let queue = Queue::new();
