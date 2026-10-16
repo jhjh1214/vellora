@@ -4,7 +4,7 @@
 
 Every action of Vellora is a command with a name, listed here with its shortcut. Any command, with or without a shortcut, can be run from the command palette (`Ctrl+Shift+P`): type part of its name and press Enter.
 
-On macOS, Ctrl means the Command key. Shortcuts for standard actions (Open, Print, Close Tab, Quit, Copy, Select All, Find, Zoom In, Zoom Out) follow the conventions of your system, so they can differ from the keys shown here.
+On macOS, Ctrl means the Command key. Shortcuts for standard actions (Open, Print, Close Tab, Quit, Copy, Select All, Find, Zoom In, Zoom Out) are the ones your system defines for them, so they can differ from the keys shown here: this page shows the keys on a plain Linux system, where Quit has no shortcut of its own (Quit is also in the File menu).
 
 ## File
 
@@ -12,9 +12,8 @@ On macOS, Ctrl means the Command key. Shortcuts for standard actions (Open, Prin
 |---|---|
 | Open… | `Ctrl+O` |
 | Print… | `Ctrl+P` |
-| Close Tab | `Ctrl+W` |
+| Close Tab | `Ctrl+F4` |
 | Reopen Closed Tab | `Ctrl+Shift+T` |
-| Quit | `Ctrl+Q` |
 
 ## Tabs
 

@@ -47,8 +47,10 @@ QString shortcutsMarkdown(const CommandRegistry& registry) {
         "(`Ctrl+Shift+P`): type part of its name and press Enter.\n\n");
     text += QStringLiteral(
         "On macOS, Ctrl means the Command key. Shortcuts for standard actions (Open, Print, "
-        "Close Tab, Quit, Copy, Select All, Find, Zoom In, Zoom Out) follow the conventions of "
-        "your system, so they can differ from the keys shown here.\n");
+        "Close Tab, Quit, Copy, Select All, Find, Zoom In, Zoom Out) are the ones your system "
+        "defines for them, so they can differ from the keys shown here: this page shows the keys "
+        "on a plain Linux system, where Quit has no shortcut of its own (Quit is also in the "
+        "File menu).\n");
 
     QStringList groups;
     for (const Command& command : registry.commands()) {
