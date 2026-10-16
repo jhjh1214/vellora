@@ -1,10 +1,12 @@
 #include "canvas/CanvasView.h"
 
+#include "accessibility/CanvasAccessible.h"
 #include "canvas/CanvasWidget.h"
 #include "links/LinkActions.h"
 #include "search/SearchOverlay.h"
 #include "text/SelectionOverlay.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QClipboard>
 #include <QEvent>
@@ -75,6 +77,9 @@ CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     connect(&m_controller, &CanvasController::contentChanged, this, &CanvasView::syncScrollBars);
     connect(&m_controller, &CanvasController::viewModeChanged, this, [this] { syncScrollBars(); });
     connect(&m_controller, &CanvasController::viewChanged, this, &CanvasView::syncScrollBars);
+    connect(&m_controller, &CanvasController::currentPageChanged, this,
+            [this](quint32 page, quint32) { announcePage(page); });
+    installCanvasAccessibility();
     connect(&m_controller, &CanvasController::viewChanged, this, [this] { refreshHover(); });
     connect(&m_links, &LinkLayer::linksChanged, this, [this] { refreshHover(); });
     connect(&m_text, &TextLayer::textChanged, this, [this] { refreshHover(); });
@@ -131,6 +136,7 @@ void CanvasView::setSearch(SearchController* search) {
 }
 
 void CanvasView::reset() {
+    m_focusLink.reset();
     m_selection.clear();
     m_text.reset();
     m_links.reset();
@@ -185,15 +191,69 @@ bool CanvasView::viewportEvent(QEvent* event) {
     return QAbstractScrollArea::viewportEvent(event);
 }
 
+QString CanvasView::describeLink(const Link& link) const {
+    if (m_describer) {
+        return m_describer(link);
+    }
+    return LinkActions::describe(link, [](quint32 page) { return QString::number(page + 1); });
+}
+
+QString CanvasView::describePage(quint32 page) const {
+    if (m_pageDescriber) {
+        return m_pageDescriber(page);
+    }
+    return tr("Page %1 of %2").arg(page + 1).arg(m_controller.pageCount());
+}
+
 QString CanvasView::linkToolTipAt(QPoint viewportPos) const {
     const LinkLayer::Hit hit = m_links.hitTest(viewportPos);
     if (hit.link == nullptr) {
         return {};
     }
-    if (m_describer) {
-        return m_describer(*hit.link);
+    return describeLink(*hit.link);
+}
+
+bool CanvasView::focusLink(quint32 page, int index) {
+    const QList<Link> links = m_links.linksOf(page);
+    if (index < 0 || index >= links.size()) {
+        return false;
     }
-    return LinkActions::describe(*hit.link, [](quint32 page) { return QString::number(page + 1); });
+    m_focusLink = LinkRef{page, index};
+    m_controller.revealRect(page, links.at(index).rect);
+    viewport()->update();
+    if (QAccessible::isActive()) {
+        if (QAccessibleInterface* link = canvasLinkInterface(this, page, index)) {
+            QAccessibleEvent event(link, QAccessible::Focus);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+    return true;
+}
+
+void CanvasView::clearLinkFocus() {
+    if (m_focusLink) {
+        m_focusLink.reset();
+        viewport()->update();
+    }
+}
+
+bool CanvasView::activateFocusedLink() {
+    if (!m_focusLink) {
+        return false;
+    }
+    const QList<Link> links = m_links.linksOf(m_focusLink->page);
+    if (m_focusLink->index >= links.size()) {
+        return false;
+    }
+    emit linkActivated(links.at(m_focusLink->index));
+    return true;
+}
+
+void CanvasView::announcePage(quint32 page) {
+    // Qt drops the event itself when no assistive technology is listening.
+    QAccessibleAnnouncementEvent event(this, describePage(page));
+    event.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+    QAccessible::updateAccessibility(&event);
 }
 
 Qt::CursorShape CanvasView::linkCursorAt(QPoint viewportPos) const {
@@ -246,6 +306,19 @@ void CanvasView::wheelEvent(QWheelEvent* event) {
 }
 
 void CanvasView::keyPressEvent(QKeyEvent* event) {
+    if (m_focusLink && event->modifiers() == Qt::NoModifier) {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+            event->key() == Qt::Key_Space) {
+            activateFocusedLink();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Escape) {
+            clearLinkFocus();
+            event->accept();
+            return;
+        }
+    }
     if (event->key() == Qt::Key_Escape && !m_selection.isEmpty()) {
         m_selection.clear();
         event->accept();

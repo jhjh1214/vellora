@@ -81,6 +81,27 @@ public:
     // replaces it to use the document's page labels. Plain text.
     using LinkDescriber = std::function<QString(const Link&)>;
     void setLinkDescriber(LinkDescriber describer) { m_describer = std::move(describer); }
+    // How a link reads to a screen reader and in a tool tip (the describer, else the default).
+    QString describeLink(const Link& link) const;
+    // How a page is named to a screen reader and in announcements ("Page iv of 12"); the default
+    // uses the page number. The owner replaces it to use the document's page labels.
+    using PageDescriber = std::function<QString(quint32 page)>;
+    void setPageDescriber(PageDescriber describer) { m_pageDescriber = std::move(describer); }
+    QString describePage(quint32 page) const;
+
+    // The link a screen reader (or `focusLink`) has put the focus on, if any. A focused link is
+    // brought into view, and Enter or Space follows it; Escape lets it go.
+    struct LinkRef {
+        quint32 page = 0;
+        int index = 0;
+        friend bool operator==(const LinkRef&, const LinkRef&) = default;
+    };
+    std::optional<LinkRef> focusedLink() const { return m_focusLink; }
+    // Focuses link `index` of `page` (false if there is no such link yet).
+    bool focusLink(quint32 page, int index);
+    void clearLinkFocus();
+    // Follows the focused link, as a click on it does.
+    bool activateFocusedLink();
     // The tool tip text of the link under `viewportPos`, or empty if there is none.
     QString linkToolTipAt(QPoint viewportPos) const;
     // The shape the pointer has over `viewportPos`: a hand over a link that can be followed, a
@@ -119,6 +140,8 @@ private:
     void startSelection(QMouseEvent* event);
     void dragSelection();
     void endDrag(bool zoom);
+    // Tells a screen reader that the page on screen changed.
+    void announcePage(quint32 page);
 
     CanvasController m_controller;
     LinkLayer m_links;
@@ -133,6 +156,8 @@ private:
     QPoint m_dragStart;
     bool m_dragging = false;
     LinkDescriber m_describer;
+    PageDescriber m_pageDescriber;
+    std::optional<LinkRef> m_focusLink;
     // Where the pointer is over the viewport, to look again when the view moves beneath it.
     std::optional<QPoint> m_pointer;
     // The link the left button went down on, and where.

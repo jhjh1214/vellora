@@ -57,6 +57,12 @@ void LinkLayer::wantVisible() {
     evict(visible);
 }
 
+void LinkLayer::ensure(quint32 page) {
+    if (page < m_controller->pageCount()) {
+        askFor(page);
+    }
+}
+
 void LinkLayer::askFor(quint32 page) {
     PageLinks& entry = m_pages[page];
     if (entry.request != 0 || entry.complete) {
