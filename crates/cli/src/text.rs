@@ -42,6 +42,21 @@ fn write_error(error: &std::io::Error) -> String {
     format!("cannot write the text: {error}")
 }
 
+/// `text` with every control character except the line feed and the tab replaced by a space. The
+/// text comes from the file, and printing an escape (or a form feed, which separates the pages
+/// here) from it would let the file steer the terminal or the page breaks.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// All the text of one page.
 fn page_text(client: &Client, page: u32) -> Result<String, String> {
     let mut text = String::new();
@@ -71,5 +86,21 @@ fn page_text(client: &Client, page: u32) -> Result<String, String> {
         }
     }
     // PDFium ends a line with CR LF; a lone CR is a line end too.
-    Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+    Ok(printable(&text.replace("\r\n", "\n").replace('\r', "\n")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::printable;
+
+    #[test]
+    fn controls_from_the_file_are_not_printed() {
+        assert_eq!(printable("a\u{1b}[2Jb"), "a [2Jb");
+        assert_eq!(printable("x\u{c}y\u{7}z\u{9b}w\u{0}"), "x y z w ");
+        // Line ends, tabs and every printable character stay.
+        assert_eq!(
+            printable("one\ntwo\tthree caf\u{e9} \u{4e2d}"),
+            "one\ntwo\tthree caf\u{e9} \u{4e2d}"
+        );
+    }
 }

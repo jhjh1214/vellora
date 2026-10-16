@@ -140,9 +140,9 @@ vellora security <FILE> [--json] [--password <PASSWORD>]
 
 Answers one question: does this file have features that make it risky to open? It runs in the process of the command, reads the file as `inspect` does, and opens or runs nothing.
 
-**Exit codes:** 0 no risky features were found; **3** risky features were found; 1 the file cannot be read or assessed (an encrypted file without its password cannot be: pass `--password`); 2 usage.
+**Exit codes:** 0 no risky features were found and the scan read everything; **3** risky features were found; 1 the file cannot be read or assessed, which includes an encrypted file without its password (pass `--password`) and a file the scan could not read in full when it found nothing (the report is still printed, with `"complete": false`: a security check does not say "fine" to what it could not read); 2 usage.
 
-The features counted as risky are: a script that runs when the file opens, JavaScript actions, document-level scripts, event actions (`/AA`), launch actions, form submission, links that open other PDF files, embedded files and XFA forms. Links to addresses, forms, layers and signature fields are listed as *also present* but do not make a file risky. A scan that could not read everything (`"complete": false`) may have missed a feature: the text says so, and the exit code is still the one for what was found.
+The features counted as risky are: a script that runs when the file opens, JavaScript actions, document-level scripts, event actions (`/AA`), launch actions, form submission, links that open other PDF files, embedded files and XFA forms. Links to addresses, forms, layers and signature fields are listed as *also present* but do not make a file risky. A scan that could not read everything (`"complete": false`) may have missed a feature: the text says so. If it found risky features the exit code is 3 as usual; if it found none the exit code is 1.
 
 The text output gives the verdict, each finding with a sentence on what it means, the addresses in links and the names of embedded files (text from the file is shown on one line, with control characters and invisible formatting replaced by spaces).
 
@@ -185,7 +185,7 @@ The engine is looked for next to the `vellora` program (set `VELLORA_ENGINE` to 
 vellora text <FILE> [--pages <PAGES>] [--password <PASSWORD>]
 ```
 
-Prints the text of pages in reading order, as the engine extracts it (the order PDFium reads it in, which is the order of the content for most documents and not always the order a person reads columns in). Text in images is not recognised. Line ends are `\n`. Pages are separated by a form feed (U+000C), as `pdftotext` does, with none after the last. `--pages` defaults to all pages; pages are printed in the order given.
+Prints the text of pages in reading order, as the engine extracts it (the order PDFium reads it in, which is the order of the content for most documents and not always the order a person reads columns in). Text in images is not recognised. Line ends are `\n`. Control characters in the text other than line feed and tab are replaced by spaces, so that a document cannot steer your terminal. Pages are separated by a form feed (U+000C), as `pdftotext` does, with none after the last. `--pages` defaults to all pages; pages are printed in the order given.
 
 ## Page specifications
 

@@ -122,6 +122,12 @@ fn main() -> ExitCode {
                 }
                 if verdict.risky {
                     ExitCode::from(security::EXIT_RISKY)
+                } else if verdict.incomplete {
+                    // Nothing was found, but not everything could be read: a security check does
+                    // not answer "fine" to a file it could not read in full.
+                    failed(
+                        "the scan was incomplete, so the absence of risky features is not certain",
+                    )
                 } else {
                     ExitCode::SUCCESS
                 }

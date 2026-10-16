@@ -247,6 +247,27 @@ fn links_alone_are_noted_but_not_risky() {
 }
 
 #[test]
+fn a_scan_that_could_not_read_everything_does_not_say_all_is_well() {
+    // A catalog whose dictionary has a key that is not a name cannot be read: nothing is found,
+    // but only because nothing could be read.
+    let data = doc("1 2", "", &[]);
+    let (_dir, path) = write("unreadable.pdf", &data);
+    let json = security(&path, &["--json"]);
+    let report: Value = serde_json::from_str(&stdout(&json)).unwrap();
+    assert_eq!(report["complete"], false, "{report}");
+    assert_eq!(report["risky"], false);
+    assert_eq!(json.status.code(), Some(1), "{}", stderr(&json));
+    assert!(stderr(&json).contains("incomplete"), "{}", stderr(&json));
+    let text = security(&path, &[]);
+    assert_eq!(text.status.code(), Some(1));
+    assert!(
+        stdout(&text).contains("cannot be promised"),
+        "{}",
+        stdout(&text)
+    );
+}
+
+#[test]
 fn text_from_the_file_cannot_rewrite_the_line() {
     // An address with an escape, a right-to-left override and a line separator in it.
     let data = doc(

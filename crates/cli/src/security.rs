@@ -109,6 +109,8 @@ const NOTES: [Note; 4] = [
 /// What the command found, ready to print.
 pub(crate) struct Verdict {
     pub(crate) risky: bool,
+    /// The scan could not read everything, so a clean result cannot be promised.
+    pub(crate) incomplete: bool,
     pub(crate) text: String,
     pub(crate) json: Value,
 }
@@ -145,6 +147,7 @@ pub(crate) fn assess(file: &Path, password: Option<String>) -> Result<Verdict, S
     });
     Ok(Verdict {
         risky,
+        incomplete: !features.complete,
         text: render(file, &summary, &found, &notes, features.complete),
         json,
     })
@@ -188,7 +191,8 @@ fn render(
     }
     if !complete {
         out.push_str(
-            "\nThe scan was incomplete: a feature that is not listed may have been missed.\n",
+            "\nThe scan was incomplete: a feature that is not listed may have been missed, so \
+             \"no risky features\" cannot be promised.\n",
         );
     }
     out
