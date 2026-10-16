@@ -97,6 +97,8 @@ mod ffi {
         /// `request`, `perm_encrypted`, `perm_owner`, `perm_print`, `perm_print_high_quality`: the
         /// answer to `request_permissions`.
         Permissions,
+        /// `request`, `summary_json`: the answer to `request_summary`.
+        Summary,
     }
 
     /// How a search ended (the protocol's `SearchOutcome`).
@@ -376,6 +378,8 @@ mod ffi {
         perm_owner: bool,
         perm_print: bool,
         perm_print_high_quality: bool,
+        /// `Summary`: the report as JSON, as `vellora inspect --json` prints it.
+        summary_json: String,
     }
 
     extern "Rust" {
@@ -538,6 +542,9 @@ mod ffi {
         /// Asks what the document's security settings allow (`Permissions`). A document the engine
         /// cannot read the settings of is a `RequestFailed`: do not print it.
         fn request_permissions(self: &EngineClient) -> Result<u64>;
+
+        /// Asks for the document report (`Summary`): the JSON `vellora inspect --json` prints.
+        fn request_summary(self: &EngineClient) -> Result<u64>;
 
         /// Asks for a band of a page for a printer, with annotations as they print. Returns the
         /// request id (`TileReady` follows), or 0 when every print slot is busy.
@@ -979,6 +986,16 @@ impl EngineClient {
             .map(|id| id.0)
     }
 
+    /// Asks for the document report; see [`Client::request_summary`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] when the engine is down or the handle is closed.
+    pub fn request_summary(&self) -> Result<u64, ClientError> {
+        let client = self.client.as_ref().ok_or(ClientError::Closed)?;
+        client.request_summary().map(|id| id.0)
+    }
+
     /// Asks what the document's security settings allow; see [`Client::request_permissions`].
     ///
     /// # Errors
@@ -1129,6 +1146,7 @@ impl EngineEvent {
             perm_owner: false,
             perm_print: false,
             perm_print_high_quality: false,
+            summary_json: String::new(),
         }
     }
 }
@@ -1203,7 +1221,8 @@ impl From<Event> for EngineEvent {
             | Event::PageFound { .. }
             | Event::Links { .. }
             | Event::TextPage { .. }
-            | Event::Permissions { .. }) => Self::navigation_answer(answer),
+            | Event::Permissions { .. }
+            | Event::Summary { .. }) => Self::navigation_answer(answer),
             Event::SearchHits {
                 request,
                 hits,
@@ -1326,6 +1345,12 @@ impl EngineEvent {
                 perm_print: print,
                 perm_print_high_quality: print_high_quality,
                 ..Self::empty(EventKind::Permissions)
+            },
+            Event::Summary { request, json } => Self {
+                request: request.0,
+                has_request: true,
+                summary_json: json,
+                ..Self::empty(EventKind::Summary)
             },
             Event::PageFound { request, page } => Self {
                 request: request.0,
@@ -1564,6 +1589,19 @@ mod tests {
                 message: "cross-reference unreadable".into(),
             }]
         );
+    }
+
+    #[test]
+    fn the_report_converts_to_a_flat_event() {
+        let report = bridged(Event::Summary {
+            request: RequestId(12),
+            json: "{\"pages\": 2}".to_owned(),
+        });
+        assert_eq!(
+            (report.kind, report.request, report.has_request),
+            (EventKind::Summary, 12, true)
+        );
+        assert_eq!(report.summary_json, "{\"pages\": 2}");
     }
 
     #[test]

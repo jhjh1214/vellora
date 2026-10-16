@@ -915,3 +915,24 @@ fn a_print_band_comes_back_through_the_client_and_the_permissions_are_reported()
         "a band is read once; its slot has been given back"
     );
 }
+
+#[test]
+fn the_report_comes_back_through_the_client_as_the_text_the_cli_prints() {
+    let (_dir, path) = golden_file();
+    let client = Client::open(config(0), &path).unwrap();
+    wait_for(&client, |event| matches!(event, Event::Opened { .. }));
+
+    let asked = client.request_summary().unwrap();
+    let seen = wait_for(&client, |event| matches!(event, Event::Summary { .. }));
+    let Some(Event::Summary { request, json }) = seen.last() else {
+        panic!("expected the report, saw {seen:?}");
+    };
+    assert_eq!(*request, asked);
+
+    let mut options = vellora_inspect::Options::default();
+    options.password = None;
+    let expected = vellora_inspect::inspect(&fs::read(&path).unwrap(), &options).unwrap();
+    assert_eq!(*json, serde_json::to_string_pretty(&expected).unwrap());
+    let value: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(value["pages"], 3);
+}

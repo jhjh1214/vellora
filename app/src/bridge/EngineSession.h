@@ -95,6 +95,9 @@ public:
     // What the document's security settings allow: `permissionsReady` follows. 0 if it could not be
     // sent. A document whose settings the engine cannot read is a `requestFailed`; do not print it.
     quint64 requestPermissions();
+    // The document report: `summaryReady` follows with the JSON `vellora inspect --json` prints for
+    // this document, made by the engine. 0 if it could not be sent.
+    quint64 requestSummary();
     // A band of a page for a printer: `width` x `height` pixels (their product at most a slot) at
     // (`x`, `y`) of the page at `scale` device pixels per point, drawn with the annotations that
     // print and, with `grayscale`, in grey. `tileReady` follows. 0 if every print slot is busy
@@ -141,6 +144,8 @@ signals:
     // only). `owner`: the document was opened with its owner password, which allows everything.
     void permissionsReady(quint64 request, bool encrypted, bool owner, bool print,
                           bool printHighQuality);
+    // The answer to `requestSummary`: the report as JSON text (UTF-8, from the engine).
+    void summaryReady(quint64 request, const QString& json);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);
     // Requests in `lost` will never be answered; ask again after `engineRestarted`.

@@ -18,12 +18,15 @@ path = "src/main.rs"
 
 [dependencies]
 vellora-cos = { workspace = true }
+vellora-inspect = { workspace = true }
 vellora-ipc = { workspace = true }
 vellora-render = { workspace = true }
 vellora-shm = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
 stringprep = { workspace = true }
+# The report of `GetSummary` is written as the CLI writes it (M1 task 18b).
+serde_json = { workspace = true }
 regex = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

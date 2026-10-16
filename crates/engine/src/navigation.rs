@@ -20,9 +20,11 @@ use vellora_cos::links::read_links;
 use vellora_cos::{
     DestinationResolver, Limits, ObjectStore, Outline, OutlineItem, Page, PageLabels, PasswordRole,
 };
+use vellora_inspect::{StringList, Summary, summarize};
 use vellora_ipc::{
     Destination, ErrorKind, Fit, Link, LinkAction, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES,
-    NamedAction, OutlineEntry, Request, RequestId, Response, TextChar, TitleStyle,
+    MAX_SUMMARY_JSON_BYTES, NamedAction, OutlineEntry, Request, RequestId, Response, TextChar,
+    TitleStyle,
 };
 use zeroize::Zeroizing;
 
@@ -68,7 +70,8 @@ pub(crate) fn request_id(request: &Request) -> Option<RequestId> {
         | Request::FindPageLabel { req_id, .. }
         | Request::GetLinks { req_id, .. }
         | Request::GetTextPage { req_id, .. }
-        | Request::GetPermissions { req_id } => Some(*req_id),
+        | Request::GetPermissions { req_id }
+        | Request::GetSummary { req_id } => Some(*req_id),
         _ => None,
     }
 }
@@ -226,6 +229,35 @@ fn access_of(encryption: Option<(u32, i32)>, owner: bool) -> Access {
     }
 }
 
+/// The report on `store` as the text `vellora inspect --json` prints: the same `Summary`, written
+/// with `serde_json::to_string_pretty`. A report that does not fit a frame loses entries from its
+/// longer list (the addresses or the embedded file names) until it does, and says so in the list's
+/// `truncated`; every other part of the report is bounded far below the limit.
+fn summary_json(store: &ObjectStore<'_>) -> Result<String, String> {
+    let mut summary = summarize(store);
+    loop {
+        let json = serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?;
+        if json.len() <= MAX_SUMMARY_JSON_BYTES {
+            return Ok(json);
+        }
+        let list = longer_list(&mut summary).ok_or("the report is too large to send")?;
+        list.items.pop();
+        list.truncated = true;
+    }
+}
+
+/// The list with more items left in it, if either has any.
+fn longer_list(summary: &mut Summary) -> Option<&mut StringList> {
+    let size = |list: &Option<StringList>| list.as_ref().map_or(0, |list| list.items.len());
+    let pick_uris = size(&summary.uris) >= size(&summary.embedded_files);
+    let list = if pick_uris {
+        summary.uris.as_mut()
+    } else {
+        summary.embedded_files.as_mut()
+    };
+    list.filter(|list| !list.items.is_empty())
+}
+
 /// One preorder entry of the whole outline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Flat {
@@ -357,6 +389,7 @@ impl FlatOutline {
 
 /// The reading state for one document.
 struct Navigator<'s, 'a> {
+    store: &'s ObjectStore<'a>,
     resolver: DestinationResolver<'s, 'a>,
     page_count: u32,
     access: Access,
@@ -453,6 +486,7 @@ impl<'s, 'a> Navigator<'s, 'a> {
         access: Access,
     ) -> Self {
         Self {
+            store,
             resolver: DestinationResolver::new(store),
             page_count,
             access,
@@ -508,6 +542,10 @@ impl<'s, 'a> Navigator<'s, 'a> {
                 owner: self.access.owner,
                 print: self.access.print,
                 print_high_quality: self.access.print_high_quality,
+            },
+            Request::GetSummary { req_id } => match summary_json(self.store) {
+                Ok(json) => Response::Summary { req_id, json },
+                Err(reason) => error_response(Some(req_id), ErrorKind::ReadFailed, &reason),
             },
             Request::FindPageLabel { req_id, ref text } => {
                 let page_count = self.page_count;
