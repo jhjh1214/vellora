@@ -12,6 +12,7 @@ vellora --help | --version
 | 0 | The command did what was asked. |
 | 1 | The operation failed: the file cannot be read, is not a PDF that Vellora can open, or the password is wrong. A message starting with `vellora: ` is written to stderr and nothing to stdout. |
 | 2 | Usage error: unknown command, missing or unknown argument. |
+| 3 | Only `vellora security`: the file has risky features. |
 
 Commands never run or open anything found inside a document: no JavaScript, no launch actions, no attachments, no network access.
 
@@ -130,3 +131,62 @@ Example (`vellora inspect --json`, abbreviated):
   "problems": []
 }
 ```
+
+## `vellora security`
+
+```
+vellora security <FILE> [--json] [--password <PASSWORD>]
+```
+
+Answers one question: does this file have features that make it risky to open? It runs in the process of the command, reads the file as `inspect` does, and opens or runs nothing.
+
+**Exit codes:** 0 no risky features were found and the scan read everything; **3** risky features were found; 1 the file cannot be read or assessed, which includes an encrypted file without its password (pass `--password`) and a file the scan could not read in full when it found nothing (the report is still printed, with `"complete": false`: a security check does not say "fine" to what it could not read); 2 usage.
+
+The features counted as risky are: a script that runs when the file opens, JavaScript actions, document-level scripts, event actions (`/AA`), launch actions, form submission, links that open other PDF files, embedded files and XFA forms. Links to addresses, forms, layers and signature fields are listed as *also present* but do not make a file risky. A scan that could not read everything (`"complete": false`) may have missed a feature: the text says so. If it found risky features the exit code is 3 as usual; if it found none the exit code is 1.
+
+The text output gives the verdict, each finding with a sentence on what it means, the addresses in links and the names of embedded files (text from the file is shown on one line, with control characters and invisible formatting replaced by spaces).
+
+`--json` prints:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `risky` | boolean | At least one finding. |
+| `complete` | boolean | The scan read everything; when `false`, a feature not listed may have been missed. |
+| `findings` | array | Objects with `id` (the name of the flag in `inspect`'s `features`), `title` and `explanation`. |
+| `notes` | array | Objects with `id` and `title`: features that are present and not risky by themselves. |
+| `uris` | object | The addresses of links: `items` (at most 100), `total`, `truncated`. |
+| `embedded_files` | object | The names of embedded files, as `uris`. |
+| `encrypted` | boolean | The file is encrypted (and was opened with the password given). |
+| `repaired` | boolean | The file had to be repaired to be read, so the scan may be incomplete. |
+| `problems` | array of strings | Things that went wrong while reading. |
+
+## `vellora render`
+
+```
+vellora render <FILE> -o <PATH> [--pages <PAGES>] [--dpi <N>] [--password <PASSWORD>]
+```
+
+Draws pages as PNG files with **the engine**: the same sandboxed process the desktop application uses, started for the run. Nothing in the file is run.
+
+| Option | Meaning |
+|---|---|
+| `--pages <PAGES>` | A page specification (below). The default is the first page. |
+| `--dpi <N>` | Resolution in dots per inch, 1 to 4,608; the default is 150. A page that would be more than 134 million pixels is refused: lower the resolution. |
+| `-o`, `--output <PATH>` | A folder (made if it is not there), in which the pages are written as `page-N.png`, numbered by page and padded to the width of the page count; or, for exactly one page, a file name ending in `.png`. |
+| `--password <PASSWORD>` | As for `inspect`. |
+
+The files written are listed on stdout, one per line. The image is RGB, 8 bits, drawn the way the screen draws a page (annotations that need no interaction included).
+
+The engine is looked for next to the `vellora` program (set `VELLORA_ENGINE` to use another), and PDFium next to the engine (set `VELLORA_PDFIUM_LIB` to use another).
+
+## `vellora text`
+
+```
+vellora text <FILE> [--pages <PAGES>] [--password <PASSWORD>]
+```
+
+Prints the text of pages in reading order, as the engine extracts it (the order PDFium reads it in, which is the order of the content for most documents and not always the order a person reads columns in). Text in images is not recognised. Line ends are `\n`. Control characters in the text other than line feed and tab are replaced by spaces, so that a document cannot steer your terminal. Pages are separated by a form feed (U+000C), as `pdftotext` does, with none after the last. `--pages` defaults to all pages; pages are printed in the order given.
+
+## Page specifications
+
+`--pages` takes a list of pieces separated by commas: `N` is one page, `N-M` a range, `N-` runs to the last page and `-M` starts at the first. Pages count from 1. `1-5,8,10-` is pages 1 to 5, 8, and 10 to the end. A page named twice is printed once, where it first came. A page the document does not have, page 0, a range that runs backwards and anything else that is not a page are refused (exit code 1) with a message that says which.

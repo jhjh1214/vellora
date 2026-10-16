@@ -176,6 +176,11 @@ jobs:
               echo "::group::$f"
               grep -E '^(FAIL!|Totals)|Loc:|Actual|Expected|vellora.watchdog|QINFO' "$f" | head -120
               echo "::endgroup::"
+            elif ! grep -q '^Totals' "$f"; then
+              # A test that crashed or was killed never writes its totals: show how far it got.
+              echo "::group::$f (no totals: the test ended early)"
+              tail -n 60 "$f"
+              echo "::endgroup::"
             fi
           done
 

@@ -114,9 +114,13 @@ private slots:
         QVERIFY(dialog.select(QStringLiteral("libjpeg-turbo (in PDFium)")));
         QVERIFY(dialog.viewer()->textCursor().block().text().startsWith(
             QStringLiteral("--- libjpeg_turbo")));
-        const QString crate = *std::find_if(
-            dialog.components().begin(), dialog.components().end(),
-            [](const QString& c) { return c.startsWith(QStringLiteral("zeroize ")); });
+        // One copy of the list: begin() and end() of two temporaries are not of the same array.
+        const QStringList components = dialog.components();
+        const auto found =
+            std::find_if(components.cbegin(), components.cend(),
+                         [](const QString& c) { return c.startsWith(QStringLiteral("zeroize ")); });
+        QVERIFY(found != components.cend());
+        const QString crate = *found;
         QVERIFY(dialog.select(crate));
         QVERIFY(dialog.viewer()->textCursor().block().text().contains(crate));
         QVERIFY(!dialog.select(QStringLiteral("not a component")));
