@@ -27,7 +27,7 @@ use vellora_ipc::{
     ErrorKind, MAX_ERROR_MESSAGE_BYTES, PROTOCOL_VERSION, Password, Priority, Request, RequestId,
     Response, SlotId, check_version, read_frame, write_frame,
 };
-use vellora_render::{self as render, Renderer, TileRect, TileRequest};
+use vellora_render::{self as render, RenderMode, Renderer, TileRect, TileRequest};
 use vellora_shm::{HandleToken, TileRegion};
 
 use crate::document::Document;
@@ -230,6 +230,17 @@ struct TileJob {
     scale: f32,
     rect: vellora_ipc::TileRect,
     slot: SlotId,
+    mode: RenderMode,
+}
+
+/// What a tile request asks for, before it is checked and queued.
+#[derive(Clone, Copy)]
+struct Band {
+    page: u32,
+    scale: f32,
+    rect: vellora_ipc::TileRect,
+    slot: SlotId,
+    mode: RenderMode,
 }
 
 impl Host<'_> {
@@ -325,10 +336,35 @@ impl Host<'_> {
             } => {
                 #[cfg(debug_assertions)]
                 forced_failure();
-                (
-                    self.enqueue(req_id, page, scale, rect, slot, priority),
-                    Flow::Continue,
-                )
+                let band = Band {
+                    page,
+                    scale,
+                    rect,
+                    slot,
+                    mode: RenderMode::Screen,
+                };
+                (self.enqueue(req_id, priority, band), Flow::Continue)
+            }
+            Request::RenderPrint {
+                req_id,
+                page,
+                scale,
+                rect,
+                slot,
+                grayscale,
+            } => {
+                let band = Band {
+                    page,
+                    scale,
+                    rect,
+                    slot,
+                    mode: if grayscale {
+                        RenderMode::PrintGrayscale
+                    } else {
+                        RenderMode::Print
+                    },
+                };
+                (self.enqueue(req_id, Priority::Print, band), Flow::Continue)
             }
             // No answer either way: what was queued is dropped, what is rendering is not sent.
             Request::Cancel { req_id } => {
@@ -344,7 +380,8 @@ impl Host<'_> {
             | Request::GetPageLabels { .. }
             | Request::FindPageLabel { .. }
             | Request::GetLinks { .. }
-            | Request::GetTextPage { .. } => (self.navigate(request), Flow::Continue),
+            | Request::GetTextPage { .. }
+            | Request::GetPermissions { .. } => (self.navigate(request), Flow::Continue),
         }
     }
 
@@ -444,15 +481,14 @@ impl Host<'_> {
 
     /// Checks a tile request against the document and the slot size and queues it. `Some` is the
     /// refusal to send; a queued tile is answered later by the worker.
-    fn enqueue(
-        &self,
-        req_id: RequestId,
-        page: u32,
-        scale: f32,
-        rect: vellora_ipc::TileRect,
-        slot: SlotId,
-        priority: Priority,
-    ) -> Option<Response> {
+    fn enqueue(&self, req_id: RequestId, priority: Priority, band: Band) -> Option<Response> {
+        let Band {
+            page,
+            scale,
+            rect,
+            slot,
+            mode,
+        } = band;
         let invalid = |reason: &dyn std::fmt::Display| {
             Some(error_response(
                 Some(req_id),
@@ -482,6 +518,7 @@ impl Host<'_> {
                 scale,
                 rect,
                 slot,
+                mode,
             },
         );
         None
@@ -546,7 +583,7 @@ fn render_tile(region: &mut TileRegion, req_id: RequestId, job: &TileJob) -> Res
         let tile = bytes.get_mut(..needed).ok_or(SlotFailure::TooSmall)?;
         job.document
             .handle
-            .render_tile(request, tile, stride)
+            .render_tile_as(request, job.mode, tile, stride)
             .map_err(SlotFailure::Render)
     });
     match rendered {

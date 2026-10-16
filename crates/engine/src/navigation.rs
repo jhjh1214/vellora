@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use vellora_cos::links::read_links;
 use vellora_cos::{
-    DestinationResolver, Limits, ObjectStore, Outline, OutlineItem, Page, PageLabels,
+    DestinationResolver, Limits, ObjectStore, Outline, OutlineItem, Page, PageLabels, PasswordRole,
 };
 use vellora_ipc::{
     Destination, ErrorKind, Fit, Link, LinkAction, MAX_OUTLINE_PATH, MAX_OUTLINE_TITLE_BYTES,
@@ -67,7 +67,8 @@ pub(crate) fn request_id(request: &Request) -> Option<RequestId> {
         | Request::GetPageLabels { req_id, .. }
         | Request::FindPageLabel { req_id, .. }
         | Request::GetLinks { req_id, .. }
-        | Request::GetTextPage { req_id, .. } => Some(*req_id),
+        | Request::GetTextPage { req_id, .. }
+        | Request::GetPermissions { req_id } => Some(*req_id),
         _ => None,
     }
 }
@@ -99,8 +100,8 @@ pub(crate) fn run<W: Write>(messages: &Receiver<Message>, output: &Mutex<W>) {
     let store = open_store(mapped.as_slice(), &unlock);
     drop(unlock);
     match &store {
-        Ok(store) => {
-            let mut navigator = Navigator::new(store, page_count, document);
+        Ok((store, role)) => {
+            let mut navigator = Navigator::new(store, page_count, document, access(store, *role));
             serve(messages, output, |request| navigator.answer(request));
         }
         Err(reason) => {
@@ -159,13 +160,70 @@ fn refusal(request: &Request, kind: ErrorKind, message: &dyn std::fmt::Display) 
 fn open_store<'a>(
     bytes: &'a [u8],
     unlock: &[Zeroizing<Vec<u8>>],
-) -> Result<ObjectStore<'a>, String> {
+) -> Result<(ObjectStore<'a>, Option<PasswordRole>), String> {
     let store = ObjectStore::open(bytes, Limits::default()).map_err(|e| e.to_string())?;
     store.settle().map_err(|e| e.to_string())?;
-    if store.is_locked() && !unlock.iter().any(|form| store.authenticate(form).is_ok()) {
+    // A document whose user password is empty opens without any password, as the user.
+    let mut role = store.password_role();
+    if store.encryption_info().is_some() {
+        // The owner password outranks the user password, so the first form that opens it is not
+        // enough, and a document that is already open may still be given its owner password: keep
+        // the best role any form gets.
+        for form in unlock {
+            if let Ok(found) = store.authenticate(form) {
+                role = Some(found);
+                if found == PasswordRole::Owner {
+                    break;
+                }
+            }
+        }
+    }
+    if store.is_locked() {
         return Err("the document cannot be unlocked".to_owned());
     }
-    Ok(store)
+    Ok((store, role))
+}
+
+/// What the document's security settings allow, as the UI is told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // one flag per fact the UI is told
+struct Access {
+    encrypted: bool,
+    owner: bool,
+    print: bool,
+    print_high_quality: bool,
+}
+
+/// The permissions of `store`, opened with `role` (`None` for a document that is not locked).
+fn access(store: &ObjectStore<'_>, role: Option<PasswordRole>) -> Access {
+    access_of(
+        store
+            .encryption_info()
+            .map(|info| (info.revision, info.permissions)),
+        role == Some(PasswordRole::Owner),
+    )
+}
+
+/// The permissions of a document with the given `/R` and `/P` (`None`: not encrypted). The owner
+/// password allows everything. Before revision 3 there is no separate bit for printing at full
+/// quality, so printing is printing.
+fn access_of(encryption: Option<(u32, i32)>, owner: bool) -> Access {
+    let Some((revision, mask)) = encryption else {
+        return Access {
+            encrypted: false,
+            owner: false,
+            print: true,
+            print_high_quality: true,
+        };
+    };
+    let bit = |n: u32| mask & (1 << (n - 1)) != 0;
+    let print = owner || bit(3);
+    Access {
+        encrypted: true,
+        owner,
+        print,
+        print_high_quality: owner || (print && (revision < 3 || bit(12))),
+    }
 }
 
 /// One preorder entry of the whole outline.
@@ -301,6 +359,7 @@ impl FlatOutline {
 struct Navigator<'s, 'a> {
     resolver: DestinationResolver<'s, 'a>,
     page_count: u32,
+    access: Access,
     /// Read on first use. `Err` is the reason the labels cannot be read, kept so that a hostile
     /// number tree is walked once.
     labels: Option<Result<Option<PageLabels>, String>>,
@@ -387,10 +446,16 @@ impl TextCache {
 }
 
 impl<'s, 'a> Navigator<'s, 'a> {
-    fn new(store: &'s ObjectStore<'a>, page_count: u32, document: Arc<Document>) -> Self {
+    fn new(
+        store: &'s ObjectStore<'a>,
+        page_count: u32,
+        document: Arc<Document>,
+        access: Access,
+    ) -> Self {
         Self {
             resolver: DestinationResolver::new(store),
             page_count,
+            access,
             labels: None,
             flat: None,
             pages: None,
@@ -437,6 +502,13 @@ impl<'s, 'a> Navigator<'s, 'a> {
                 skip,
                 limit,
             } => self.text.page(req_id, page, skip, limit),
+            Request::GetPermissions { req_id } => Response::Permissions {
+                req_id,
+                encrypted: self.access.encrypted,
+                owner: self.access.owner,
+                print: self.access.print,
+                print_high_quality: self.access.print_high_quality,
+            },
             Request::FindPageLabel { req_id, ref text } => {
                 let page_count = self.page_count;
                 match self.labels() {
@@ -646,6 +718,50 @@ fn truncated(mut text: String, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_document_that_is_not_encrypted_allows_everything() {
+        let open = access_of(None, false);
+        assert_eq!(
+            open,
+            Access {
+                encrypted: false,
+                owner: false,
+                print: true,
+                print_high_quality: true
+            }
+        );
+    }
+
+    #[test]
+    fn printing_follows_bits_3_and_12_of_the_mask_and_the_owner_is_unrestricted() {
+        let none = -3904; // 0xFFFFF0C0: nothing allowed
+        let print = none | 4;
+        let print_hq = print | 2048;
+        assert!(!access_of(Some((3, none)), false).print);
+        assert!(!access_of(Some((6, none)), false).print_high_quality);
+        let low = access_of(Some((3, print)), false);
+        assert!(low.print && !low.print_high_quality, "{low:?}");
+        let high = access_of(Some((6, print_hq)), false);
+        assert!(high.print && high.print_high_quality, "{high:?}");
+        // Bit 12 alone does not allow printing.
+        let odd = access_of(Some((3, none | 2048)), false);
+        assert!(!odd.print && !odd.print_high_quality, "{odd:?}");
+        // Revision 2 has no bit for full quality.
+        let old = access_of(Some((2, print)), false);
+        assert!(old.print && old.print_high_quality, "{old:?}");
+        // The owner can do everything whatever /P says.
+        let owner = access_of(Some((6, none)), true);
+        assert_eq!(
+            owner,
+            Access {
+                encrypted: true,
+                owner: true,
+                print: true,
+                print_high_quality: true
+            }
+        );
+    }
 
     #[test]
     fn titles_are_cut_on_a_character_boundary() {

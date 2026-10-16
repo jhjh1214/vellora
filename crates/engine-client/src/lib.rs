@@ -34,6 +34,7 @@ pub mod crash;
 mod document;
 pub mod limits;
 pub mod logging;
+mod print;
 pub mod process;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -46,6 +47,7 @@ pub use client::{
 };
 pub use document::Change;
 pub use limits::ResourceLimits;
+pub use print::DEFAULT_PRINT_SLOTS;
 pub use process::{
     Crash, EngineProcess, PDFIUM_ENV, PDFIUM_LIBRARY_WINDOWS, SpawnConfig, SpawnError, Termination,
 };

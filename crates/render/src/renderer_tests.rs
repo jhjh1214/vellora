@@ -640,3 +640,108 @@ fn a_page_without_text_has_no_characters() {
         }
     });
 }
+
+/// A 100 x 100 page with a red square in the middle and three square annotations, each with an
+/// appearance of 10 x 10 points: black at the top left, not printable (flags 0); blue at the top
+/// right, printable (flags 4); green at the bottom left, hidden (flags 2).
+fn annotated_pdf() -> Vec<u8> {
+    use std::fmt::Write as _;
+    let appearance = |colour: &str| {
+        let content = format!("{colour} rg 0 0 10 10 re f");
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        )
+    };
+    let annotation = |rect: &str, flags: u32, appearance: u32| {
+        format!(
+            "<< /Type /Annot /Subtype /Square /Rect [{rect}] /F {flags} /AP << /N {appearance} 0 R >> >>"
+        )
+    };
+    let page_content = "1 0 0 rg 30 30 40 40 re f";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{page_content}\nendstream",
+            page_content.len()
+        ),
+        annotation("0 90 10 100", 0, 8),
+        annotation("90 90 100 100", 4, 9),
+        annotation("0 0 10 10", 2, 10),
+        appearance("0 0 0"),
+        appearance("0 0 1"),
+        appearance("0 1 0"),
+    ];
+    let mut out = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        writeln!(out, "{} 0 obj\n{object}\nendobj", index + 1).unwrap();
+    }
+    let xref = out.len();
+    writeln!(out, "xref\n0 {}\n0000000000 65535 f ", objects.len() + 1).unwrap();
+    for offset in offsets {
+        writeln!(out, "{offset:010} 00000 n ").unwrap();
+    }
+    write!(
+        out,
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    )
+    .unwrap();
+    out.into_bytes()
+}
+
+fn render_as(doc: &DocHandle, mode: RenderMode) -> Vec<u8> {
+    let mut buffer = vec![0xEE; 100 * 100 * 4];
+    doc.render_tile_as(request(0, 1.0, (0, 0, 100, 100)), mode, &mut buffer, 400)
+        .unwrap();
+    buffer
+}
+
+#[test]
+fn printing_leaves_out_what_is_not_printable_and_keeps_what_is() {
+    with_renderer(|renderer| {
+        let doc = renderer.open(annotated_pdf()).unwrap();
+        let screen = render_as(&doc, RenderMode::Screen);
+        let print = render_as(&doc, RenderMode::Print);
+        // The page itself is the same either way.
+        assert_eq!(pixel(&screen, 100, 50, 50), [0, 0, 255], "red, as B G R");
+        assert_eq!(pixel(&print, 100, 50, 50), [0, 0, 255]);
+        // Top left (flags 0): on screen, not on paper.
+        assert_eq!(pixel(&screen, 100, 5, 5), [0, 0, 0]);
+        assert_eq!(pixel(&print, 100, 5, 5), bgr(WHITE));
+        // Top right (print flag): both.
+        assert_eq!(pixel(&screen, 100, 95, 5), [255, 0, 0]);
+        assert_eq!(pixel(&print, 100, 95, 5), [255, 0, 0]);
+        // Bottom left (hidden): neither.
+        assert_eq!(pixel(&screen, 100, 5, 95), bgr(WHITE));
+        assert_eq!(pixel(&print, 100, 5, 95), bgr(WHITE));
+    });
+}
+
+#[test]
+fn grey_printing_has_equal_channels_and_the_same_shapes() {
+    with_renderer(|renderer| {
+        let doc = renderer.open(annotated_pdf()).unwrap();
+        let colour = render_as(&doc, RenderMode::Print);
+        let grey = render_as(&doc, RenderMode::PrintGrayscale);
+        for (x, y) in [(50, 50), (95, 5), (5, 5), (20, 20)] {
+            let [b, g, r] = pixel(&grey, 100, x, y);
+            assert!(b == g && g == r, "({x}, {y}) is grey: {b} {g} {r}");
+        }
+        // Red becomes a mid-dark grey, white stays white, black stays black.
+        let [red_as_grey, _, _] = pixel(&grey, 100, 50, 50);
+        assert!((40..=120).contains(&red_as_grey), "{red_as_grey}");
+        assert_eq!(pixel(&grey, 100, 20, 20), bgr(WHITE));
+        // Where the colour print has ink, the grey one has some; where it has none, neither.
+        for y in 0..100 {
+            for x in 0..100 {
+                let blank = pixel(&colour, 100, x, y) == bgr(WHITE);
+                assert_eq!(blank, pixel(&grey, 100, x, y) == bgr(WHITE), "({x}, {y})");
+            }
+        }
+    });
+}

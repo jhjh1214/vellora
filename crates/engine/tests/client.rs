@@ -855,3 +855,63 @@ fn the_bridge_carries_the_password_answers() {
         Err(ClientError::Closed)
     ));
 }
+
+#[test]
+fn a_print_band_comes_back_through_the_client_and_the_permissions_are_reported() {
+    let (_dir, path) = golden_file();
+    let client = Client::open(config(0), &path).unwrap();
+    wait_for(&client, |event| matches!(event, Event::Opened { .. }));
+
+    let asked = client.request_permissions().unwrap();
+    let seen = wait_for(&client, |event| matches!(event, Event::Permissions { .. }));
+    assert!(matches!(
+        seen.last(),
+        Some(Event::Permissions {
+            request,
+            encrypted: false,
+            print: true,
+            print_high_quality: true,
+            ..
+        }) if *request == asked
+    ));
+
+    let size = client.page_size(0).unwrap();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (width, height) = (
+        (size.width * 1.5).ceil() as u32,
+        (size.height * 1.5).ceil() as u32,
+    );
+    let band = client
+        .request_print_band(
+            0,
+            1.5,
+            TileRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            false,
+        )
+        .unwrap()
+        .expect("a print slot is free");
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    assert!(
+        !client.read_print_band(band, &mut pixels).unwrap(),
+        "not ready before the engine answers"
+    );
+    wait_for(
+        &client,
+        |event| matches!(event, Event::TileReady { request, .. } if *request == band),
+    );
+    assert!(client.read_print_band(band, &mut pixels).unwrap());
+    let (golden_width, golden_height, golden) = golden_image(0);
+    assert_eq!((width, height), (golden_width, golden_height));
+    let (mean, loud) = difference(&bgrx_to_rgb(&pixels), &golden);
+    assert!(mean <= MEAN_LIMIT, "mean error {mean}");
+    assert!(loud <= LOUD_LIMIT, "{loud} of pixels are off");
+    assert!(
+        !client.read_print_band(band, &mut pixels).unwrap(),
+        "a band is read once; its slot has been given back"
+    );
+}

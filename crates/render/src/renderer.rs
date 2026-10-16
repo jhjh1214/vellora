@@ -44,6 +44,20 @@ pub struct TileRect {
     pub height: u32,
 }
 
+/// How a tile is drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RenderMode {
+    /// For the screen: annotations that need no interaction are drawn.
+    #[default]
+    Screen,
+    /// For a printer (`FPDF_PRINTING`): annotations and widgets as they print, so that what is
+    /// marked "do not print" stays off the paper and what is marked "print only" appears.
+    Print,
+    /// As [`Print`](Self::Print), in grey (`FPDF_GRAYSCALE`); the pixels stay `BGRx` with equal
+    /// channels.
+    PrintGrayscale,
+}
+
 /// What to render: one rectangle of one page at one scale.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TileRequest {
@@ -146,6 +160,7 @@ enum Command {
     Render {
         doc: u64,
         request: TileRequest,
+        mode: RenderMode,
         reply: Sender<Result<Vec<u8>, Error>>,
     },
     Text {
@@ -345,12 +360,28 @@ impl DocHandle {
         buffer: &mut [u8],
         stride: usize,
     ) -> Result<(), Error> {
+        self.render_tile_as(request, RenderMode::Screen, buffer, stride)
+    }
+
+    /// As [`render_tile`](Self::render_tile), drawn the way `mode` says.
+    ///
+    /// # Errors
+    ///
+    /// As [`render_tile`](Self::render_tile).
+    pub fn render_tile_as(
+        &self,
+        request: TileRequest,
+        mode: RenderMode,
+        buffer: &mut [u8],
+        stride: usize,
+    ) -> Result<(), Error> {
         request.validate(buffer.len(), stride)?;
         let (reply, answer) = mpsc::channel();
         self.commands
             .send(Command::Render {
                 doc: self.id,
                 request,
+                mode,
                 reply,
             })
             .map_err(|_| Error::Closed)?;
@@ -417,6 +448,7 @@ fn serve(pdfium: &Pdfium, inbox: &Receiver<Command>) {
             Command::Render {
                 doc,
                 request,
+                mode,
                 reply,
             } => {
                 let result = guarded(|| {
@@ -427,6 +459,7 @@ fn serve(pdfium: &Pdfium, inbox: &Receiver<Command>) {
                         request.page,
                         request.matrix(),
                         (width, height),
+                        mode,
                         &mut pixels,
                     )?;
                     Ok(pixels)

@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 use crate::Error;
 
 /// Version spoken by this build. Bumped on any wire-visible change.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Longest [`Password`] in bytes. The Standard Security Handler reads at most 127 bytes of a
 /// revision 6 password and 32 of an older one, so this is generous.
@@ -359,6 +359,8 @@ pub enum Priority {
     Prefetch,
     /// A page thumbnail.
     Thumbnail,
+    /// A band of a page being printed: after everything the reader is waiting for.
+    Print,
 }
 
 /// A pixel rectangle of the page at the requested scale, top-left origin.
@@ -510,6 +512,29 @@ pub enum Request {
         /// What to look for.
         query: SearchQuery,
     },
+    /// Render a band of a page for a printer into a shared-memory slot, as `RenderTile` does,
+    /// but with annotations as they print (`FPDF_PRINTING`) and, if asked, in grey. Queued after
+    /// every `Priority::Visible`, `Prefetch` and `Thumbnail` tile. Answered with `TileReady`;
+    /// `Cancel` applies.
+    RenderPrint {
+        /// Correlation id.
+        req_id: RequestId,
+        /// Zero-based page index.
+        page: u32,
+        /// Device pixels per point, in (0, [`MAX_TILE_SCALE`]].
+        scale: f32,
+        /// The part of the scaled page to render.
+        rect: TileRect,
+        /// Slot the engine writes the pixels into.
+        slot: SlotId,
+        /// Render in grey.
+        grayscale: bool,
+    },
+    /// What the document's security settings allow. Answered with `Permissions`.
+    GetPermissions {
+        /// Correlation id.
+        req_id: RequestId,
+    },
 }
 
 /// Messages from the engine to the UI.
@@ -630,6 +655,20 @@ pub enum Response {
         /// How many pages were searched.
         pages_done: u32,
     },
+    /// The answer to `GetPermissions`.
+    Permissions {
+        /// The request it answers.
+        req_id: RequestId,
+        /// The document is encrypted.
+        encrypted: bool,
+        /// It was opened with the owner password, which allows everything.
+        owner: bool,
+        /// Printing is allowed (bit 3 of `/P`), or the document is not restricted.
+        print: bool,
+        /// Printing at full quality is allowed (bit 12). When `print` is allowed and this is not, a
+        /// reader prints at low resolution only.
+        print_high_quality: bool,
+    },
 }
 
 /// Rules a decoded message must satisfy beyond being well-formed `postcard`.
@@ -662,25 +701,8 @@ pub fn check_version(theirs: u32) -> Result<(), Error> {
 impl Validate for Request {
     fn validate(&self) -> Result<(), Error> {
         match self {
-            Request::RenderTile { scale, rect, .. } => {
-                // `!(a > b)` style comparisons also reject NaN.
-                if !(scale.is_finite() && *scale > 0.0 && *scale <= MAX_TILE_SCALE) {
-                    return Err(Error::Invalid("tile scale must be in (0, 64]"));
-                }
-                if rect.width == 0
-                    || rect.height == 0
-                    || rect.width > MAX_TILE_SIDE
-                    || rect.height > MAX_TILE_SIDE
-                {
-                    return Err(Error::Invalid("tile sides must be 1..=4096"));
-                }
-                if u64::from(rect.width) * u64::from(rect.height) > MAX_TILE_AREA {
-                    return Err(Error::Invalid("tile area exceeds 2^24 pixels"));
-                }
-                if rect.x > MAX_TILE_ORIGIN || rect.y > MAX_TILE_ORIGIN {
-                    return Err(Error::Invalid("tile origin exceeds 2^24 pixels"));
-                }
-                Ok(())
+            Request::RenderTile { scale, rect, .. } | Request::RenderPrint { scale, rect, .. } => {
+                validate_tile(*scale, rect)
             }
             Request::Open {
                 password: Some(password),
@@ -739,7 +761,8 @@ impl Validate for Request {
             | Request::Open { .. }
             | Request::Cancel { .. }
             | Request::Close
-            | Request::GetOutlinePath { .. } => Ok(()),
+            | Request::GetOutlinePath { .. }
+            | Request::GetPermissions { .. } => Ok(()),
         }
     }
 }
@@ -821,9 +844,32 @@ impl Validate for Response {
             Response::Hello { .. }
             | Response::TileReady { .. }
             | Response::PageFound { .. }
-            | Response::SearchDone { .. } => Ok(()),
+            | Response::SearchDone { .. }
+            | Response::Permissions { .. } => Ok(()),
         }
     }
+}
+
+/// The rules of a tile request: the scale and the rectangle, which the renderer would refuse too.
+fn validate_tile(scale: f32, rect: &TileRect) -> Result<(), Error> {
+    // `!(a > b)` style comparisons also reject NaN.
+    if !(scale.is_finite() && scale > 0.0 && scale <= MAX_TILE_SCALE) {
+        return Err(Error::Invalid("tile scale must be in (0, 64]"));
+    }
+    if rect.width == 0
+        || rect.height == 0
+        || rect.width > MAX_TILE_SIDE
+        || rect.height > MAX_TILE_SIDE
+    {
+        return Err(Error::Invalid("tile sides must be 1..=4096"));
+    }
+    if u64::from(rect.width) * u64::from(rect.height) > MAX_TILE_AREA {
+        return Err(Error::Invalid("tile area exceeds 2^24 pixels"));
+    }
+    if rect.x > MAX_TILE_ORIGIN || rect.y > MAX_TILE_ORIGIN {
+        return Err(Error::Invalid("tile origin exceeds 2^24 pixels"));
+    }
+    Ok(())
 }
 
 /// The rules of a `SearchHits` message.
