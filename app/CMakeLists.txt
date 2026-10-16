@@ -113,6 +113,8 @@ add_library(vellora_shell STATIC
   src/canvas/CanvasView.h
   src/canvas/CanvasWidget.cpp
   src/canvas/CanvasWidget.h
+  src/canvas/LinkFocusOverlay.cpp
+  src/canvas/LinkFocusOverlay.h
   src/canvas/LinkLayer.cpp
   src/canvas/LinkLayer.h
   src/canvas/PageLayout.cpp

@@ -11,6 +11,8 @@ namespace {
 
 constexpr int kIdRole = Qt::UserRole;
 constexpr int kWidth = 480;
+// Characters the palette is at least wide enough for: a title and its shortcut.
+constexpr int kColumns = 64;
 constexpr int kVisibleRows = 8;
 
 // Every whitespace-separated word of `filter` occurs in `title`, ignoring case.
@@ -35,7 +37,9 @@ CommandPalette::CommandPalette(const CommandRegistry* registry, QWidget* parent)
     layout->addWidget(m_search);
     m_list->setFocusPolicy(Qt::NoFocus);
     layout->addWidget(m_list);
-    setFixedWidth(kWidth);
+    // As wide as kWidth pixels at the default font, and wider for a larger one, so that a title and
+    // its shortcut still fit when the system font is scaled up.
+    setFixedWidth(std::max(kWidth, fontMetrics().horizontalAdvance(QLatin1Char('x')) * kColumns));
 
     connect(m_search, &QLineEdit::textChanged, this, &CommandPalette::refresh);
     connect(m_search, &QLineEdit::returnPressed, this, &CommandPalette::runCurrent);

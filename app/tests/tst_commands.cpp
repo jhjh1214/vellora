@@ -4,10 +4,12 @@
 #include "commands/CommandRegistry.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTest>
 #include <functional>
@@ -100,6 +102,88 @@ private slots:
             check(menuAction->menu());
         }
         QCOMPARE(entries, registry.commands().size());
+    }
+
+    // Every command of the application, as the window registers them.
+    void everyCommandHasATitleAndAWayToReachItFromTheKeyboard() {
+        vellora::MainWindow window;
+        window.show();
+        const QList<Command>& commands = window.commands().commands();
+        QVERIFY(commands.size() > 40);
+        QSet<QString> ids;
+        QSet<QString> titles;
+        for (const Command& command : commands) {
+            // A title is what a screen reader reads and the palette lists: plain, not empty, and
+            // not the same as another command's.
+            QVERIFY2(!command.id.isEmpty(), "a command without an id");
+            QVERIFY2(!command.title.trimmed().isEmpty(), qPrintable(command.id + ": no title"));
+            QVERIFY2(command.title == command.title.trimmed(), qPrintable(command.id));
+            QVERIFY2(!command.title.contains(QLatin1Char('&')) &&
+                         !command.title.contains(QLatin1Char('\n')),
+                     qPrintable(command.id + ": title is not plain text"));
+            QVERIFY2(!ids.contains(command.id), qPrintable(command.id + ": id used twice"));
+            QVERIFY2(!titles.contains(command.title),
+                     qPrintable(command.title + ": title used twice"));
+            ids.insert(command.id);
+            titles.insert(command.title);
+            QVERIFY2(command.handler != nullptr, qPrintable(command.id));
+        }
+
+        // The keyboard reaches all of them through the palette, which has a shortcut of its own,
+        // lists every command and shows each one's shortcut next to its title.
+        const Command* palette = window.commands().find(QStringLiteral("palette.show"));
+        QVERIFY(palette != nullptr && !palette->shortcuts.isEmpty());
+        window.palette().open();
+        QCOMPARE(window.palette().visibleCommandIds().size(), commands.size());
+        auto* list = window.palette().findChild<QListWidget*>();
+        QVERIFY(list != nullptr);
+        for (int row = 0; row < list->count(); ++row) {
+            const Command* command =
+                window.commands().find(list->item(row)->data(Qt::UserRole).toString());
+            QVERIFY(command != nullptr);
+            const QString text = list->item(row)->text();
+            QVERIFY2(text.startsWith(command->title), qPrintable(text));
+            if (!command->shortcuts.isEmpty()) {
+                QVERIFY2(
+                    text.endsWith(command->shortcuts.first().toString(QKeySequence::NativeText)),
+                    qPrintable(text));
+            }
+        }
+
+        // No two commands claim the same key.
+        QSet<QString> keys;
+        for (const Command& command : commands) {
+            for (const QKeySequence& key : command.shortcuts) {
+                const QString text = key.toString(QKeySequence::PortableText);
+                QVERIFY2(!keys.contains(text), qPrintable(text + " is used twice"));
+                keys.insert(text);
+            }
+        }
+    }
+
+    void thePaletteStillFitsATitleAndItsShortcutWithALargerSystemFont() {
+        QFont large = QApplication::font();
+        const QFont original = large;
+        large.setPointSizeF(original.pointSizeF() * 2.0);
+        QApplication::setFont(large);
+        {
+            vellora::MainWindow window;
+            window.show();
+            window.palette().open();
+            auto* list = window.palette().findChild<QListWidget*>();
+            QVERIFY(list != nullptr);
+            int widest = 0;
+            for (int row = 0; row < list->count(); ++row) {
+                widest = std::max(widest,
+                                  list->fontMetrics().horizontalAdvance(list->item(row)->text()));
+            }
+            QVERIFY2(widest > 0, "no rows");
+            QVERIFY2(widest <= list->viewport()->width(),
+                     qPrintable(QStringLiteral("the longest row is %1 pixels, the list %2")
+                                    .arg(widest)
+                                    .arg(list->viewport()->width())));
+        }
+        QApplication::setFont(original);
     }
 
     void commandsDriveTheCanvas() {

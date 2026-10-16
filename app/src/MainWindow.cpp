@@ -141,6 +141,8 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     addView(viewMenu, "view.outline");
     addView(viewMenu, "view.searchResults");
     viewMenu->addAction(m_commands.createAction(QStringLiteral("view.caretBrowsing"), this));
+    viewMenu->addAction(m_commands.createAction(QStringLiteral("view.nextLink"), this));
+    viewMenu->addAction(m_commands.createAction(QStringLiteral("view.previousLink"), this));
     viewMenu->addSeparator();
     auto* layoutMenu = viewMenu->addMenu(tr("Page &Layout"));
     for (const char* id : {"view.layout.single", "view.layout.continuous", "view.layout.twoUp",
@@ -232,6 +234,10 @@ void MainWindow::registerCommands() {
         {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A)}, [this] { currentTab().selectPage(); });
     add("view.caretBrowsing", tr("Caret Browsing"), {QKeySequence(Qt::Key_F7)},
         [this] { currentTab().toggleCaretBrowsing(); });
+    add("view.nextLink", tr("Next Link"), {QKeySequence(Qt::Key_F8)},
+        [this] { currentTab().canvas().focusNextLink(true); });
+    add("view.previousLink", tr("Previous Link"), {QKeySequence(Qt::SHIFT | Qt::Key_F8)},
+        [this] { currentTab().canvas().focusNextLink(false); });
     add("edit.find", tr("Find…"), {QKeySequence::Find}, [this] { currentTab().showFind(); });
     add("edit.findNext", tr("Find Next"), {QKeySequence(Qt::Key_F3)},
         [this] { currentTab().findNext(); });

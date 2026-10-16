@@ -61,11 +61,13 @@ void SelectionOverlay::paintEvent(QPaintEvent*) {
         return;
     }
     QPainter painter(this);
-    // The caret is a solid line in the text colour, wide enough to find: it does not blink, which
+    // The caret is a black line with a white edge, so that it shows on the white of a page and on
+    // a page of any other colour, in whatever colours the system uses. It does not blink, which
     // keeps it still for readers who need that.
     if (!caret.isEmpty()) {
-        painter.fillRect(caret.adjusted(0.0, 0.0, std::max(0.0, 2.0 - caret.width()), 0.0),
-                         palette().color(QPalette::Text));
+        const QRectF core(caret.center().x() - 1.0, caret.top(), 2.0, caret.height());
+        painter.fillRect(core.adjusted(-1.0, -1.0, 1.0, 1.0), Qt::white);
+        painter.fillRect(core, Qt::black);
     }
     QColor color = palette().color(QPalette::Highlight);
     color.setAlpha(110);

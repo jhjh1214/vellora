@@ -4,11 +4,14 @@
 #include "MainWindow.h"
 #include "VelloraTestMain.h"
 #include "canvas/CanvasController.h"
+#include "canvas/LinkFocusOverlay.h"
 
+#include <QAbstractAnimation>
 #include <QAccessible>
 #include <QAccessibleActionInterface>
 #include <QAccessibleTextInterface>
 #include <QFile>
+#include <QScroller>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -269,6 +272,77 @@ private slots:
         // A link that is not there cannot be focused.
         QVERIFY(!f.view().focusLink(0, 7));
         QVERIFY(!f.view().focusLink(2, 0));
+    }
+
+    void theLinkCommandsStepThroughTheLinksWithAVisibleRing() {
+        Fixture f;
+        QAccessibleInterface* page = f.canvas()->child(0);
+        QTRY_COMPARE_WITH_TIMEOUT(page->childCount(), 2, kWaitMs);
+        vellora::LinkFocusOverlay* ring = f.view().linkFocusOverlay();
+        QVERIFY(ring->ringRect().isEmpty());
+        const auto focused = [&] { return f.view().focusedLink(); };
+
+        QVERIFY(f.window.commands().run(QStringLiteral("view.nextLink")));
+        QTRY_VERIFY_WITH_TIMEOUT(focused().has_value(), kWaitMs);
+        QCOMPARE(focused()->page, 0U);
+        QCOMPARE(focused()->index, 0);
+        const QRectF first = ring->ringRect();
+        QVERIFY(!first.isEmpty());
+        QVERIFY(f.view().viewport()->rect().intersects(first.toAlignedRect()));
+
+        QVERIFY(f.window.commands().run(QStringLiteral("view.nextLink")));
+        QCOMPARE(focused()->index, 1);
+        QVERIFY(ring->ringRect().top() > first.top()); // the second link is lower on the page
+        // No further link: the focus stays where it is.
+        QVERIFY(f.window.commands().run(QStringLiteral("view.nextLink")));
+        QTest::qWait(300);
+        QCOMPARE(focused()->index, 1);
+
+        QVERIFY(f.window.commands().run(QStringLiteral("view.previousLink")));
+        QCOMPARE(focused()->index, 0);
+        QVERIFY(f.window.commands().run(QStringLiteral("view.previousLink")));
+        QCOMPARE(focused()->index, 0);
+
+        // Enter follows it, Escape lets go and the ring goes with it.
+        QSignalSpy followed(&f.view(), &CanvasView::linkActivated);
+        QTest::keyClick(&f.view(), Qt::Key_Return);
+        QCOMPARE(followed.size(), 1);
+        QTest::keyClick(&f.view(), Qt::Key_Escape);
+        QVERIFY(!focused());
+        QVERIFY(ring->ringRect().isEmpty());
+    }
+
+    void theLinkStepsStartAtThePageOnScreenAndGoBackwardsFromTheEnd() {
+        Fixture f;
+        QAccessibleInterface* page = f.canvas()->child(0);
+        QTRY_COMPARE_WITH_TIMEOUT(page->childCount(), 2, kWaitMs);
+        // From the third page, going back finds the last link of the first.
+        f.controller()->goToPage(2);
+        QTRY_COMPARE_WITH_TIMEOUT(f.controller()->currentPage(), 2U, kWaitMs);
+        QVERIFY(f.window.commands().run(QStringLiteral("view.previousLink")));
+        QTRY_VERIFY_WITH_TIMEOUT(f.view().focusedLink().has_value(), kWaitMs);
+        QCOMPARE(f.view().focusedLink()->page, 0U);
+        QCOMPARE(f.view().focusedLink()->index, 1);
+    }
+
+    void nothingMovesOnItsOwnAndNothingIsAnimated() {
+        // Reduced motion: scrolling and page turns land at once, and the window has no animation
+        // objects or kinetic scrollers that could be left running.
+        Fixture f;
+        const QPointF before = f.controller()->scrollPosition();
+        f.controller()->goToPage(2);
+        QVERIFY(f.controller()->scrollPosition() != before);
+        const QPointF landed = f.controller()->scrollPosition();
+        QTest::qWait(300);
+        QCOMPARE(f.controller()->scrollPosition(), landed);
+        f.controller()->scrollBy(QPointF(0.0, 120.0));
+        const QPointF stepped = f.controller()->scrollPosition();
+        QVERIFY(stepped != landed);
+        QTest::qWait(300);
+        QCOMPARE(f.controller()->scrollPosition(), stepped);
+        QVERIFY(f.window.findChildren<QAbstractAnimation*>().isEmpty());
+        QVERIFY(QScroller::activeScrollers().isEmpty());
+        QVERIFY(!QScroller::hasScroller(f.view().viewport()));
     }
 
     void focusingALinkBringsItIntoView() {

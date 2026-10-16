@@ -2,6 +2,7 @@
 
 #include "accessibility/CanvasAccessible.h"
 #include "canvas/CanvasWidget.h"
+#include "canvas/LinkFocusOverlay.h"
 #include "links/LinkActions.h"
 #include "search/SearchOverlay.h"
 #include "text/SelectionOverlay.h"
@@ -48,6 +49,8 @@ CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     m_searchOverlay = new SearchOverlay(&m_controller, viewport());
     m_overlay = new SelectionOverlay(&m_controller, &m_selection, viewport());
     m_overlay->setCaretBrowser(&m_caret);
+    m_linkFocus = new LinkFocusOverlay(this, viewport());
+    connect(&m_links, &LinkLayer::linksChanged, this, [this] { stepLink(); });
     connect(&m_caret, &CaretBrowser::changed, this, [this] { announceCaret(); });
     m_banner = new QLabel(viewport());
     m_banner->setTextFormat(Qt::PlainText); // engine-derived text must never be read as markup
@@ -140,6 +143,7 @@ void CanvasView::setSearch(SearchController* search) {
 
 void CanvasView::reset() {
     m_focusLink.reset();
+    m_pendingLinkStep.reset();
     m_caret.reset();
     m_selection.clear();
     m_text.reset();
@@ -225,6 +229,7 @@ bool CanvasView::focusLink(quint32 page, int index) {
     m_focusLink = LinkRef{page, index};
     m_controller.revealRect(page, links.at(index).rect);
     viewport()->update();
+    emit linkFocusChanged();
     if (QAccessible::isActive()) {
         if (QAccessibleInterface* link = canvasLinkInterface(this, page, index)) {
             QAccessibleEvent event(link, QAccessible::Focus);
@@ -235,10 +240,51 @@ bool CanvasView::focusLink(quint32 page, int index) {
 }
 
 void CanvasView::clearLinkFocus() {
+    m_pendingLinkStep.reset();
     if (m_focusLink) {
         m_focusLink.reset();
         viewport()->update();
+        emit linkFocusChanged();
     }
+}
+
+bool CanvasView::focusNextLink(bool forward) {
+    m_pendingLinkStep = forward;
+    stepLink();
+    return true;
+}
+
+void CanvasView::stepLink() {
+    if (!m_pendingLinkStep) {
+        return;
+    }
+    const bool forward = *m_pendingLinkStep;
+    const quint32 count = m_controller.pageCount();
+    if (count == 0) {
+        m_pendingLinkStep.reset();
+        return;
+    }
+    // Where to start: just after (or before) the focused link, else at the page on screen.
+    qint64 page = m_focusLink ? m_focusLink->page : m_controller.currentPage();
+    int from = m_focusLink ? m_focusLink->index : (forward ? -1 : std::numeric_limits<int>::max());
+    for (quint32 scanned = 0; scanned < kMaxLinkScan && page >= 0 && page < count; ++scanned) {
+        const auto current = static_cast<quint32>(page);
+        if (!m_links.isComplete(current)) {
+            m_links.ensure(current); // the step is made when the links arrive
+            return;
+        }
+        const QList<Link> links = m_links.linksOf(current);
+        const int size = static_cast<int>(links.size());
+        const int next = forward ? from + 1 : std::min(from, size) - 1;
+        if (next >= 0 && next < size) {
+            m_pendingLinkStep.reset();
+            focusLink(current, next);
+            return;
+        }
+        page += forward ? 1 : -1;
+        from = forward ? -1 : std::numeric_limits<int>::max();
+    }
+    m_pendingLinkStep.reset(); // no further link
 }
 
 bool CanvasView::activateFocusedLink() {
