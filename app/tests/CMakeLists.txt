@@ -11,6 +11,8 @@ function(vellora_add_test name source)
   target_link_libraries(${name} PRIVATE vellora_shell Qt6::Test)
   target_compile_definitions(${name} PRIVATE
     VELLORA_GOLDEN_PDF="${VELLORA_ROOT}/crates/engine/tests/fixtures/golden.pdf"
+    # Encrypted fixtures (generate.py there): print permissions, passwords.
+    VELLORA_ENCRYPTION_DIR="${VELLORA_ROOT}/crates/cos/tests/fixtures/encryption"
     # One page, user password `user-pw` (made by crates/cos/tests/fixtures/encryption/generate.py).
     VELLORA_PROTECTED_PDF="${VELLORA_ROOT}/crates/cos/tests/fixtures/encryption/r6-aes-256-user-password.pdf")
   vellora_stage_runtime(${name})
@@ -36,6 +38,7 @@ endif()
 vellora_add_test(tst_navigation tst_navigation.cpp)
 vellora_add_test(tst_links tst_links.cpp)
 vellora_add_test(tst_search tst_search.cpp)
+vellora_add_test(tst_print tst_print.cpp)
 vellora_add_test(tst_text tst_text.cpp)
 # The rectangles the selection highlights, per scenario (regenerate with VELLORA_UPDATE_GOLDEN=1).
 target_compile_definitions(tst_text PRIVATE VELLORA_TEXT_GOLDEN="${CMAKE_CURRENT_SOURCE_DIR}/golden/selection.txt")

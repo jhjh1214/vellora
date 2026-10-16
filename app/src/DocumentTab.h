@@ -8,6 +8,8 @@
 #include "bridge/EngineSession.h"
 #include "canvas/CanvasView.h"
 #include "navigation/NavigationHistory.h"
+#include "print/PrintJob.h"
+#include "print/PrintRequest.h"
 #include "search/SearchController.h"
 #include "settings/AppSettings.h"
 
@@ -18,6 +20,8 @@
 #include <optional>
 #include <utility>
 
+class QPrinter;
+class QProgressDialog;
 class QSplitter;
 
 namespace vellora {
@@ -129,6 +133,26 @@ public:
     // Shows the sidebar on its Search tab.
     void showSearchResults();
 
+    // ---- printing ----
+    // Prints the document on a printer the reader chooses. The document is asked what it allows
+    // first: one that may not be printed says so and stops; one that may be printed at low
+    // resolution only says so and prints held to that. Then the reader chooses the pages and the
+    // fitting (`PrintOptionsDialog`) and the printer (the system's print dialog), and the pages are
+    // rendered by the engine and drawn while a progress dialog with Cancel is up.
+    //
+    // What the prompts show and answer is `PrintPrompt`; the default shows the two dialogs, and
+    // tests replace it. An empty optional is "cancel".
+    using PrintPrompt = std::function<std::optional<PrintRequest>(const PrintContext&)>;
+    void setPrintPrompt(PrintPrompt prompt) { m_printPrompt = std::move(prompt); }
+    void print();
+    // The same with the print preview dialog in place of a printer: the preview draws through the
+    // same path at screen resolution.
+    void printPreview();
+    // Draws `request` on `printer` and waits for it (the preview's drawing).
+    PrintJob::Result paintPreview(QPrinter& printer, const PrintRequest& request);
+    // The print being done, or null.
+    PrintJob* printJob() const { return m_printJob; }
+
     // Shows the sidebar on its outline tab.
     void showOutline();
     // The label of a page: the document's own if it has page labels, else its number.
@@ -169,6 +193,10 @@ signals:
     void message(const QString& text);
     // The tab wants the user's attention (a password prompt): show it.
     void needsAttention();
+    // A print is about to start; the job is deleted when it ends.
+    void printStarted(vellora::PrintJob* job);
+    // A print ended: how, and why if it did not complete.
+    void printFinished(vellora::PrintJob::Result result, const QString& message);
 
 private slots:
     void onOpened(quint32 pageCount, const QStringList& repairs);
@@ -183,6 +211,9 @@ private slots:
     void onPageFound(quint64 request, bool found, quint32 page);
     void onZoomChanged(double zoom);
     void onSearchCurrent(int index);
+    void onPermissions(quint64 request, bool encrypted, bool owner, bool print,
+                       bool printHighQuality);
+    void onPrintFinished(PrintJob::Result result, const QString& message);
 
 private:
     AppSettings::Layout currentLayout() const;
@@ -198,6 +229,11 @@ private:
     void goToPageNumber(const QString& text);
     void openUri(const QString& uri);
     void notify(const QString& text);
+    void askToPrint(bool preview);
+    PrintContext printContext(bool lowResolutionOnly, bool preview) const;
+    std::optional<PrintRequest> promptForPrint(const PrintContext& context);
+    void startPrint(const PrintRequest& request);
+    void showPreview(const PrintRequest& request);
 
     AppSettings* m_settings;
     // The canvas and the sidebar use the session, so the destructor deletes them before this member
@@ -242,6 +278,13 @@ private:
     quint64 m_findRequest = 0;
     quint32 m_page = 0;
     quint32 m_pageCount = 0;
+    // The question to the engine about printing, and whether the answer leads to a preview.
+    quint64 m_permissionRequest = 0;
+    bool m_previewAsked = false;
+    PrintPrompt m_printPrompt;
+    PrintRequest m_printRequest;
+    PrintJob* m_printJob = nullptr;
+    QProgressDialog* m_printProgress = nullptr;
 };
 
 } // namespace vellora

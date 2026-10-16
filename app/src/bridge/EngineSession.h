@@ -91,6 +91,20 @@ public:
     // search ends the one before it; `cancel` stops one and silences it.
     quint64 requestSearch(const QString& text, bool caseSensitive, bool wholeWord, bool regex);
 
+    // ---- printing ----
+    // What the document's security settings allow: `permissionsReady` follows. 0 if it could not be
+    // sent. A document whose settings the engine cannot read is a `requestFailed`; do not print it.
+    quint64 requestPermissions();
+    // A band of a page for a printer: `width` x `height` pixels (their product at most a slot) at
+    // (`x`, `y`) of the page at `scale` device pixels per point, drawn with the annotations that
+    // print and, with `grayscale`, in grey. `tileReady` follows. 0 if every print slot is busy
+    // (read or cancel a band, then ask again), or if the band is invalid or the engine is down.
+    quint64 requestPrintBand(quint32 page, float scale, quint32 x, quint32 y, quint32 width,
+                             quint32 height, bool grayscale);
+    // Fills `out` (RGB32, `width` x `height` as asked for) with a finished band and gives its slot
+    // back; false if the band is not ready (or was read already).
+    bool readPrintBand(quint64 request, quint32 width, quint32 height, QImage& out);
+
     // The operating-system id of the running engine process; 0 if none (for tests and diagnostics).
     quint32 engineProcessId() const { return m_client ? (*m_client)->engine_id() : 0; }
 
@@ -122,6 +136,11 @@ signals:
     // searched.
     void searchHits(quint64 request, const QList<vellora::SearchHit>& hits, quint32 pagesDone);
     void searchDone(quint64 request, vellora::SearchEnd end, quint32 hits, quint32 pagesDone);
+    // The answer to `requestPermissions`. `printHighQuality`: printing at full resolution is
+    // allowed (when `print` is and this is not, the document may be printed at low resolution
+    // only). `owner`: the document was opened with its owner password, which allows everything.
+    void permissionsReady(quint64 request, bool encrypted, bool owner, bool print,
+                          bool printHighQuality);
     // `request` is 0 when the failure belongs to no request.
     void requestFailed(quint64 request, const QString& message);
     // Requests in `lost` will never be answered; ask again after `engineRestarted`.

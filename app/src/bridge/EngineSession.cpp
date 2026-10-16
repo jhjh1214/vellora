@@ -314,6 +314,57 @@ quint64 EngineSession::findPageLabel(const QString& text) {
     }
 }
 
+quint64 EngineSession::requestPermissions() {
+    if (!m_client) {
+        return 0;
+    }
+    try {
+        return (*m_client)->request_permissions();
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+quint64 EngineSession::requestPrintBand(quint32 page, float scale, quint32 x, quint32 y,
+                                        quint32 width, quint32 height, bool grayscale) {
+    if (!m_client) {
+        return 0;
+    }
+    PrintBand band;
+    band.page = page;
+    band.scale = scale;
+    band.x = x;
+    band.y = y;
+    band.width = width;
+    band.height = height;
+    band.grayscale = grayscale;
+    try {
+        return (*m_client)->request_print_band(band);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+bool EngineSession::readPrintBand(quint64 request, quint32 width, quint32 height, QImage& out) {
+    if (!m_client || width == 0 || height == 0) {
+        return false;
+    }
+    // BGRx with tight rows, which is what RGB32 is in memory on little-endian machines.
+    if (out.format() != QImage::Format_RGB32 || out.width() != static_cast<int>(width) ||
+        out.height() != static_cast<int>(height)) {
+        out = QImage(static_cast<int>(width), static_cast<int>(height), QImage::Format_RGB32);
+    }
+    if (out.isNull() || out.bytesPerLine() != static_cast<qsizetype>(width) * 4) {
+        return false;
+    }
+    try {
+        return (*m_client)->read_print_band(
+            request, rust::Slice<uint8_t>(out.bits(), static_cast<size_t>(out.sizeInBytes())));
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 void EngineSession::invalidatePage(quint32 page) {
     if (m_client) {
         (*m_client)->invalidate_page(page);
@@ -442,7 +493,8 @@ void EngineSession::dispatch(const EngineEvent& event) {
         emit searchDone(event.request, event.search_end, event.search_hits, event.pages_done);
         break;
     case EventKind::Permissions:
-        // Asked for by the print dialog (M1 task 16b); nothing in the shell sends the request yet.
+        emit permissionsReady(event.request, event.perm_encrypted, event.perm_owner,
+                              event.perm_print, event.perm_print_high_quality);
         break;
     }
 }
