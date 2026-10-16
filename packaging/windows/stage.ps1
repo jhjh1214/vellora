@@ -19,10 +19,15 @@ foreach ($name in 'vellora.exe', 'vellora-engine.exe', 'pdfium.dll') {
     Copy-Item $file $Stage
 }
 
-# The compiler runtime is deployed too: a per-user install cannot run the redistributable.
 & windeployqt --release --no-translations --no-opengl-sw --no-system-d3d-compiler `
-    --compiler-runtime (Join-Path $Stage 'vellora.exe')
+    --no-compiler-runtime (Join-Path $Stage 'vellora.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
+
+# The C++ runtime, as DLLs next to the executables: a per-user install cannot run the
+# redistributable installer. (`windeployqt` would copy `vc_redist.x64.exe` instead.)
+$redist = Get-ChildItem (Join-Path $env:VCToolsRedistDir 'x64') -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
+if (-not $redist) { throw 'the MSVC redistributable DLLs were not found (is VCToolsRedistDir set?)' }
+Copy-Item (Join-Path $redist.FullName '*.dll') $Stage
 
 Copy-Item (Join-Path $root 'packaging/windows/remove-sandbox-profile.ps1') $Stage
 & (Join-Path $root 'packaging/stage-licenses.ps1') -Dest $Stage

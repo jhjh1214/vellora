@@ -1,6 +1,6 @@
 # Adds the licence files every package ships to $Dest: Vellora's own licence, the third-party
 # notices and the texts Qt's LGPL asks for (LGPL-3.0 and the GPL-3.0 it refers to), plus where to get
-# Qt's source. The GNU texts are downloaded here, not committed, and checked against a pinned hash.
+# Qt's source. The texts (SPDX licence list, pinned commit) are downloaded here, not committed, and checked against a pinned hash.
 param([Parameter(Mandatory)] [string] $Dest)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -9,8 +9,8 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $Dest 'LICENSE.txt')
 Copy-Item (Join-Path $root 'THIRD_PARTY_LICENSES') (Join-Path $Dest 'THIRD_PARTY_LICENSES.txt')
 $texts = @{
-    'LGPL-3.0.txt' = @('https://www.gnu.org/licenses/lgpl-3.0.txt', 'e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118')
-    'GPL-3.0.txt'  = @('https://www.gnu.org/licenses/gpl-3.0.txt', '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986')
+    'LGPL-3.0.txt' = @('https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/LGPL-3.0-only.txt', '996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1')
+    'GPL-3.0.txt'  = @('https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/GPL-3.0-only.txt', 'fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0')
 }
 foreach ($name in $texts.Keys) {
     $file = Join-Path $dir $name
