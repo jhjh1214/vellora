@@ -1,0 +1,92 @@
+name: Packaging
+
+# The installable artifacts, each built and smoke-tested (install or extract, then
+# `vellora --diagnostics-script scroll-zoom` on a fixture must exit 0). Runs on pull requests that
+# touch packaging, so a change shows its result before merging, and is called by `nightly.yml`,
+# which publishes the artifacts. Nightly builds are unsigned (docs/milestones/README.md, decision 1).
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/packaging.yml"
+      - "packaging/**"
+      - "app/CMakeLists.txt"
+      - "THIRD_PARTY_LICENSES"
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # The MSI is built with the last WiX release that has no maintenance-fee terms; it is a build
+  # tool only and is not shipped.
+  WIX_VERSION: 5.0.2
+
+jobs:
+  windows:
+    name: Windows MSI
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          modules: qtshadertools
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Fetch PDFium
+        run: cargo xtask pdfium fetch
+      - name: Build the app (Release)
+        shell: bash
+        run: |
+          cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake --build build --target vellora
+      - name: Stage the files and deploy Qt
+        run: pwsh packaging/windows/stage.ps1 -BuildDir build -Stage dist/stage
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          wix extension add --global "WixToolset.UI.wixext/$env:WIX_VERSION"
+      - name: Build the MSI
+        run: |
+          # The workspace version plus the run number: Windows Installer upgrades by version.
+          $toml = Get-Content Cargo.toml -Raw
+          if ($toml -notmatch '(?ms)\[workspace\.package\][^\[]*?^version = "(\d+\.\d+\.\d+)"') { throw 'no workspace version' }
+          $version = "$($Matches[1]).$($env:GITHUB_RUN_NUMBER % 65535)"
+          # Qt's licence dialog wants RTF: plain text, escaped.
+          $text = (Get-Content LICENSE -Raw) -replace '\\', '\\' -replace '\{', '\{' -replace '\}', '\}'
+          $text = [regex]::Replace($text, '[^\x00-\x7F]', { param($m) '\u' + [int][char]$m.Value + '?' })
+          $rtf = '{\rtf1\ansi\deff0{\fonttbl{\f0 Courier New;}}\f0\fs18 ' + ($text -replace "`r?`n", "\par`r`n") + '}'
+          Set-Content -Encoding ascii dist/license.rtf $rtf
+          $here = (Get-Location).Path
+          wix build packaging/windows/vellora.wxs -arch x64 -ext WixToolset.UI.wixext `
+            -d "Version=$version" -d "StageDir=$here\dist\stage" -d "LicenseRtf=$here\dist\license.rtf" `
+            -sice ICE38 -sice ICE64 -sice ICE91 -o "dist/Vellora-$version-x64.msi"
+          if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
+      - name: Smoke test (install, run, association, uninstall)
+        run: |
+          $msi = (Get-ChildItem dist/Vellora-*-x64.msi).FullName
+          pwsh packaging/windows/smoke.ps1 -Msi $msi -Fixture crates/engine/tests/fixtures/golden.pdf
+          if ($LASTEXITCODE -ne 0) { throw 'smoke test failed' }
+      - name: Windows Installer logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-logs
+          path: dist/msi-logs
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vellora-windows-x64-msi
+          path: dist/Vellora-*-x64.msi
+          if-no-files-found: error

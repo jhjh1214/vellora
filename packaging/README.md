@@ -1,6 +1,13 @@
 # packaging/ — distribution
 
-Populated as releases begin (Phase 1+).
+Built and smoke-tested by `.github/workflows/packaging.yml` (on pull requests that touch packaging,
+and from `nightly.yml`). Nightly artifacts are unsigned.
+
+- `windows/`: the per-user WiX MSI (`vellora.wxs`), `stage.ps1` (copies the app, runs `windeployqt`),
+  `smoke.ps1` (install, run `--diagnostics-script`, association, uninstall, nothing left behind).
+- `stage-licenses.ps1`: the licence files every package ships (the GNU texts are downloaded and hash-checked).
+
+Planned channels:
 
 | Platform | Format | Channel |
 |---|---|---|
