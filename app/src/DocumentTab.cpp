@@ -12,6 +12,7 @@
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QProgressDialog>
 #include <QSplitter>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -123,6 +124,7 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
     connect(&m_session, &EngineSession::opened, this, &DocumentTab::onOpened);
     connect(&m_session, &EngineSession::requestFailed, this, &DocumentTab::onRequestFailed);
     connect(&m_session, &EngineSession::pageLabelsReady, this, &DocumentTab::onPageLabels);
+    connect(&m_session, &EngineSession::permissionsReady, this, &DocumentTab::onPermissions);
     connect(&m_session, &EngineSession::pageFound, this, &DocumentTab::onPageFound);
     connect(&m_history, &NavigationHistory::changed, this, &DocumentTab::historyChanged);
     connect(&m_sidebar->outline(), &OutlineView::destinationActivated, this, &DocumentTab::jumpTo);
@@ -143,6 +145,9 @@ DocumentTab::DocumentTab(AppSettings* settings, QWidget* parent)
 }
 
 DocumentTab::~DocumentTab() {
+    // The job draws from the session and aborts its printer job when it goes.
+    delete m_printJob;
+    delete m_printProgress;
     // Qt would delete the children after the members, i.e. after the session they draw from.
     delete m_findBar;
     delete m_sidebar;
@@ -185,6 +190,11 @@ void DocumentTab::setDocumentStatus(const QString& text) {
 
 bool DocumentTab::open(const QString& path) {
     saveViewState();
+    // A print of the previous document ends here; its pages are not this document's.
+    if (m_printJob != nullptr) {
+        m_printJob->cancel();
+    }
+    m_permissionRequest = 0;
     m_canvas->reset();
     m_sidebar->reset();
     m_history.clear();
@@ -283,6 +293,12 @@ void DocumentTab::onRequestFailed(quint64 request, const QString& message) {
     if (request != 0 && request == m_findRequest) {
         m_findRequest = 0;
         goToPageNumber(m_findText);
+        return;
+    }
+    if (request != 0 && request == m_permissionRequest) {
+        // Whether printing is allowed is not known, and a document is not printed on a guess.
+        m_permissionRequest = 0;
+        notify(tr("Vellora could not read what this document allows, so it will not be printed."));
         return;
     }
     // A failure that belongs to a request is the canvas's business; one that belongs to no

@@ -111,6 +111,9 @@ MainWindow::MainWindow(AppSettings* settings, QWidget* parent)
     fileMenu->addAction(recent);
     connect(m_recentMenu, &QMenu::aboutToShow, this, &MainWindow::refreshRecentMenu);
     fileMenu->addSeparator();
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.print"), this));
+    fileMenu->addAction(m_commands.createAction(QStringLiteral("file.printPreview"), this));
+    fileMenu->addSeparator();
     fileMenu->addAction(m_commands.createAction(QStringLiteral("file.close"), this));
     fileMenu->addAction(m_commands.createAction(QStringLiteral("file.reopenClosed"), this));
     fileMenu->addSeparator();
@@ -203,6 +206,8 @@ void MainWindow::registerCommands() {
     });
     add("file.removeUnavailableRecent", tr("Remove Unavailable Files"), {},
         [this] { removeUnavailableRecent(); });
+    add("file.print", tr("Print…"), {QKeySequence::Print}, [this] { currentTab().print(); });
+    add("file.printPreview", tr("Print Preview…"), {}, [this] { currentTab().printPreview(); });
     add("file.close", tr("Close Tab"), {QKeySequence::Close}, [this] { closeCurrentTab(); });
     add("file.reopenClosed", tr("Reopen Closed Tab"),
         {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T)}, [this] { reopenClosedTab(); });

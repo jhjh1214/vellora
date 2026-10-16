@@ -24,10 +24,10 @@ endif()
 # private headers. ShaderTools provides `qsb`, which turns the GLSL in src/canvas/shaders into
 # shaders for every graphics API.
 # Network: QLocalServer, for the single running instance (src/SingleInstance).
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network Test ShaderTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network PrintSupport Test ShaderTools)
 if(MSVC)
   # Only Qt's targets: Corrosion's imported targets exist for the active configuration only.
-  set_target_properties(Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test
+  set_target_properties(Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::PrintSupport Qt6::Test
                         PROPERTIES MAP_IMPORTED_CONFIG_DEBUG Release)
 endif()
 
@@ -92,6 +92,7 @@ add_library(vellora_shell STATIC
   src/CrashDialog.h
   src/DocumentTab.cpp
   src/DocumentTab.h
+  src/DocumentTabPrint.cpp
   src/LicensesDialog.cpp
   src/LicensesDialog.h
   src/MainWindow.cpp
@@ -120,6 +121,15 @@ add_library(vellora_shell STATIC
   src/links/UriConfirmDialog.h
   src/navigation/NavigationHistory.cpp
   src/navigation/NavigationHistory.h
+  src/print/PageRange.cpp
+  src/print/PageRange.h
+  src/print/PrintJob.cpp
+  src/print/PrintJob.h
+  src/print/PrintLayout.cpp
+  src/print/PrintLayout.h
+  src/print/PrintOptionsDialog.cpp
+  src/print/PrintOptionsDialog.h
+  src/print/PrintRequest.h
   src/search/FindBar.cpp
   src/search/FindBar.h
   src/search/SearchController.cpp
@@ -166,7 +176,7 @@ qt_add_resources(vellora_shell "vellora_licenses"
   PREFIX "/licenses"
   BASE "${VELLORA_ROOT}"
   FILES "${VELLORA_ROOT}/LICENSE" "${VELLORA_ROOT}/THIRD_PARTY_LICENSES")
-target_link_libraries(vellora_shell PUBLIC Qt6::Widgets Qt6::Network Qt6::GuiPrivate vellora_engine_client)
+target_link_libraries(vellora_shell PUBLIC Qt6::Widgets Qt6::Network Qt6::PrintSupport Qt6::GuiPrivate vellora_engine_client)
 qt_add_shaders(vellora_shell "vellora_shaders"
   PREFIX "/shaders"
   BASE src/canvas/shaders
