@@ -13,6 +13,11 @@ namespace {
 
 // The protocol's longest side of a tile.
 constexpr quint32 kMaxBandSide = 4096;
+// The largest side of a rendered page: the protocol's limit on where a tile starts (2^24 pixels).
+constexpr double kMaxRenderSide = 16777216.0;
+// More bands than a 200-inch page at 1,200 dpi needs (about 240,000 pixels a side, tens of
+// thousands of bands); a page that needs more is refused.
+constexpr quint64 kMaxBandsPerPage = 1'000'000;
 
 QString tr(const char* text) {
     return QCoreApplication::translate("PrintJob", text);
@@ -120,12 +125,21 @@ bool PrintJob::beginSheet(QString& error) {
     }
     const Placement place = placePage(size, printable, dpi, m_options);
     m_renderScale = static_cast<float>(place.renderScale);
-    m_renderWidth = static_cast<quint32>(std::ceil(size.width() * place.renderScale));
-    m_renderHeight = static_cast<quint32>(std::ceil(size.height() * place.renderScale));
-    if (m_renderWidth == 0 || m_renderHeight == 0) {
+    // The size comes from the document, so it is checked before it is turned into an integer: a
+    // page the protocol could not address (a tile origin is at most 2^24 pixels) or that would
+    // take more bands than any real page is refused, not looped over.
+    const double wantedWidth = std::ceil(size.width() * place.renderScale);
+    const double wantedHeight = std::ceil(size.height() * place.renderScale);
+    if (!(wantedWidth >= 1.0) || !(wantedHeight >= 1.0)) {
         error = tr("Page %1 is too small to print.").arg(page + 1);
         return false;
     }
+    if (wantedWidth > kMaxRenderSide || wantedHeight > kMaxRenderSide) {
+        error = tr("Page %1 is too large to print.").arg(page + 1);
+        return false;
+    }
+    m_renderWidth = static_cast<quint32>(wantedWidth);
+    m_renderHeight = static_cast<quint32>(wantedHeight);
 
     // Render pixels to device pixels: the factor between the two scales, then the quarter turn,
     // then the page's place on the paper.
@@ -140,6 +154,14 @@ bool PrintJob::beginSheet(QString& error) {
     m_clip = QRectF(QPointF(0.0, 0.0), printable);
 
     const QSize band = bandSize(m_renderWidth, m_renderHeight, m_session.slotBytes());
+    const quint64 columns = (m_renderWidth + static_cast<quint32>(band.width()) - 1U) /
+                            static_cast<quint32>(band.width());
+    const quint64 rows = (m_renderHeight + static_cast<quint32>(band.height()) - 1U) /
+                         static_cast<quint32>(band.height());
+    if (columns * rows > kMaxBandsPerPage) {
+        error = tr("Page %1 is too large to print.").arg(page + 1);
+        return false;
+    }
     m_queue.clear();
     m_inflight.clear();
     for (quint32 y = 0; y < m_renderHeight; y += static_cast<quint32>(band.height())) {

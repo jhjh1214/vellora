@@ -739,6 +739,22 @@ private slots:
         QCOMPARE(finished.first().at(0).value<PrintJob::Result>(), PrintJob::Result::Cancelled);
     }
 
+    void aPageTooLargeToPrintIsRefusedAndNotLoopedOver() {
+        QTemporaryDir dir;
+        // The largest page PDF viewers accept (200 inches) at actual size on a very fine printer:
+        // hundreds of millions of pixels a side in bands, far past what is sensible to ask for.
+        Fixture f(writePdf(dir, "huge.pdf", onePagePdf(14400, 14400)));
+        QTemporaryDir out;
+        auto printer = pdfPrinter(out.filePath("huge.pdf"), 100, 100, 4800);
+        PrintOptions options;
+        options.scale = PrintScale::ActualSize;
+        PrintJob job(f.tab->session(), *printer, {0}, options);
+        const QString error = job.start();
+        QVERIFY2(error.contains("too large"), qPrintable(error));
+        QVERIFY(!job.isRunning());
+        QCOMPARE(job.bandsRequested(), 0);
+    }
+
     void aJobWithoutPagesOrWithoutADocumentIsRefused() {
         EngineSession closed;
         auto printer = std::make_shared<QPrinter>(QPrinter::ScreenResolution);
