@@ -179,9 +179,15 @@ Difference difference(const QImage& a, const QImage& b) {
     return out;
 }
 
-// The limits of the render crate's golden test.
-constexpr double kMeanLimit = 0.5;
-constexpr double kLoudLimit = 0.005;
+// The limits for a page that went through Qt's PDF writer. The render crate's golden test allows a
+// mean difference of 0.5 and 0.5% loud pixels between two renders of the same file; Qt 6.8.3 stores
+// every colour image in a PDF as JPEG, so a printed page is a little further from its source
+// (measured on Linux, macOS and Windows alike, and reproduced outside the application: mean 0.76,
+// 0.47 and 0.29 and 0.8% to 0.9% loud pixels for the three golden pages). The limits leave some
+// room above that; a different page of the document is 40 or more away.
+constexpr double kMeanLimit = 1.0;
+constexpr double kLoudLimit = 0.015;
+constexpr double kDifferentPageMean = 20.0;
 
 // A printer that writes a PDF: the paper is `width` x `height` points with no margins, and a
 // device pixel is 1/`dpi` of an inch.
@@ -588,7 +594,7 @@ private slots:
             QImage otherPaper(output.size(), QImage::Format_RGB32);
             otherPaper.fill(Qt::white);
             QPainter(&otherPaper).drawImage(0, 0, other);
-            QVERIFY2(difference(output, otherPaper).mean > 4.0 * kMeanLimit,
+            QVERIFY2(difference(output, otherPaper).mean > kDifferentPageMean,
                      "a different page is not told apart");
         }
         QVERIFY2(allWithin, qPrintable(report.join(QStringLiteral("; "))));
