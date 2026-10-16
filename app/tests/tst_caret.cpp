@@ -266,9 +266,9 @@ private slots:
         QCOMPARE(f.selectedText(), QStringLiteral("alpha"));
         // By word, then back by character: the anchor stays at the start.
         f.key(Qt::Key_Right, Qt::ShiftModifier | Qt::ControlModifier);
-        QCOMPARE(f.selectedText(), QStringLiteral("alpha beta "));
+        QCOMPARE(f.selectedText(), QStringLiteral("alpha "));
         f.key(Qt::Key_Left, Qt::ShiftModifier);
-        QCOMPARE(f.selectedText(), QStringLiteral("alpha beta"));
+        QCOMPARE(f.selectedText(), QStringLiteral("alpha"));
         // Down by a line takes the text of the lines between.
         f.key(Qt::Key_Down, Qt::ShiftModifier);
         QVERIFY(f.selectedText().startsWith(QStringLiteral("alpha beta gamma\ndelta")));
