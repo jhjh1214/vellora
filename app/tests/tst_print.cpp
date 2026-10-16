@@ -560,10 +560,28 @@ private slots:
             expected.fill(Qt::white);
             QPainter(&expected).drawImage(0, 0, source);
             const Difference d = difference(output, expected);
-            report.append(QStringLiteral("page %1: mean difference %2, %3 of the pixels are off")
-                              .arg(page + 1)
-                              .arg(d.mean)
-                              .arg(d.loud));
+            // If the page is off, say where it went: the shift that fits best.
+            QString where = QStringLiteral("best shift (0, 0)");
+            double best = d.mean;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    QImage moved(output.size(), QImage::Format_RGB32);
+                    moved.fill(Qt::white);
+                    QPainter(&moved).drawImage(dx, dy, output);
+                    const double mean = difference(moved, expected).mean;
+                    if (mean < best) {
+                        best = mean;
+                        where =
+                            QStringLiteral("best shift (%1, %2) mean %3").arg(dx).arg(dy).arg(mean);
+                    }
+                }
+            }
+            report.append(
+                QStringLiteral("page %1: mean difference %2, %3 of the pixels are off, %4")
+                    .arg(page + 1)
+                    .arg(d.mean)
+                    .arg(d.loud)
+                    .arg(where));
             allWithin &= d.mean <= kMeanLimit && d.loud <= kLoudLimit;
             // The comparison can tell pages apart: another page of the source is far off.
             const QImage other = rasterise(f.tab->session(), (page + 1) % 3, 2.0F);
