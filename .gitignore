@@ -19,6 +19,7 @@ compile_commands.json
 
 # Corpus and large test data (fetched by manifest, never committed)
 /tests/corpus-data/
+/tests/golden-data/
 /bench/data/
 
 # Third-party binaries (fetched by script, verified by checksum)

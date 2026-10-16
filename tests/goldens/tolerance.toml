@@ -1,0 +1,22 @@
+# How far a rendering may be from its golden (M1 task 20), per operating system.
+#
+# The goldens are rendered on one machine; PDFium draws the same page a little differently on
+# another (anti-aliasing, the fonts a document does not embed). A page passes when
+#   - it has the size of the golden, and
+#   - the share of its pixels in which any channel differs from the golden by more than
+#     `pixel_delta` (of 255) is at most `max_ratio`.
+# The values are set from what the suite measured on the CI runners (see docs/dev/testing.md) with
+# room above the worst page; a change that makes a page differ more than this must be looked at,
+# never absorbed by raising a number.
+
+[windows]
+pixel_delta = 32
+max_ratio = 0.002
+
+[linux]
+pixel_delta = 64
+max_ratio = 0.02
+
+[macos]
+pixel_delta = 64
+max_ratio = 0.02

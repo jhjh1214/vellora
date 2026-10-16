@@ -1478,6 +1478,7 @@ dependencies = [
  "png",
  "serde_json",
  "tempfile",
+ "toml",
  "vellora-engine-client",
  "vellora-inspect",
  "vellora-ipc",
