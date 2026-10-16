@@ -374,6 +374,24 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(f.inspector().isLoaded(), kWaitMs);
     }
 
+    void toolTipsMadeOfTheFilesTextAreEscapedSoTheyAreNotReadAsMarkup() {
+        Fixture f(reportedPdf());
+        f.show();
+        const QTreeWidgetItem* title = f.inspector().find(QStringLiteral("info.title"));
+        QVERIFY(title != nullptr);
+        // The title holds `<b>Quarterly</b>`: in the tool tip it is text, not bold.
+        for (const int column : {0, 1}) {
+            const QString tip = title->toolTip(column);
+            QVERIFY2(tip.contains(QStringLiteral("&lt;b&gt;Quarterly&lt;/b&gt;")), qPrintable(tip));
+            QVERIFY2(!tip.contains(QStringLiteral("<b>")), qPrintable(tip));
+        }
+        // The addresses too, whatever they hold.
+        const QTreeWidgetItem* address = f.inspector().find(QStringLiteral("uris.0"));
+        QVERIFY(address != nullptr);
+        QVERIFY(!address->toolTip(0).contains(QLatin1Char('<')) ||
+                address->toolTip(0).startsWith(QStringLiteral("<p style='white-space:pre'>")));
+    }
+
     void eachRowIsPlainTextWhateverTheFileSays() {
         Fixture f(reportedPdf());
         f.show();

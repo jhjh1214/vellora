@@ -2,6 +2,7 @@
 
 #include "AboutDialog.h"
 #include "CrashDialog.h"
+#include "PlainText.h"
 #include "RepairBar.h"
 #include "diagnostics/CrashReports.h"
 #include "diagnostics/Logging.h"
@@ -452,7 +453,7 @@ void MainWindow::updateTabTitle(DocumentTab* tab) {
     const int index = m_tabs->indexOf(tab);
     if (index >= 0) {
         m_tabs->setTabText(index, tabTitle(tab->fileName()));
-        m_tabs->setTabToolTip(index, tab->path());
+        m_tabs->setTabToolTip(index, plainToolTip(tab->path()));
     }
     updateChrome();
 }
@@ -464,7 +465,7 @@ void MainWindow::updateChrome() {
     }
     DocumentTab& tab = currentTab();
     m_documentStatus->setText(tab.documentStatus());
-    m_documentStatus->setToolTip(tab.documentStatusTip());
+    m_documentStatus->setToolTip(plainToolTip(tab.documentStatusTip()));
     m_pageStatus->setText(tab.pageStatus());
     m_zoomStatus->setText(tab.zoomStatus());
     statusBar()->clearMessage();
@@ -644,7 +645,7 @@ void MainWindow::refreshRecentMenu() {
     for (const QString& path : files) {
         const QFileInfo info(path);
         QAction* entry = m_recentMenu->addAction(tabTitle(info.fileName()));
-        entry->setToolTip(path);
+        entry->setToolTip(plainToolTip(path));
         entry->setStatusTip(path);
         if (info.isReadable()) {
             connect(entry, &QAction::triggered, this, [this, path] { openDocument(path); });

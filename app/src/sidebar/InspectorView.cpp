@@ -1,5 +1,7 @@
 #include "sidebar/InspectorView.h"
 
+#include "PlainText.h"
+
 #include <QCoreApplication>
 #include <QFont>
 #include <QHeaderView>
@@ -94,11 +96,16 @@ QTreeWidgetItem* add(QTreeWidgetItem* parent, const QString& key, const QString&
     item->setText(0, label);
     item->setText(1, value);
     item->setData(0, kKeyRole, key);
-    // The whole text for a value cut short by the width of the panel.
-    const QString shown =
-        tip.isEmpty() ? (value.isEmpty() ? label : label + QLatin1String(": ") + value) : tip;
-    item->setToolTip(0, shown);
-    item->setToolTip(1, tip.isEmpty() ? value : tip);
+    // The whole text for a value cut short by the width of the panel. What the file supplied is
+    // escaped (Qt would read markup in a tool tip); an explanation is ours, in words.
+    if (!tip.isEmpty()) {
+        item->setToolTip(0, tip);
+        item->setToolTip(1, tip);
+    } else {
+        item->setToolTip(
+            0, plainToolTip(value.isEmpty() ? label : label + QLatin1String(": ") + value));
+        item->setToolTip(1, plainToolTip(value));
+    }
     return item;
 }
 
