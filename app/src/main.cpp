@@ -1,6 +1,7 @@
 #include "BuildInfo.h"
 #include "MainWindow.h"
 #include "SingleInstance.h"
+#include "commands/ShortcutsPage.h"
 #include "diagnostics/Application.h"
 #include "diagnostics/CrashReports.h"
 #include "diagnostics/DiagnosticsScript.h"
@@ -10,6 +11,7 @@
 
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFile>
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
@@ -43,6 +45,13 @@ int main(int argc, char** argv) {
                                    QStringLiteral("Crash on purpose, to test crash reports."));
     crashOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(crashOption);
+    // Hidden: writes the keyboard shortcuts page of the user manual from the command registry and
+    // exits (CI regenerates docs/user/shortcuts.md with it and fails if the page differs).
+    QCommandLineOption shortcutsOption(QStringLiteral("export-shortcuts"),
+                                       QStringLiteral("Write the shortcuts page, then exit."),
+                                       QStringLiteral("file"));
+    shortcutsOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(shortcutsOption);
     parser.process(app);
     const QStringList files = parser.positionalArguments();
     const QString scriptName = parser.value(scriptOption);
@@ -52,6 +61,18 @@ int main(int argc, char** argv) {
     const bool isolated = scripted || crashTest;
 
     QTextStream err(stderr);
+    if (parser.isSet(shortcutsOption)) {
+        // No settings, no log, no crash monitor, no other instance: the registry only.
+        vellora::MainWindow window(nullptr);
+        QFile out(parser.value(shortcutsOption));
+        const QByteArray page = vellora::shortcutsMarkdown(window.commands()).toUtf8();
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+            out.write(page) != page.size()) {
+            err << "vellora: cannot write " << out.fileName() << ": " << out.errorString() << '
+'; return 1;
+        }
+        return 0;
+    }
     if (scripted && !vellora::DiagnosticsScript::isScenario(scriptName)) {
         err << "vellora: unknown --diagnostics-script '" << scriptName
             << "' (known: scroll-zoom)\n";

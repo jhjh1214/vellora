@@ -165,6 +165,18 @@ jobs:
       - run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      # The shortcuts page of the user manual is written by the application from its command
+      # registry. One platform: the standard keys (Open, Quit, ...) differ per system, and the page
+      # is committed as the Linux text.
+      - name: Shortcuts page matches the command registry
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          QT_QPA_PLATFORM=offscreen build/vellora --export-shortcuts docs/user/shortcuts.md
+          git diff --exit-code -- docs/user/shortcuts.md || {
+            echo "::error::docs/user/shortcuts.md differs from the command registry. Regenerate it with: vellora --export-shortcuts docs/user/shortcuts.md (the Linux text)"
+            exit 1
+          }
       - name: Qt Test reports of what failed
         # Qt Test's console output does not reach CTest on Windows; each test also writes
         # `build/test-logs/<name>.log` (app/tests/CMakeLists.txt).
@@ -183,6 +195,28 @@ jobs:
               echo "::endgroup::"
             fi
           done
+
+  user-manual:
+    name: user manual (mdBook)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # mdBook is a tool of this job only; nothing in the product depends on it. The release
+      # binary, pinned by version and checksum.
+      - name: Install mdBook
+        env:
+          VERSION: 0.5.2
+          SHA256: 084e4342ba564db270108763e404a7d1f309d932651a22484e93c0dc1a071f6d
+        run: |
+          name="mdbook-v${VERSION}-x86_64-unknown-linux-gnu"
+          curl --proto '=https' --tlsv1.2 --retry 5 --retry-connrefused --location --silent \
+            --show-error --fail -o mdbook.tar.gz \
+            "https://github.com/rust-lang/mdBook/releases/download/v${VERSION}/${name}.tar.gz"
+          echo "${SHA256}  mdbook.tar.gz" | sha256sum --check -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf mdbook.tar.gz -C "$HOME/.local/bin" mdbook
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: mdbook build docs/user
 
   deny:
     name: cargo-deny (licenses, advisories, sources)
