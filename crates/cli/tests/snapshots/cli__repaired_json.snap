@@ -30,5 +30,33 @@ expression: stdout(&out)
     "optional_content": false,
     "signature_fields": false
   },
-  "problems": []
+  "problems": [],
+  "info": null,
+  "tagged": false,
+  "linearized": false,
+  "page_sizes": [
+    {
+      "width": 10.0,
+      "height": 10.0,
+      "pages": 1
+    }
+  ],
+  "page_sizes_truncated": false,
+  "revision_ranges": [
+    {
+      "number": 1,
+      "start": 0,
+      "end": 327
+    }
+  ],
+  "uris": {
+    "items": [],
+    "total": 0,
+    "truncated": false
+  },
+  "embedded_files": {
+    "items": [],
+    "total": 0,
+    "truncated": false
+  }
 }

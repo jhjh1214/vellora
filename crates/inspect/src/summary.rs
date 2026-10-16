@@ -7,6 +7,7 @@ use vellora_cos::{CryptMethod, EncryptionInfo, PasswordRole};
 /// What `vellora inspect` knows about a document.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
+#[allow(clippy::struct_excessive_bools)] // the report says yes or no about several things
 pub struct Summary {
     /// Size of the file in bytes.
     pub file_size: u64,
@@ -35,6 +36,121 @@ pub struct Summary {
     /// Things that went wrong while reading the document, so some numbers may be too low. At
     /// most [`MAX_PROBLEMS`](crate::MAX_PROBLEMS) messages.
     pub problems: Vec<String>,
+    /// The document information dictionary (`/Info`); `None` if the file has none or it could not
+    /// be read (a locked document's strings are encrypted).
+    pub info: Option<DocumentInfo>,
+    /// The catalog says the document is tagged (`/MarkInfo` `/Marked true`); `None` for a locked
+    /// document.
+    pub tagged: Option<bool>,
+    /// The first object of the file is a linearization dictionary (`/Linearized`, §F.2). Only the
+    /// dictionary is looked for; the hint tables are not checked.
+    pub linearized: bool,
+    /// The page sizes in points as displayed (the crop box if the page has one, else the media
+    /// box, turned by `/Rotate`) with the number of pages of each, most pages first. At most
+    /// [`MAX_PAGE_SIZES`] distinct sizes are listed. `None` for a locked document.
+    pub page_sizes: Option<Vec<PageSizeCount>>,
+    /// More distinct sizes exist than `page_sizes` lists.
+    pub page_sizes_truncated: bool,
+    /// The bytes each revision covers, oldest first.
+    pub revision_ranges: Vec<RevisionRange>,
+    /// The addresses of the `URI` actions, in the order the scan met them. `None` for a locked
+    /// document.
+    pub uris: Option<StringList>,
+    /// The names of the embedded files (the `/EmbeddedFiles` name tree and file attachment
+    /// annotations). `None` for a locked document.
+    pub embedded_files: Option<StringList>,
+}
+
+/// Longest list of revisions given.
+pub const MAX_REVISION_RANGES: usize = 1024;
+/// Most distinct page sizes listed.
+pub const MAX_PAGE_SIZES: usize = 32;
+/// Most entries in a [`StringList`].
+pub const MAX_LIST_ITEMS: usize = 100;
+/// Longest text in a [`StringList`] or [`DocumentInfo`] entry, in characters; longer is cut with
+/// an ellipsis.
+pub const MAX_TEXT_CHARS: usize = 1024;
+
+/// The entries of the document information dictionary (§14.3.3), as text. Dates are given as the
+/// file has them (`D:YYYYMMDDHHmmSS...`), since files in the wild do not keep to the format.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct DocumentInfo {
+    /// `/Title`
+    pub title: Option<String>,
+    /// `/Author`
+    pub author: Option<String>,
+    /// `/Subject`
+    pub subject: Option<String>,
+    /// `/Keywords`
+    pub keywords: Option<String>,
+    /// `/Creator`: the program that made the original.
+    pub creator: Option<String>,
+    /// `/Producer`: the program that made the PDF.
+    pub producer: Option<String>,
+    /// `/CreationDate`
+    pub creation_date: Option<String>,
+    /// `/ModDate`
+    pub modification_date: Option<String>,
+}
+
+/// How many pages have a size.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct PageSizeCount {
+    /// Width in points, to two decimals.
+    pub width: f64,
+    /// Height in points, to two decimals.
+    pub height: f64,
+    /// Pages of this size.
+    pub pages: u64,
+}
+
+/// The bytes of one revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct RevisionRange {
+    /// 1 for the oldest.
+    pub number: u64,
+    /// First byte.
+    pub start: u64,
+    /// One past the last byte (the end of the `%%EOF` line).
+    pub end: u64,
+}
+
+impl RevisionRange {
+    pub(crate) fn new(number: u64, start: usize, end: usize) -> Self {
+        Self {
+            number,
+            start: start as u64,
+            end: end as u64,
+        }
+    }
+}
+
+/// A bounded list of texts from the file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct StringList {
+    /// The first [`MAX_LIST_ITEMS`] entries, each cut to [`MAX_TEXT_CHARS`] characters.
+    pub items: Vec<String>,
+    /// How many entries the scan met, listed or not.
+    pub total: u64,
+    /// `total` is more than `items` holds.
+    pub truncated: bool,
+}
+
+impl StringList {
+    /// Adds an entry, keeping it only while there is room.
+    pub(crate) fn push(&mut self, text: String) {
+        self.total += 1;
+        if self.items.len() < MAX_LIST_ITEMS {
+            self.items
+                .push(vellora_cos::textstring::truncated(text, MAX_TEXT_CHARS));
+        } else {
+            self.truncated = true;
+        }
+    }
 }
 
 /// The Standard Security Handler settings of an encrypted document.

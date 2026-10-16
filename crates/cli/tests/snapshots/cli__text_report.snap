@@ -6,8 +6,12 @@ File          <file>
 Size          607 bytes
 PDF version   1.7
 Pages         1
+Page sizes    10 x 10 pt (1)
+Tagged        no
+Linearized    no
 Objects       4
 Revisions     1
+  revision 1  bytes 0 to 606
 Repaired      no
 Encryption    none
 
@@ -25,3 +29,6 @@ Features
   XFA                             no
   Optional content (layers)       no
   Signature fields                no
+
+URIs (1)
+  http://example.com

@@ -66,6 +66,14 @@ Field names and meanings are stable within a major version. New fields may be ad
 | `pages` | integer or `null` | Pages found by walking the page tree (`/Count` is not trusted); `null` when `locked`. |
 | `features` | object or `null` | See below; `null` when `locked`. |
 | `problems` | array of strings | Things that went wrong while reading, so some numbers may be too low (at most 16). Free text. |
+| `info` | object or `null` | The document information dictionary as text: `title`, `author`, `subject`, `keywords`, `creator`, `producer`, `creation_date`, `modification_date`, each a string or `null` (each cut to 1,024 characters). Dates are given as the file has them (`D:YYYYMMDDHHmmSS...`). `null` when the file has no information dictionary and when `locked`. |
+| `tagged` | boolean or `null` | The catalog says the document is tagged (`/MarkInfo` `/Marked true`); `null` when `locked`. |
+| `linearized` | boolean | The first object of the file is a linearization dictionary. Only that dictionary is looked for; the hint tables are not checked. |
+| `page_sizes` | array or `null` | The sizes of the pages as displayed (the crop box if the page has one, else the media box, turned by `/Rotate`): objects with `width` and `height` in points to two decimals and `pages`, the number of pages of that size, most pages first. At most 32 sizes; `null` when `locked`. |
+| `page_sizes_truncated` | boolean | There are more distinct sizes than `page_sizes` lists. |
+| `revision_ranges` | array | One object per revision, oldest first: `number` (1 for the oldest), `start` and `end` (byte offsets; `end` is one past the `%%EOF` marker). They follow one another without a gap. |
+| `uris` | object or `null` | The addresses of the `URI` actions: `items` (strings, the first 100, each cut to 1,024 characters), `total` (how many were met) and `truncated`. `null` when `locked`. Nothing is opened. |
+| `embedded_files` | object or `null` | The names of the embedded files (the `/EmbeddedFiles` name tree and file attachment annotations), as `uris`. |
 
 `encryption` (Standard Security Handler):
 
@@ -102,6 +110,8 @@ Actions are followed along `/Next` chains. Only dictionaries are read; scripts a
 | `xfa` | The `/AcroForm` has `/XFA`. |
 | `optional_content` | The catalog has `/OCProperties` (layers). |
 | `signature_fields` | A field with type `/Sig`, including one that inherits the type from its parent. Signatures are listed, not verified. |
+
+The additions after `problems` (task 18) were made without changing any earlier field.
 
 Example (`vellora inspect --json`, abbreviated):
 

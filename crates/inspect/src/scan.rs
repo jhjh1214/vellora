@@ -5,12 +5,13 @@
 //! (including any script text) are never decoded. Every walk is bounded: objects are visited
 //! once, nesting is capped, and the whole scan has a budget of object reads.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use vellora_cos::{Dict, Object, ObjectKind, ObjectStore};
 
 use crate::Features;
+use crate::summary::{MAX_PAGE_SIZES, PageSizeCount, StringList};
 
 /// Object reads one scan may do. A page with a few annotations costs a handful; this allows
 /// documents of a million pages and stops one that lists the same few objects through millions of
@@ -25,11 +26,21 @@ pub const MAX_PROBLEMS: usize = 16;
 
 type Value = Arc<Object<'static>>;
 
+#[allow(clippy::struct_excessive_bools)] // one flag per thing the scan notes
 pub(crate) struct Scanner<'s, 'a> {
     store: &'s ObjectStore<'a>,
     pub(crate) features: Features,
     pub(crate) pages: u64,
     pub(crate) problems: Vec<String>,
+    /// The catalog says the document is tagged.
+    pub(crate) tagged: bool,
+    /// The addresses of `URI` actions.
+    pub(crate) uris: StringList,
+    /// The names of embedded files.
+    pub(crate) embedded_files: StringList,
+    /// Distinct page sizes (hundredths of a point, as displayed) and their page counts.
+    sizes: BTreeMap<(i64, i64), u64>,
+    pub(crate) sizes_truncated: bool,
     /// Object numbers already looked at, so shared and cyclic structures are read once.
     visited: HashSet<u32>,
     reads_left: u64,
@@ -46,6 +57,11 @@ impl<'s, 'a> Scanner<'s, 'a> {
             features: Features::default(),
             pages: 0,
             problems: Vec::new(),
+            tagged: false,
+            uris: StringList::default(),
+            embedded_files: StringList::default(),
+            sizes: BTreeMap::new(),
+            sizes_truncated: false,
             visited: HashSet::new(),
             reads_left: READ_BUDGET,
             exhausted: false,
@@ -64,6 +80,27 @@ impl<'s, 'a> Scanner<'s, 'a> {
         }
         self.walk_pages();
         self.features.complete = !self.exhausted && !self.unreadable;
+    }
+
+    /// The page sizes found, most pages first, then smallest first.
+    #[allow(clippy::cast_precision_loss)] // hundredths are clamped far below 2^53
+    pub(crate) fn page_sizes(&self) -> Vec<PageSizeCount> {
+        let mut sizes: Vec<PageSizeCount> = self
+            .sizes
+            .iter()
+            .map(|(&(width, height), &pages)| PageSizeCount {
+                width: width as f64 / 100.0,
+                height: height as f64 / 100.0,
+                pages,
+            })
+            .collect();
+        sizes.sort_by(|a, b| {
+            b.pages
+                .cmp(&a.pages)
+                .then(a.width.total_cmp(&b.width))
+                .then(a.height.total_cmp(&b.height))
+        });
+        sizes
     }
 
     fn problem(&mut self, message: String) {
@@ -141,7 +178,17 @@ impl<'s, 'a> Scanner<'s, 'a> {
             }
             if self.entry(names, b"EmbeddedFiles").is_some() {
                 self.features.embedded_files = true;
+                // The reference itself, so that the root counts as visited if a kid names it.
+                if let Some(tree) = names.get(b"EmbeddedFiles") {
+                    self.embedded_name_tree(tree);
+                }
             }
+        }
+        if let Some(mark_info) = self.entry(catalog, b"MarkInfo")
+            && let Some(mark_info) = mark_info.as_dict()
+            && let Some(marked) = self.entry(mark_info, b"Marked")
+        {
+            self.tagged = matches!(marked.kind, ObjectKind::Bool(true));
         }
         if self.entry(catalog, b"OCProperties").is_some() {
             self.features.optional_content = true;
@@ -155,6 +202,70 @@ impl<'s, 'a> Scanner<'s, 'a> {
             && let Some(outlines) = outlines.as_dict()
         {
             self.outlines(outlines);
+        }
+    }
+
+    /// The names in the `/EmbeddedFiles` name tree (§7.9.6): `/Names` holds name and file
+    /// specification pairs, `/Kids` the subtrees. The listing is bounded like every other walk.
+    fn embedded_name_tree(&mut self, root: &Object<'_>) {
+        let mut stack: Vec<(Object<'static>, usize)> = vec![(root.clone().into_owned(), 1)];
+        while let Some((node, depth)) = stack.pop() {
+            let Some(value) = self.follow_once(&node) else {
+                continue;
+            };
+            let Some(dict) = value.as_dict() else {
+                continue;
+            };
+            if let Some(names) = self.entry(dict, b"Names")
+                && let ObjectKind::Array(items) = &names.kind
+            {
+                for pair in items.chunks(2) {
+                    if let Some(key) = pair.first().and_then(string_bytes) {
+                        self.embedded_files
+                            .push(vellora_cos::textstring::decode_text_string(&key));
+                    }
+                }
+            }
+            if depth >= MAX_DEPTH {
+                continue;
+            }
+            if let Some(kids) = self.entry(dict, b"Kids")
+                && let ObjectKind::Array(kids) = &kids.kind
+            {
+                for kid in kids.iter().rev() {
+                    stack.push((kid.clone().into_owned(), depth + 1));
+                }
+            }
+        }
+    }
+
+    /// The size a page is shown at, counted once per page.
+    fn count_page_size(&mut self, page: &vellora_cos::Page) {
+        let boxed = page
+            .inherited
+            .crop_box
+            .as_ref()
+            .or(page.inherited.media_box.as_ref());
+        let Some(rect) = boxed.and_then(|b| rectangle(b)) else {
+            return;
+        };
+        let turns = page
+            .inherited
+            .rotate
+            .as_ref()
+            .and_then(|r| r.as_integer())
+            .map_or(0, |degrees| (degrees.rem_euclid(360) / 90) % 4);
+        let (mut width, mut height) = (rect.0, rect.1);
+        if turns % 2 == 1 {
+            std::mem::swap(&mut width, &mut height);
+        }
+        let key = (hundredths(width), hundredths(height));
+        if let Some(count) = self.sizes.get_mut(&key) {
+            *count += 1;
+        } else if self.sizes.len() < MAX_PAGE_SIZES {
+            self.sizes.insert(key, 1);
+        } else {
+            self.sizes_truncated = true;
         }
     }
 
@@ -242,6 +353,7 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 }
             };
             self.pages += 1;
+            self.count_page_size(&page);
             let Some(dict) = page.object.as_dict() else {
                 continue;
             };
@@ -268,13 +380,35 @@ impl<'s, 'a> Scanner<'s, 'a> {
             return;
         };
         match name_of(dict, b"Subtype").as_deref() {
-            Some(b"FileAttachment") => self.features.embedded_files = true,
+            Some(b"FileAttachment") => {
+                self.features.embedded_files = true;
+                self.attachment_name(dict);
+            }
             Some(b"Widget") if self.effective_field_type(dict).as_deref() == Some(b"Sig") => {
                 self.features.signature_fields = true;
             }
             _ => {}
         }
         self.node_actions(dict);
+    }
+
+    /// The name of a file attachment annotation's file: its file specification's `/UF` or `/F`,
+    /// or the specification itself when it is a string.
+    fn attachment_name(&mut self, annotation: &Dict<'_>) {
+        let Some(spec) = self.entry(annotation, b"FS") else {
+            return;
+        };
+        let name = match &spec.kind {
+            ObjectKind::String(bytes) => Some(bytes.to_vec()),
+            ObjectKind::Dict(dict) => [&b"UF"[..], b"F"]
+                .iter()
+                .find_map(|key| self.entry(dict, key).as_deref().and_then(string_of)),
+            _ => None,
+        };
+        if let Some(name) = name {
+            self.embedded_files
+                .push(vellora_cos::textstring::decode_text_string(&name));
+        }
     }
 
     /// `/FT`, taken from the nearest ancestor (`/Parent`) that has one (§12.7.4.1).
@@ -339,7 +473,13 @@ impl<'s, 'a> Scanner<'s, 'a> {
                 self.features.open_action_javascript |= open;
             }
             Some(b"Launch") => self.features.launch_actions = true,
-            Some(b"URI") => self.features.uri_actions = true,
+            Some(b"URI") => {
+                self.features.uri_actions = true;
+                if let Some(uri) = self.entry(dict, b"URI").as_deref().and_then(string_of) {
+                    self.uris
+                        .push(vellora_cos::textstring::decode_text_string(&uri));
+                }
+            }
             Some(b"SubmitForm") => self.features.submit_form_actions = true,
             Some(b"GoToR") => self.features.goto_remote_actions = true,
             _ => {}
@@ -369,4 +509,40 @@ fn name_of(dict: &Dict<'_>, key: &[u8]) -> Option<Vec<u8>> {
         ObjectKind::Name(name) => Some(name.to_vec()),
         _ => None,
     }
+}
+
+/// The bytes of a string object.
+fn string_of(object: &Object<'_>) -> Option<Vec<u8>> {
+    match &object.kind {
+        ObjectKind::String(bytes) => Some(bytes.to_vec()),
+        _ => None,
+    }
+}
+
+/// The bytes of `object` if it is a direct string.
+fn string_bytes(object: &Object<'_>) -> Option<Vec<u8>> {
+    string_of(object)
+}
+
+/// The width and height of a rectangle array of four numbers; `None` for anything else, an
+/// unresolved reference included.
+fn rectangle(object: &Object<'_>) -> Option<(f64, f64)> {
+    let ObjectKind::Array(items) = &object.kind else {
+        return None;
+    };
+    let number = |index: usize| match &items.get(index)?.kind {
+        #[allow(clippy::cast_precision_loss)] // page coordinates are small
+        ObjectKind::Integer(n) => Some(*n as f64),
+        ObjectKind::Real(r) if r.is_finite() => Some(*r),
+        _ => None,
+    };
+    let (x1, y1, x2, y2) = (number(0)?, number(1)?, number(2)?, number(3)?);
+    Some(((x2 - x1).abs(), (y2 - y1).abs()))
+}
+
+/// A length in points as whole hundredths, clamped so that nothing overflows.
+fn hundredths(points: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation)] // clamped first
+    let value = (points * 100.0).round().clamp(0.0, 1.0e12) as i64;
+    value
 }

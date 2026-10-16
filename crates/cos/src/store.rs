@@ -825,6 +825,21 @@ impl<'a> ObjectStore<'a> {
         self.lock().xref.revisions.len()
     }
 
+    /// The bytes each revision covers, **oldest first**: the first from the start of the file
+    /// through its `%%EOF`, each later one from where the one before it ended through its own
+    /// `%%EOF`. They follow one another without a gap and together cover the file up to the last
+    /// marker. A file whose cross-reference was rebuilt has one range, the whole file.
+    #[must_use]
+    pub fn revision_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        self.lock()
+            .xref
+            .revisions
+            .iter()
+            .rev()
+            .map(|revision| revision.bytes.clone())
+            .collect()
+    }
+
     /// How many objects the cross-reference lists as in use (compressed ones included). The
     /// entries are not checked against the file.
     #[must_use]
