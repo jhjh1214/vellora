@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     parser.addOption(crashOption);
     // Hidden: writes the keyboard shortcuts page of the user manual from the command registry and
     // exits (CI regenerates docs/user/shortcuts.md with it and fails if the page differs).
+    // i18n-ok: hidden option
     QCommandLineOption shortcutsOption(QStringLiteral("export-shortcuts"),
                                        QStringLiteral("Write the shortcuts page, then exit."),
                                        QStringLiteral("file"));
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
         const QByteArray page = vellora::shortcutsMarkdown(window.commands()).toUtf8();
         if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
             out.write(page) != page.size()) {
+            // i18n-ok: console diagnostics, not the UI
             err << "vellora: cannot write " << out.fileName() << ": " << out.errorString() << '\n';
             return 1;
         }
