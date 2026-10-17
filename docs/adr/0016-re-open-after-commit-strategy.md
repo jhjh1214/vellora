@@ -63,3 +63,32 @@ The UI keeps showing the previous tiles until the re-opened document delivers th
 - [ADR-0002](0002-engine-split.md), [ADR-0009](0009-non-destructive-document-model.md)
 - `bench/` and `cargo xtask bench`; `docs/architecture/performance-targets.md`
 - The milestone task: `docs/milestones/M0.md`, task 24 (which called this ADR "0014"; that number was already taken by the PDFium ADR).
+
+## Amendment (M1 task 21): all three OSes, a cold cache, reading scenarios and the gate
+
+The M0 measurement limits (Windows only, warm cache, one machine) are lifted as follows. Source: the `Benchmarks` workflow (`.github/workflows/bench.yml`, called by `nightly.yml`) on GitHub-hosted `ubuntu-latest`, `windows-latest` and `macos-15` runners (shared VMs, not the reference laptop), release builds, PDFium from `third_party/pdfium.lock`. Medians of 3 runs, one night's run; the same code measured on three other nights differed as shown below.
+
+| | Linux | Windows | macOS (arm64) |
+|---|---|---|---|
+| 10k text: open -> first page | 148 ms | 289 ms | 183 ms |
+| 10k text: cold open -> first page | 458 ms (cache dropped) | 287 ms (fresh file, see below) | 1,011 ms (cache dropped) |
+| 10k text: re-open after 5 MiB commit | 137 ms | 283 ms | 148 ms |
+| 500 MB images: open -> first page | 15 ms | 45 ms | 35 ms |
+| 500 MB images: cold open -> first page | 63 ms (dropped) | 44 ms (fresh file) | 417 ms (dropped) |
+| Engine peak memory (text / images) | 87 / 34 MiB | 74 / 30 MiB | 80 / 37 MiB (current RSS, not a peak) |
+| Scroll, single page, tiles/s (text / images) | 2,912 / 411 | 870 / 124 | 2,223 / 216 |
+| Scroll, facing, tiles/s (text / images) | 2,886 / 414 | 855 / 123 | 1,748 / 291 |
+| Scroll, continuous, tiles/s (text / images) | 2,702 / 415 | 856 / 123 | 1,792 / 283 |
+| Thumbnail fling, thumbnails/s (text / images) | 2,209 / 285 | 907 / 89 | 1,232 / 244 |
+| Search, whole 10k document, pages/s | 1,319 | 590 | 964 |
+| Print at 150 dpi, pages/s (text / images) | 290 / 73 | 108 / 28 | 98 / 65 |
+
+Every cold and warm open stays far below the targets (< 1.5 s and < 2 s). Re-open after a commit costs the same as a first open on all three OSes, so the decision above stands. A search of 1,000 pages takes about 1 s (Linux) to 1.7 s (Windows) at these rates, inside the 3 s target; the 153 ms of M1 task 15a was measured on one developer machine and is not comparable with a runner. Scenarios are defined in `bench/src/scenarios.rs` (a scroll step asks for the 512 px tiles at scale 1.0 that the view does not have and waits for them; the fling asks for 300 thumbnails (100 for the image file) back to back; printing renders 150 dpi bands, four in flight).
+
+**Cold cache.** Linux drops the page cache (`sync`, then `drop_caches` through `sudo`), macOS runs `sudo purge`. Windows has no command for it, so each run opens a freshly written copy, which the OS still has cached: the Windows "cold" figure is close to a warm one and says so in the result file (`cold: fresh-file`). Cold costs are real elsewhere: 3x (Linux) to 5.5x (macOS) the warm time for the 10k document.
+
+**Machines differ more than 10 % from night to night.** The same code on different runner instances: Linux 10k open -> first page 148 to 248 ms, Windows 197 to 289 ms, macOS 114 to 194 ms; within one job, best-of-5 runs vary by 1-10 % on Linux and Windows (the worst 20 %) and by 2-80 % on macOS. Comparing today's numbers with a number stored yesterday therefore fails at random.
+
+**The gate.** The nightly job builds the revision of the last good run, measures it and the current revision on the same machine in alternating rounds (`--runs 3`, twice), keeps the best value of each metric on each side and fails if a tracked metric is worse by more than 10 % and by more than a small absolute floor (5 ms for times, 8 MiB for memory, none for rates). The revision is kept in the Actions cache and is only replaced when the job passes, so a regression stays a failure until fixed. Measured with the gate's own method (identical code on both sides): Linux and Windows differ by at most 6 %; macOS showed regressions of 12-29 % on six metrics with no code change, so on macOS the comparison is printed but cannot fail the job (open decision 10 in `docs/milestones/README.md`). Untracked: macOS peak memory (only the current RSS is available without `unsafe`). The first night after this change has no baseline revision with a harness and compares nothing.
+
+Limits that remain: shared VMs (a regression under about 10 % on Linux or Windows is invisible); page content is still synthetic; macOS is not gated; Windows cold is not cold.

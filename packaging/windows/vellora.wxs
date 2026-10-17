@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vellora for Windows: a per-user MSI (no administrator rights, nothing outside the user's profile).
+  Built by .github/workflows/packaging.yml with WiX 5.0.2:
+
+    wix build -arch x64 -ext WixToolset.UI.wixext -d Version=... -d StageDir=... -d LicenseRtf=...
+
+  - The files are everything `stage.ps1` staged: the shell, the engine, PDFium, Qt and the licences.
+  - Opening .pdf files with Vellora is an opt-in feature (off unless the user ticks it in the
+    feature tree, or installs with ADDLOCAL=Main,PdfAssociation). It only adds Vellora to the "Open
+    with" list and to Default Apps; it never takes over the default, which Windows leaves to the user.
+  - The engine runs in an AppContainer (ADR-0017): the installed folder is made readable to
+    ALL APPLICATION PACKAGES (S-1-15-2-1), and the uninstaller removes the container's profile.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Vellora" Manufacturer="Vellora" Version="$(Version)"
+           UpgradeCode="b3693bce-95e6-4227-9a49-d2ecc42b7dbb" Scope="perUser" InstallerVersion="500"
+           Compressed="yes">
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Vellora is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Vellora" />
+      </Directory>
+    </StandardDirectory>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(StageDir)\**" />
+    </ComponentGroup>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="VelloraShortcut" Name="Vellora" Target="[INSTALLFOLDER]vellora.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Vellora\Installer" Name="shortcut" Type="integer"
+                       Value="1" KeyPath="yes" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Vellora\Installer" Action="removeOnUninstall" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- Opt-in .pdf association: Vellora is offered, never forced. -->
+    <Component Id="PdfAssociation" Guid="*" Directory="INSTALLFOLDER">
+      <RegistryKey Root="HKCU" Key="Software\Classes\Vellora.Pdf">
+        <RegistryValue Type="string" Value="PDF document" />
+        <RegistryKey Key="shell\open\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]vellora.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </RegistryKey>
+      <RegistryValue Root="HKCU" Key="Software\Classes\.pdf\OpenWithProgids" Name="Vellora.Pdf"
+                     Type="string" Value="" />
+      <RegistryKey Root="HKCU" Key="Software\Vellora\Capabilities">
+        <RegistryValue Name="ApplicationName" Type="string" Value="Vellora" />
+        <RegistryValue Name="ApplicationDescription" Type="string"
+                       Value="A local-first PDF workstation" />
+        <RegistryKey Key="FileAssociations">
+          <RegistryValue Name=".pdf" Type="string" Value="Vellora.Pdf" />
+        </RegistryKey>
+      </RegistryKey>
+      <RegistryValue Root="HKCU" Key="Software\RegisteredApplications" Name="Vellora" Type="string"
+                     Value="Software\Vellora\Capabilities" KeyPath="yes" />
+    </Component>
+
+    <!-- The engine's AppContainer needs to read the installed files. A folder under the user's
+         profile does not grant that by default (a folder under Program Files does). -->
+    <CustomAction Id="GrantAppPackages" Directory="INSTALLFOLDER" Execute="deferred"
+                  Impersonate="yes" Return="check"
+                  ExeCommand="&quot;[SystemFolder]icacls.exe&quot; &quot;[INSTALLFOLDER].&quot; /grant &quot;*S-1-15-2-1:(OI)(CI)(RX)&quot;" />
+    <CustomAction Id="DeleteSandboxProfile" Directory="INSTALLFOLDER" Execute="immediate"
+                  Return="ignore"
+                  ExeCommand="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]remove-sandbox-profile.ps1&quot;" />
+    <InstallExecuteSequence>
+      <Custom Action="GrantAppPackages" After="InstallFiles" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="DeleteSandboxProfile" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="Vellora" Level="1" AllowAbsent="no" ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <Feature Id="PdfAssociation" Title="Open .pdf files with Vellora"
+               Description="Adds Vellora to the Open with list for PDF files and to Default Apps. It does not change your default application."
+               Level="2" AllowAbsent="yes">
+        <ComponentRef Id="PdfAssociation" />
+      </Feature>
+    </Feature>
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
+    <ui:WixUI Id="WixUI_FeatureTree" />
+  </Package>
+</Wix>

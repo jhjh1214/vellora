@@ -1,0 +1,111 @@
+name: Benchmarks
+
+# The performance gate (M1 task 21, ADR-0016). `cargo xtask bench` measures the engine on each OS.
+# GitHub's runners differ from night to night by far more than 10 % (measured: ADR-0016), so the
+# result is not compared with a number stored last night. Instead the last good revision is built
+# and measured on the same machine, in the same job, alternating with the current one, and the
+# best value of each metric on each side is compared. The job fails if a tracked metric is worse by
+# more than 10 %. Called by `nightly.yml`; can also be started by hand.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  bench:
+    name: benchmarks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            gate: true
+          - os: windows-latest
+            gate: true
+          # macOS runners are too noisy for a 10 % gate (ADR-0016): measured and compared, never
+          # failing the job. Decision 10 in docs/milestones/README.md.
+          - os: macos-15
+            gate: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch PDFium
+        run: cargo xtask pdfium fetch
+      # The revision of the last good run of this OS. A new key every run, so that this run becomes
+      # the baseline of the next one (the newest cache with the prefix is restored). The cache is
+      # only saved when the job succeeds, so a regression does not become the new baseline.
+      - name: Restore the baseline revision
+        uses: actions/cache@v4
+        with:
+          path: bench-baseline
+          key: bench-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: bench-${{ runner.os }}-
+      - name: Check out the baseline revision
+        id: baseline
+        run: |
+          sha=$(cat bench-baseline/sha 2>/dev/null || true)
+          if [ -n "$sha" ] && [ "$sha" != "$(git rev-parse HEAD)" ] \
+              && git fetch --quiet --depth=1 origin "$sha" \
+              && git worktree add --quiet ../baseline "$sha"; then
+            echo "Baseline revision: $sha"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            (cd ../baseline && cargo xtask pdfium fetch)
+          else
+            echo "No baseline revision to compare with (first run, or it is this revision)."
+          fi
+      # Two rounds, baseline then current in each, so that a slow minute of the machine hits both.
+      - name: Measure
+        run: |
+          mkdir -p bench-results
+          for round in 1 2; do
+            if [ -n "${{ steps.baseline.outputs.sha }}" ]; then
+              (cd ../baseline && cargo xtask bench run --runs 3 --json "$GITHUB_WORKSPACE/bench-results/previous-$round.json") \
+                2>&1 | grep -v '^\[engine ' > "bench-results/previous-$round.txt" \
+                || echo "The baseline revision could not be measured (round $round)."
+            fi
+            cargo xtask bench run --runs 3 --json "bench-results/current-$round.json" \
+              2>&1 | grep -v '^\[engine ' | tee "bench-results/current-$round.txt"
+          done
+      - name: Compare with the baseline revision
+        continue-on-error: ${{ !matrix.gate }}
+        run: |
+          if ls bench-results/previous-*.json >/dev/null 2>&1; then
+            cargo xtask bench compare --previous bench-results/previous-*.json \
+              --current bench-results/current-*.json | tee bench-results/comparison.txt
+          else
+            echo "No baseline measurement: nothing to compare with." | tee bench-results/comparison.txt
+          fi
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '### Benchmarks (${{ matrix.os }})'
+            echo '```'
+            cat bench-results/current-2.txt 2>/dev/null || true
+            cat bench-results/comparison.txt 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep this revision as the baseline
+        run: |
+          mkdir -p bench-baseline
+          git rev-parse HEAD > bench-baseline/sha
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ runner.os }}
+          path: bench-results
+          if-no-files-found: ignore
