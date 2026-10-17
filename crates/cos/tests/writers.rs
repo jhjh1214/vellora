@@ -326,6 +326,27 @@ fn reference_of_trailer(store: &ObjectStore<'_>, key: &str) -> ObjRef {
     }
 }
 
+/// Found by the nightly fuzzer: a trailer that names an object the file does not define
+/// (`/Encrypt 8 0 R`, `/Size 8`). A new object took number 8, and the reference started to mean it.
+#[test]
+fn a_new_object_never_takes_a_number_the_trailer_refers_to() {
+    let mut pdf = Builder::new("1.7");
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    pdf.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>");
+    // 4 is Info, 9 is an Encrypt-like reference to nothing; /Size says 4 but the writer helper
+    // computes it from the objects, so the dangling numbers sit above it.
+    let data = finish_table(pdf, "/Root 1 0 R /Info 12 0 R /Encrypt 9 0 R");
+    let store = open(&data);
+    let mut changes = Changes::new();
+    let first = changes.add_object(&store, NewObject::Value(dictionary(vec![])));
+    let second = changes.add_object(&store, NewObject::Value(dictionary(vec![])));
+    assert!(
+        first.num > 12 && second.num > first.num,
+        "new objects are {first} and {second}, which must be above every number the trailer names"
+    );
+}
+
 #[test]
 fn the_appended_section_has_the_expected_shape() {
     let original = sample("1.4");

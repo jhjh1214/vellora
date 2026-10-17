@@ -1,0 +1,14 @@
+[book]
+title = "Vellora user manual"
+description = "How to read, search and print PDFs with Vellora, and what it never does."
+language = "en"
+# The pages live next to this file; SUMMARY.md lists the ones in the book.
+src = "."
+
+[build]
+# Under target/, which git ignores. mdBook is a tool of CI only: nothing in the product uses it.
+build-dir = "../../target/user-manual"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/jhjh1214/vellora"

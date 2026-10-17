@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Vellora
+Comment=A local-first PDF workstation
+Exec=vellora %F
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/pdf;
