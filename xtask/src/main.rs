@@ -4,6 +4,10 @@
 //! - `corpus fetch [--manifest <file>] [--dir <dir>]`: download and verify the test corpus
 //!   listed in `tests/corpus/manifest.toml` into `tests/corpus-data/` (git-ignored).
 //!
+//! - `goldens fetch [--manifest <file>] [--dir <dir>]` and `goldens update [--tag <tag>]`: the golden
+//!   images of the rendering regression suite: download and verify them into `tests/golden-data/`
+//!   (git-ignored), or render them again and write a new bundle and `tests/goldens/manifest.toml`.
+//!
 //! - `pdfium fetch [--lock <file>] [--dir <dir>] [--platform <key>]`: download the PDFium binaries
 //!   pinned in `third_party/pdfium.lock`, verify their SHA-256 and extract them into
 //!   `third_party/pdfium/<platform>/` (git-ignored).
@@ -18,6 +22,7 @@
 //! never parses PDF bytes (it only hashes them).
 
 mod corpus;
+mod goldens;
 mod manifest;
 mod pdfium;
 
@@ -29,6 +34,8 @@ pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const USAGE: &str = "usage:
   cargo xtask corpus fetch [--manifest <file>] [--dir <dir>]
+  cargo xtask goldens fetch [--manifest <file>] [--dir <dir>]
+  cargo xtask goldens update [--tag <tag>]
   cargo xtask pdfium fetch [--lock <file>] [--dir <dir>] [--platform <key>]
   cargo xtask bench [generate|run] [--dir <dir>] [--only <name>] [--runs <n>]";
 
@@ -37,6 +44,8 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["corpus", "fetch", rest @ ..] => run_corpus_fetch(rest),
+        ["goldens", "fetch", rest @ ..] => run_goldens_fetch(rest),
+        ["goldens", "update", rest @ ..] => run_goldens_update(rest),
         ["pdfium", "fetch", rest @ ..] => run_pdfium_fetch(rest),
         ["bench", rest @ ..] => run_bench(rest),
         _ => usage(),
@@ -108,6 +117,44 @@ fn run_corpus_fetch(mut rest: &[&str]) -> ExitCode {
     match corpus::fetch(&manifest, &dir) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(_) => ExitCode::from(1),
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_goldens_fetch(mut rest: &[&str]) -> ExitCode {
+    let mut manifest: PathBuf = workspace_root().join("tests/goldens/manifest.toml");
+    let mut dir: PathBuf = workspace_root().join("tests/golden-data");
+    while let [flag, value, tail @ ..] = rest {
+        match *flag {
+            "--manifest" => manifest = PathBuf::from(value),
+            "--dir" => dir = PathBuf::from(value),
+            _ => return usage(),
+        }
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        return usage();
+    }
+    match goldens::fetch(&manifest, &dir) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_goldens_update(rest: &[&str]) -> ExitCode {
+    let tag = match rest {
+        [] => None,
+        ["--tag", tag] => Some(*tag),
+        _ => return usage(),
+    };
+    match goldens::update(workspace_root(), tag) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::from(1)

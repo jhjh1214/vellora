@@ -181,6 +181,35 @@ mod tests {
         );
     }
 
+    /// `golden-manifest.toml` lists the documents of the rendering regression suite: a subset whose
+    /// entries are verbatim copies of the main manifest's, none of them under a share-alike license
+    /// (the goldens are renderings of them, published with attribution).
+    #[test]
+    fn golden_manifest_is_a_verbatim_subset_without_share_alike_documents() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/corpus");
+        let main =
+            Manifest::parse(&std::fs::read_to_string(dir.join("manifest.toml")).unwrap()).unwrap();
+        let golden =
+            Manifest::parse(&std::fs::read_to_string(dir.join("golden-manifest.toml")).unwrap())
+                .unwrap();
+        assert!(
+            (30..=50).contains(&golden.doc.len()),
+            "the golden subset holds about 40 documents, has {}",
+            golden.doc.len()
+        );
+        for doc in &golden.doc {
+            let original = main.doc.iter().find(|d| d.id == doc.id);
+            assert_eq!(original, Some(doc), "{} differs from manifest.toml", doc.id);
+            assert!(
+                !doc.license.to_ascii_uppercase().contains("-SA"),
+                "{} is under a share-alike license: {}",
+                doc.id,
+                doc.license
+            );
+            assert!(doc.password.is_none(), "{} needs a password", doc.id);
+        }
+    }
+
     /// `ci-manifest.toml` is what CI fetches for the invariant harness: a small subset whose
     /// entries must be verbatim copies of the main manifest's, so the two cannot drift apart.
     #[test]

@@ -1,0 +1,325 @@
+# The documents of the rendering regression suite (M1 task 20): 40 documents of the full corpus, picked
+# evenly from those that open without a password, render in a few seconds and are not under a
+# share-alike license (the goldens are renderings of them, published with attribution), as the first two
+# pages each at 96 dpi. Every entry is a verbatim copy of its entry in manifest.toml (a test in xtask
+# checks that). Fetch it with: cargo xtask corpus fetch --manifest tests/corpus/golden-manifest.toml
+
+[[doc]]
+id = "pdfium-annot_javascript"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/annot_javascript.pdf"
+sha256 = "9d57762118d9073d053f7e55475f0fb703540696c19fa97a1a615d127b5e6676"
+license = "BSD-3-Clause"
+categories = ["attachments", "active-content"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-bad_dict_keys"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/bad_dict_keys.pdf"
+sha256 = "07f17d7ef9d53545c8ede782f701a297abc74d2b5912b8e9c922f7e44395ceea"
+license = "BSD-3-Clause"
+categories = ["malformed"]
+notes = "deliberately broken structure in PDFium's own test suite"
+
+[[doc]]
+id = "pdfium-bug_1206"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/bug_1206.pdf"
+sha256 = "7691ac6a1a8a24d46b5a6526a86d87f0f79da8aa31cc34786e8eced8f425759b"
+license = "BSD-3-Clause"
+categories = ["regression"]
+notes = "PDFium bug regression file; not necessarily corrupt"
+
+[[doc]]
+id = "pdfium-bug_1591"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/bug_1591.pdf"
+sha256 = "4058f653feb0512fdf65a47d4ffba6670abbefc3e3ad5cfc7cb9aac59bb8b8c9"
+license = "BSD-3-Clause"
+categories = ["regression"]
+notes = "PDFium bug regression file; not necessarily corrupt"
+
+[[doc]]
+id = "pdfium-calculate"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/calculate.pdf"
+sha256 = "ef5e95770dc919692f3648b5bf690b095c25d494e39f70b6e1f5239042095e1c"
+license = "BSD-3-Clause"
+categories = ["forms", "acroform"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-embedded_attachments"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/embedded_attachments.pdf"
+sha256 = "a1a8de01f6201abcc3a5050fd5047336c6182305eedc3f8c10b49712296a968b"
+license = "BSD-3-Clause"
+categories = ["attachments", "active-content"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-freetext_annotation_without_da"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/freetext_annotation_without_da.pdf"
+sha256 = "10e900c97abe3350ec0ca577f500ad0652396e1ed335522ac080d563cd9a0313"
+license = "BSD-3-Clause"
+categories = ["many-annotations"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-latin_extended"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/latin_extended.pdf"
+sha256 = "3c52b991b6669e07d5c67c478ff4dee6a843cb44d390fd29ecdf6d9e85ea1038"
+license = "BSD-3-Clause"
+categories = ["small-synthetic"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-listbox_form"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/listbox_form.pdf"
+sha256 = "4dd3b8b958eb56cb49afbb6b60b14b6d6ecba788181e088aa68be459fed10b49"
+license = "BSD-3-Clause"
+categories = ["forms", "acroform"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-page_labels"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/page_labels.pdf"
+sha256 = "162a1d7f1a545d0d2f29edaf2a7f011c4495ac5e478bab64e9b9b84719045bdb"
+license = "BSD-3-Clause"
+categories = ["small-synthetic"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-rectangles_object_zero"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/rectangles_object_zero.pdf"
+sha256 = "705ec0e15c92ce24b666c59259f6bef9beb7b7ed54a817ba15e085370fd5c0e1"
+license = "BSD-3-Clause"
+categories = ["malformed"]
+notes = "deliberately broken structure in PDFium's own test suite"
+
+[[doc]]
+id = "pdfium-simple_xfa"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/simple_xfa.pdf"
+sha256 = "82e0af732b472b023b3c50940cac0d76b6a84c25dab2b4a8de79fd0a6b7cdb89"
+license = "BSD-3-Clause"
+categories = ["forms", "acroform"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-text_render_mode"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/text_render_mode.pdf"
+sha256 = "b20365f879a7db4d41556924040f948fbdbb25df2bb10b8d3f52c8ee5fd43210"
+license = "BSD-3-Clause"
+categories = ["small-synthetic"]
+notes = "pdfium testing/resources"
+
+[[doc]]
+id = "pdfium-zero_length_stream"
+url = "https://raw.githubusercontent.com/chromium/pdfium/a84323421e94f484faca52dd9d027934eba42ab8/testing/resources/zero_length_stream.pdf"
+sha256 = "624d678b77aff88f91017c60a1567dbff5ad2408198f96693e0e1d2958468998"
+license = "BSD-3-Clause"
+categories = ["malformed"]
+notes = "deliberately broken structure in PDFium's own test suite"
+
+[[doc]]
+id = "pdfjs-TAMReview"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/TAMReview.pdf"
+sha256 = "a6db6d2f5e4f97e1e28a5919a875a40b89e38d0229b33cc023ca4d353f3ab3ec"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-annotation-border-styles"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-border-styles.pdf"
+sha256 = "ba3a3c67030f9be2ad2c1989b78ec302501f71cecb4e5ebf193f6ce9ca51ff56"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-highlight"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-highlight.pdf"
+sha256 = "72b6387356ccfdfb95a0a5eff5e1ceb9b7667019807d7b04abaf64dad7ea143a"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-annotation-squiggly"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/annotation-squiggly.pdf"
+sha256 = "95a2af9d01c2e532711a1483d58a258e469f3ff0e7dd1c2ae45c70bd8f9bb6e8"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-blendmode"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/blendmode.pdf"
+sha256 = "39ce34c2d32738c7c94970fd76559ecb9efd671f5ab99e515a853674e7a824ce"
+license = "Apache-2.0"
+categories = ["transparency"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-checkbox_no_appearance"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/checkbox_no_appearance.pdf"
+sha256 = "31e82e933f4d4664c6ae1c4418cc44efce0c614c10c85c34b515b38e04e08bcd"
+license = "Apache-2.0"
+categories = ["forms", "acroform"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-empty_protected"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/empty_protected.pdf"
+sha256 = "69556af04215faec7da3e93e823c64f1b74679e52fd10379176f0e0462dd4b6c"
+license = "Apache-2.0"
+categories = ["encrypted"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-helloworld-bad"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/helloworld-bad.pdf"
+sha256 = "c3e22ea5d7e6f5b7218d76abce4284728889df516a93c1b74a82c4fd69aa1639"
+license = "Apache-2.0"
+categories = ["malformed"]
+notes = "structurally broken or adversarial input"
+
+[[doc]]
+id = "pdfjs-js-buttons"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/js-buttons.pdf"
+sha256 = "4679ee03ee84b48d8b67ba39975e946de49216ba744a729fa30ef8f32c3ea9ba"
+license = "Apache-2.0"
+categories = ["forms", "acroform"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-named_dest_collision_for_editor"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/named_dest_collision_for_editor.pdf"
+sha256 = "c82bcb3934f24c82a80d52838ab90e2b2d0fca7b5c2973e5a482123fe1b84949"
+license = "Apache-2.0"
+categories = ["navigation", "structure"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-pdfjs_wikipedia"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/pdfjs_wikipedia.pdf"
+sha256 = "4a10e1aee6565b5f329f073470cf95410272412510985948dc86399b57d7b4db"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "pdfjs-poppler-91414-0-54"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/poppler-91414-0-54.pdf"
+sha256 = "1b2290fda39d79506e2cc104199bda3a5fb1a38bbf67e213778e0fc3b83fa2a4"
+license = "Apache-2.0"
+categories = ["malformed", "fuzzed"]
+notes = "fuzzer-found regression file"
+
+[[doc]]
+id = "pdfjs-scan-bad"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/scan-bad.pdf"
+sha256 = "d40f31f182cf254ab134826d379875acacb1f7b48bf1a57bce2e30b38d16628e"
+license = "Apache-2.0"
+categories = ["scans"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-stamps"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/stamps.pdf"
+sha256 = "8b07b29819b29f225419dda5b24afa743b604003adbe0f468846fb3d4e9630ed"
+license = "Apache-2.0"
+categories = ["many-annotations"]
+notes = "pdf.js test/pdfs; license is the hosting repo's, per-file upstream provenance not individually verified"
+
+[[doc]]
+id = "pdfjs-tracemonkey"
+url = "https://raw.githubusercontent.com/mozilla/pdf.js/638bcdf0ada7a677c1bace3f11d32ff9090ed7b1/test/pdfs/tracemonkey.pdf"
+sha256 = "3662ff519e485810520552bf301d8c3b2b917fd2f83303f4965d7abed367e113"
+license = "Apache-2.0"
+categories = ["textbooks", "producer-misc"]
+notes = "typical real-world document"
+
+[[doc]]
+id = "vera-isartor-test-files-isartor-6-1-2-t01-fail-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/Isartor%20test%20files/PDFA-1b/6.1%20File%20structure/6.1.2%20File%20header/isartor-6-1-2-t01-fail-a.pdf"
+sha256 = "dc1584f04f81d1d6cc8279f03b9e8d7fa169700681317ecd2e986a2b568dab54"
+license = "CC-BY-4.0"
+categories = ["malformed", "pdfa"]
+notes = "Isartor file-structure violation (header/trailer/xref); parses in most readers"
+
+[[doc]]
+id = "vera-isartor-test-files-isartor-6-1-4-t01-fail-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/Isartor%20test%20files/PDFA-1b/6.1%20File%20structure/6.1.4%20Cross%20reference%20trailer/isartor-6-1-4-t01-fail-a.pdf"
+sha256 = "9e246e8d7fc54a1d389a7442a7fe452e11c8201860c55d87c0913e62c4bfa7a4"
+license = "CC-BY-4.0"
+categories = ["malformed", "pdfa"]
+notes = "Isartor file-structure violation (header/trailer/xref); parses in most readers"
+
+[[doc]]
+id = "vera-isartor-test-files-isartor-6-2-2-t01-fail-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/Isartor%20test%20files/PDFA-1b/6.2%20Graphics/6.2.2%20Output%20intent/isartor-6-2-2-t01-fail-a.pdf"
+sha256 = "2fe2f7063ce1ee5f4a1e4bf3cae21a95c1d190a1a14c2509b26ed1f5893f56c9"
+license = "CC-BY-4.0"
+categories = ["pdfa", "conformance"]
+notes = "Isartor PDF/A-1b failing file"
+
+[[doc]]
+id = "vera-isartor-test-files-isartor-6-3-3-1-t01-fail-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/Isartor%20test%20files/PDFA-1b/6.3%20Fonts/6.3.3%20Composite%20fonts/6.3.3.1%20General/isartor-6-3-3-1-t01-fail-a.pdf"
+sha256 = "02bbd664e420c5063f5840bdc6097f4739584a024c33b261225919f3541668fb"
+license = "CC-BY-4.0"
+categories = ["pdfa", "conformance"]
+notes = "Isartor PDF/A-1b failing file"
+
+[[doc]]
+id = "vera-iso-32000-1-verapdf-test-suite-6-8-2-2-t01-fail-d"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/ISO%2032000-1/veraPDF%20test%20suite%206-8-2-2-t01-fail-d.pdf"
+sha256 = "2abb9929f1797483228c39f098c3ccf0fda6bc5c39db627f8fbd302dce492224"
+license = "CC-BY-4.0"
+categories = ["conformance"]
+notes = "veraPDF ISO 32000-1 test file"
+
+[[doc]]
+id = "vera-pdf_a-1a-verapdf-test-suite-6-3-8-t01-fail-c"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_A-1a/6.3%20Fonts/6.3.8%20Unicode%20character%20maps/veraPDF%20test%20suite%206-3-8-t01-fail-c.pdf"
+sha256 = "ed1c3db5dbdd8dd568c7cc243727a6dcf6cd702773284e34e1abd40a08b9adf6"
+license = "CC-BY-4.0"
+categories = ["pdfa", "conformance"]
+notes = "veraPDF PDF/A-1a corpus file"
+
+[[doc]]
+id = "vera-pdf_a-2b-verapdf-test-suite-6-2-10-t01-fail-e"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_A-2b/6.2%20Graphics/6.2.10%20Transparency/veraPDF%20test%20suite%206-2-10-t01-fail-e.pdf"
+sha256 = "5affdd65c3b861d7543cdd7ff21d3537b08aba96cb6ccce8bf1269c95ce62a79"
+license = "CC-BY-4.0"
+categories = ["pdfa", "conformance"]
+notes = "veraPDF PDF/A-2b corpus file"
+
+[[doc]]
+id = "vera-pdf_a-3b-verapdf-test-suite-6-8-t02-fail-d"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_A-3b/6.8%20Embedded%20files/veraPDF%20test%20suite%206-8-t02-fail-d.pdf"
+sha256 = "45bf32985c5ec5828ee9c0d47e1339956591c53812199c26b723edfe89c556cd"
+license = "CC-BY-4.0"
+categories = ["pdfa", "conformance", "attachments"]
+notes = "veraPDF PDF/A-3b corpus file"
+
+[[doc]]
+id = "vera-pdf_ua-1-5-t01-fail-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_UA-1/5%20Version%20identification/5-t01-fail-a.pdf"
+sha256 = "33d9008d84746cb8cf7cf11f50d8e67a97b3640978d845050e18ee47bfb95310"
+license = "CC-BY-4.0"
+categories = ["pdfua", "structure"]
+notes = "veraPDF PDF/UA-1 corpus file"
+
+[[doc]]
+id = "vera-pdf_ua-1-5-t03-pass-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_UA-1/5%20Version%20identification/5-t03-pass-a.pdf"
+sha256 = "cc93f80f377fcfb69398d67c22d3285a4ee2d0958cb9eb7316308d3c54a31b38"
+license = "CC-BY-4.0"
+categories = ["pdfua", "structure"]
+notes = "veraPDF PDF/UA-1 corpus file"
+
+[[doc]]
+id = "vera-pdf_ua-2-5-t03-fail-a"
+url = "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/bb75f4f0073d9350dfd058c0162a367e6fadf25e/PDF_UA-2/5%20Version%20identification/5-t03-fail-a.pdf"
+sha256 = "1ac0ab45f0818c86087b0cc4fed2e0b6746b1381e2c9f6c9d5dfbc9287918928"
+license = "CC-BY-4.0"
+categories = ["pdfua", "structure", "pdf20"]
+notes = "veraPDF PDF/UA-2 corpus file"
