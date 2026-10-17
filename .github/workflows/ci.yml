@@ -61,6 +61,15 @@ jobs:
         run: cargo xtask corpus fetch --manifest tests/corpus/ci-manifest.toml
       - name: Writer invariants on the CI corpus subset
         run: cargo test --locked -p vellora-invariants -- --ignored --nocapture
+      # The rendering regression suite (M1 task 20): ~40 corpus documents drawn by `vellora render`
+      # and compared with goldens kept as a release asset (tests/goldens/manifest.toml), with the
+      # tolerance of each system in tests/goldens/tolerance.toml.
+      - name: Fetch the golden corpus subset and the goldens
+        run: |
+          cargo xtask corpus fetch --manifest tests/corpus/golden-manifest.toml
+          cargo xtask goldens fetch
+      - name: Rendering regression suite
+        run: cargo test --locked -p vellora-cli --test goldens -- --ignored --nocapture
       # The text the engine extracts against Poppler's `pdftotext`, an external test tool that is
       # never linked or shipped. One platform: the text does not depend on it, and a second
       # `pdftotext` version would only add noise.
