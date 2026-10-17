@@ -60,5 +60,11 @@ codesign --verify --deep --strict "$app"
 pwsh "$root/packaging/stage-licenses.ps1" -Dest "$out/dmg-root"
 ln -s /Applications "$out/dmg-root/Applications"
 
-hdiutil create -volname Vellora -srcfolder "$out/dmg-root" -ov -format UDZO "$out/Vellora-$version-macos-arm64.dmg"
+# `hdiutil create` fails with "Resource busy" while the runner's indexers still hold the files.
+n=0
+until hdiutil create -volname Vellora -srcfolder "$out/dmg-root" -ov -format UDZO "$out/Vellora-$version-macos-arm64.dmg"; do
+  n=$((n + 1))
+  [ "$n" -lt 6 ] || { echo "hdiutil create kept failing" >&2; exit 1; }
+  sleep 10
+done
 rm -rf "$out/dmg-root"
