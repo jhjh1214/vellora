@@ -43,7 +43,7 @@
 
 use std::borrow::Cow;
 
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::NoPadding};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};
 use aes::{Aes128, Aes256};
 use md5::{Digest as _, Md5};
 use sha2::{Sha256, Sha384, Sha512};
@@ -462,7 +462,7 @@ fn unwrap_key(intermediate: &[u8], wrapped: &[u8]) -> Option<Vec<u8>> {
     let mut buffer = prefix(wrapped, 32).to_vec();
     cbc::Decryptor::<Aes256>::new_from_slices(intermediate, &[0; 16])
         .ok()?
-        .decrypt_padded_mut::<NoPadding>(&mut buffer)
+        .decrypt_padded::<NoPadding>(&mut buffer)
         .ok()?;
     Some(buffer)
 }
@@ -491,7 +491,7 @@ fn hash_2b(password: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
                 .and_then(|cipher| {
                     let length = repeated.len();
                     cipher
-                        .encrypt_padded_mut::<NoPadding>(&mut repeated, length)
+                        .encrypt_padded::<NoPadding>(&mut repeated, length)
                         .ok()
                         .map(<[u8]>::to_vec)
                 }),
@@ -562,9 +562,9 @@ fn aes_cbc_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut plain = prefix(body, body.len() / 16 * 16).to_vec();
     let decrypted = match key.len() {
         16 => cbc::Decryptor::<Aes128>::new_from_slices(key, iv)
-            .map(|c| c.decrypt_padded_mut::<NoPadding>(&mut plain).is_ok()),
+            .map(|c| c.decrypt_padded::<NoPadding>(&mut plain).is_ok()),
         32 => cbc::Decryptor::<Aes256>::new_from_slices(key, iv)
-            .map(|c| c.decrypt_padded_mut::<NoPadding>(&mut plain).is_ok()),
+            .map(|c| c.decrypt_padded::<NoPadding>(&mut plain).is_ok()),
         _ => return Vec::new(),
     };
     if decrypted != Ok(true) {
@@ -590,14 +590,10 @@ fn aes_cbc_encrypt(key: &[u8], iv: &[u8; 16], data: &[u8]) -> Vec<u8> {
     buffer.resize(data.len() + pad, u8::try_from(pad).unwrap_or(16));
     let length = buffer.len();
     let encrypted = match key.len() {
-        16 => cbc::Encryptor::<Aes128>::new_from_slices(key, iv).map(|c| {
-            c.encrypt_padded_mut::<NoPadding>(&mut buffer, length)
-                .is_ok()
-        }),
-        32 => cbc::Encryptor::<Aes256>::new_from_slices(key, iv).map(|c| {
-            c.encrypt_padded_mut::<NoPadding>(&mut buffer, length)
-                .is_ok()
-        }),
+        16 => cbc::Encryptor::<Aes128>::new_from_slices(key, iv)
+            .map(|c| c.encrypt_padded::<NoPadding>(&mut buffer, length).is_ok()),
+        32 => cbc::Encryptor::<Aes256>::new_from_slices(key, iv)
+            .map(|c| c.encrypt_padded::<NoPadding>(&mut buffer, length).is_ok()),
         // Unreachable for keys made by `authenticate`; the data would otherwise go out in clear.
         _ => return Vec::new(),
     };
@@ -874,12 +870,12 @@ mod tests {
         let cipher = match key.len() {
             16 => cbc::Encryptor::<Aes128>::new_from_slices(key, &iv)
                 .expect("key")
-                .encrypt_padded_mut::<NoPadding>(&mut buffer, length)
+                .encrypt_padded::<NoPadding>(&mut buffer, length)
                 .expect("block aligned")
                 .to_vec(),
             _ => cbc::Encryptor::<Aes256>::new_from_slices(key, &iv)
                 .expect("key")
-                .encrypt_padded_mut::<NoPadding>(&mut buffer, length)
+                .encrypt_padded::<NoPadding>(&mut buffer, length)
                 .expect("block aligned")
                 .to_vec(),
         };
