@@ -15,6 +15,7 @@ namespace vellora {
 
 namespace {
 
+// i18n-ok: headings of the English THIRD_PARTY_LICENSES file, which this dialog parses
 constexpr auto kPdfiumMarker = "PDFium bundled license texts";
 constexpr auto kBundledMarker = "Bundled in the PDFium build:";
 
@@ -27,6 +28,7 @@ QString readResource(const QString& path) {
 }
 
 QString pdfiumLibrary(const QString& name) {
+    // i18n-ok: a component name is a key into the English license file (see `select`), not prose
     return QStringLiteral("%1 (in PDFium)").arg(name);
 }
 
@@ -38,6 +40,7 @@ QStringList parseComponents(const QString& text) {
     static const QRegularExpression crate(QStringLiteral("^  - (\\S+) (\\S+)(?: \\(.*\\))?$"));
     bool inList = false;
     for (const QStringView line : QStringView(text).split(QLatin1Char('\n'))) {
+        // i18n-ok: a heading of the English license file
         if (line == QLatin1String("Used by:")) {
             inList = true;
             continue;
@@ -133,7 +136,7 @@ bool LicensesDialog::select(const QString& component) {
         at = text.indexOf(QLatin1String("\nPDFium\n"));
     } else if (component == QLatin1String("Qt")) {
         at = text.indexOf(QLatin1String("\nQt\n"));
-    } else if (component.endsWith(QLatin1String(" (in PDFium)"))) {
+    } else if (component.endsWith(QLatin1String(" (in PDFium)"))) { // i18n-ok: see pdfiumLibrary
         // The license texts are headed "--- name.txt ---", with "_" where the library has "-".
         const QString name = component.left(component.size() - 12);
         const qsizetype texts = text.indexOf(QLatin1String(kPdfiumMarker));
