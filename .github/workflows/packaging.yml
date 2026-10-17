@@ -126,3 +126,82 @@ jobs:
           name: vellora-linux-x86_64-flatpak
           path: dist/Vellora-x86_64.flatpak
           if-no-files-found: error
+
+  macos:
+    name: macOS dmg
+    # Pinned like the Qt app job in ci.yml: Qt 6.8.3 links the AGL framework, which the macOS 26 SDK
+    # no longer has.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          modules: qtshadertools
+          cache: true
+      - run: brew install ninja
+      - name: Fetch PDFium
+        run: cargo xtask pdfium fetch
+      - name: Build the app (Release)
+        run: |
+          cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake --build build --target vellora
+      - name: Assemble the bundle and the disk image
+        run: |
+          version=$(sed -nE '/^\[workspace\.package\]/,/^\[/ s/^version = "([0-9.]+)"/\1/p' Cargo.toml | head -1)
+          sh packaging/macos/stage.sh build "$version" dist
+      - name: Smoke test (mount, copy out, run)
+        run: sh packaging/macos/smoke.sh dist/Vellora-*-macos-arm64.dmg crates/engine/tests/fixtures/golden.pdf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vellora-macos-arm64-dmg
+          path: dist/Vellora-*-macos-arm64.dmg
+          if-no-files-found: error
+
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A build tool only; pinned so that the SBOM does not change with the tool.
+      - run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+      - name: Generate the CycloneDX documents of the Rust crates
+        run: cargo cyclonedx --format json --spec-version 1.5
+      - name: Merge them and add PDFium and Qt
+        run: >
+          python3 packaging/sbom/merge.py --cyclonedx-dir .
+          --pdfium-lock third_party/pdfium.lock --qt-version 6.8.3
+          --version "$(sed -nE '/^\[workspace\.package\]/,/^\[/ s/^version = "([0-9.]+)"/\1/p' Cargo.toml | head -1)"
+          --out vellora.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vellora-sbom
+          path: vellora.cdx.json
+          if-no-files-found: error
+
+  # Everything a release page carries, in one artifact, with the SHA-256 sums of all of it.
+  release-files:
+    name: checksums
+    needs: [windows, flatpak, macos, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "vellora-*"
+          path: dist
+          merge-multiple: true
+      - name: SHA-256 sums
+        working-directory: dist
+        run: |
+          ls -l
+          sha256sum -- * | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/*
+          if-no-files-found: error
