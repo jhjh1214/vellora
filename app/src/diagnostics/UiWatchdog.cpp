@@ -50,6 +50,7 @@ void UiWatchdog::recordHandler(double ms, const QMetaObject* receiver, QEvent::T
         return;
     }
     // Only the slow path builds a description of the event.
+    // i18n-ok: a developer log line
     record(m_handlers, Kind::Handler, ms,
            QStringLiteral("event %1 for %2")
                .arg(static_cast<int>(type))
@@ -78,6 +79,7 @@ void UiWatchdog::record(Counters& counters, Kind kind, double ms, const QString&
 
 QString UiWatchdog::summary() const {
     const auto line = [this](const char* name, const Counters& c) {
+        // i18n-ok: the measurement report that tests and CI read
         return QStringLiteral("%1: %2 samples, %3 over %4 ms, worst %5 ms")
             .arg(QLatin1String(name))
             .arg(c.samples)

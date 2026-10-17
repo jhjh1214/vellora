@@ -61,6 +61,20 @@ vellora_add_test(tst_commands tst_commands.cpp)
 vellora_add_test(tst_ui_watchdog tst_ui_watchdog.cpp)
 vellora_add_test(tst_engine_recovery tst_engine_recovery.cpp)
 vellora_add_test(tst_diagnostics_script tst_diagnostics_script.cpp)
+# The pseudo-locales and the right-to-left layout. With VELLORA_SCREENSHOT_DIR set it also writes
+# PNGs of the windows in each locale (CI uploads them as the artifact `i18n-screenshots`).
+vellora_add_test(tst_i18n tst_i18n.cpp)
+
+# Finds user-visible literals in app/src that skipped tr(). It reads the sources as text, so it
+# needs neither the shell nor the engine (and runs in a second).
+qt_add_executable(tst_untranslated_literals tst_untranslated_literals.cpp)
+target_link_libraries(tst_untranslated_literals PRIVATE Qt6::Test)
+target_compile_definitions(tst_untranslated_literals PRIVATE
+  VELLORA_APP_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../src")
+add_test(NAME tst_untranslated_literals
+         COMMAND tst_untranslated_literals -o "${VELLORA_TEST_LOG_DIR}/tst_untranslated_literals.log,txt")
+set_tests_properties(tst_untranslated_literals PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTEST_FUNCTION_TIMEOUT=90000" TIMEOUT 150)
 
 # The hidden `--diagnostics-script` flag of the app itself: runs the scripted session on a small
 # document (no GPU needed; the offscreen platform draws nothing) and exits 0 with its report.
