@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "commands/CommandPalette.h"
 #include "commands/CommandRegistry.h"
+#include "commands/ShortcutsPage.h"
 
 #include <QAction>
 #include <QApplication>
@@ -246,6 +247,41 @@ private slots:
         QVERIFY(window.palette().isVisible());
         QTest::keyClick(window.palette().findChild<QLineEdit*>(), Qt::Key_Escape);
         QVERIFY(!window.palette().isVisible());
+    }
+
+    void theShortcutsPageListsTheCommandsWithShortcutsInPortableText() {
+        CommandRegistry registry;
+        const auto noop = [] {};
+        QVERIFY(registry.add(
+            {QStringLiteral("view.zoomIn"),
+             QStringLiteral("Zoom In"),
+             {QKeySequence(Qt::CTRL | Qt::Key_Plus), QKeySequence(Qt::CTRL | Qt::Key_Equal)},
+             noop}));
+        QVERIFY(registry.add({QStringLiteral("file.open"),
+                              QStringLiteral("Open…"),
+                              {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O)},
+                              noop}));
+        QVERIFY(registry.add({QStringLiteral("view.layout"), QStringLiteral("No keys"), {}, noop}));
+        QVERIFY(registry.add({QStringLiteral("zzz.other"),
+                              QStringLiteral("Other"),
+                              {QKeySequence(Qt::Key_F3)},
+                              noop}));
+        const QString page = vellora::shortcutsMarkdown(registry);
+        QVERIFY(page.contains(QStringLiteral("| Zoom In | `Ctrl++`, `Ctrl+=` |\n")));
+        QVERIFY(page.contains(QStringLiteral("| Open… | `Ctrl+Shift+O` |\n")));
+        QVERIFY(page.contains(QStringLiteral("| Other | `F3` |\n")));
+        QVERIFY(!page.contains(QStringLiteral("No keys")));
+        // Groups appear in the order of the first command with a shortcut.
+        QVERIFY(page.indexOf(QStringLiteral("## View")) < page.indexOf(QStringLiteral("## File")));
+        QVERIFY(page.indexOf(QStringLiteral("## File")) < page.indexOf(QStringLiteral("## Zzz")));
+        QCOMPARE(vellora::shortcutsMarkdown(registry), page);
+    }
+
+    void theWindowsRegistryProducesAPageWithTheCommandPaletteShortcut() {
+        vellora::MainWindow window;
+        const QString page = vellora::shortcutsMarkdown(window.commands());
+        QVERIFY(page.contains(QStringLiteral("| Command Palette… | `Ctrl+Shift+P` |")));
+        QVERIFY(page.startsWith(QStringLiteral("# Keyboard shortcuts\n")));
     }
 };
 

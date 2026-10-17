@@ -164,6 +164,8 @@ add_library(vellora_shell STATIC
   src/commands/CommandPalette.h
   src/commands/CommandRegistry.cpp
   src/commands/CommandRegistry.h
+  src/commands/ShortcutsPage.cpp
+  src/commands/ShortcutsPage.h
   src/diagnostics/Application.cpp
   src/diagnostics/Application.h
   src/diagnostics/DiagnosticsScript.cpp

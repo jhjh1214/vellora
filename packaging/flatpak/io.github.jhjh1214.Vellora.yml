@@ -1,0 +1,54 @@
+# Flatpak manifest for Vellora (M1 task 23b). Qt comes from the KDE runtime (dynamic linking, so the
+# LGPL relinking right holds: the user can run the app against another Qt of the same series).
+#
+#   flatpak-builder --user --install-deps-from=flathub --force-clean --repo=repo build-dir \
+#       packaging/flatpak/io.github.jhjh1214.Vellora.yml
+#
+# The app id is provisional: the published name is a maintainer decision (docs/milestones/README.md,
+# "Decisions needed" 10).
+#
+# The build step uses the network (rust crates, Corrosion, PDFium from the pinned release, all
+# checked by Cargo.lock, CMake's pinned tag and `third_party/pdfium.lock`). That is fine for CI
+# artifacts; Flathub forbids it, so a Flathub submission needs vendored sources (docs/backlog.md).
+# The app itself gets no network: there is no `--share=network` in `finish-args`, and no file access
+# beyond what the file chooser portal hands over.
+app-id: io.github.jhjh1214.Vellora
+runtime: org.kde.Platform
+runtime-version: "6.8"
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: vellora
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+modules:
+  - name: vellora
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/vellora/cargo
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - build
+          - target
+          - dist
+          - third_party/pdfium
+    build-commands:
+      # PDFium, at the pinned release and SHA-256, into third_party/pdfium (CMake stages it).
+      - cargo xtask pdfium fetch
+      - cmake -S app -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - cmake --build _build --target vellora
+      # The engine and PDFium live beside the shell (the shell looks for them there).
+      - install -Dm755 _build/vellora _build/vellora-engine _build/libpdfium.so -t /app/bin
+      - install -Dm644 packaging/flatpak/io.github.jhjh1214.Vellora.desktop -t /app/share/applications
+      - install -Dm644 LICENSE -t /app/share/licenses/vellora
+      - install -Dm644 THIRD_PARTY_LICENSES -t /app/share/licenses/vellora
