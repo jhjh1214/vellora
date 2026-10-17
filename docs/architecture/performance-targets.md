@@ -1,6 +1,6 @@
 # Performance targets
 
-Reference machine: mid-range laptop (4–8 cores, 16 GB RAM, SSD, integrated GPU). Benchmarks in `bench/` track these in CI. A regression of more than 10% on a tracked metric fails the nightly job.
+Reference machine: mid-range laptop (4–8 cores, 16 GB RAM, SSD, integrated GPU). Benchmarks in `bench/` track these in CI. A regression of more than 10% on a tracked metric fails the nightly job on Linux and Windows (compared with the last good revision measured on the same machine; macOS is reported but not gated, see [ADR-0016](../adr/0016-re-open-after-commit-strategy.md)).
 
 | Metric | Target | First enforced |
 |---|---|---|

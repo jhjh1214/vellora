@@ -18,6 +18,8 @@ vellora-cos = { workspace = true }
 vellora-engine-client = { workspace = true }
 vellora-ipc = { workspace = true }
 vellora-shm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
