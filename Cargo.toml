@@ -57,7 +57,7 @@ stringprep = "0.1"
 # regex-automata, regex-syntax, aho-corasick and memchr (MIT/Apache-2.0 or Unlicense/MIT).
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 # Standard Security Handler (RustCrypto, one release line: digest 0.10 / cipher 0.4).
-md-5 = "0.10"
+md-5 = "0.11"
 aes = "0.8"
 cbc = "0.1"
 toml = "0.9"
