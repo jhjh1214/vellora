@@ -20,7 +20,7 @@ constexpr double kMaxRenderSide = 16777216.0;
 constexpr quint64 kMaxBandsPerPage = 1'000'000;
 
 QString tr(const char* text) {
-    return QCoreApplication::translate("PrintJob", text);
+    return QCoreApplication::translate("vellora::PrintJob", text);
 }
 
 } // namespace
