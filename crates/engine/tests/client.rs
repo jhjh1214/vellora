@@ -353,10 +353,9 @@ fn the_bridge_entry_points_drive_the_engine() {
     assert_eq!(ticket.state, TileState::Requested);
     let request = ticket.request;
     let mut tile = vec![0; handle.slot_bytes() as usize];
-    assert!(
-        !handle.read_tile(0, 1.0, 0, 0, &mut tile).unwrap(),
-        "not readable before TileReady"
-    );
+    // (That a pending tile cannot be read is a property of the cache and is tested there,
+    // `pending_tiles_are_never_evicted_and_never_readable`: here the engine may already have
+    // answered by the time this thread looks, so it cannot be asserted without a race.)
     let ready = loop {
         assert!(Instant::now() < deadline, "no tile");
         std::thread::sleep(Duration::from_millis(10));

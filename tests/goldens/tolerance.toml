@@ -1,0 +1,43 @@
+# How far a rendering may be from its golden (M1 task 20), per operating system.
+#
+# The goldens are rendered on one machine; PDFium draws the same page a little differently on
+# another (anti-aliasing, the fonts a document does not embed). A page passes when
+#   - it has the size of the golden, and
+#   - the share of its pixels in which any channel differs from the golden by more than
+#     `pixel_delta` (of 255) is at most `max_ratio`.
+# The values are set from what the suite measured on the CI runners (the share of differing pixels at
+# each threshold is printed for every page, `-- --nocapture`), with room above the worst page. A
+# change that makes a page differ more than this must be looked at, never absorbed by raising a
+# number.
+#
+# Measured on the first run (43 pages), share of pixels differing by more than the threshold:
+#   Windows (CI runner, like the machine the goldens were made on): 0 pixels differ at every threshold.
+#   Linux:  0.0049 at 32, 0.0013 at 64, 0.0001 at 96 (worst page pdfium-zero_length_stream p1).
+#   macOS:  0.094 at 32, 0.045 at 64, 0.026 at 96, 0.015 at 128, 0.005 at 192 (worst page
+#           pdfjs-tracemonkey p2: its text is drawn with other font hinting and smoothing).
+
+# `[<os>.allow]` lists the few documents whose pages are noisier on that system than the rest, each
+# with the share of differing pixels it may have (the measured worst page of the document at the
+# system's `pixel_delta`, with room). They are text-heavy pages, drawn there with other font hinting
+# and smoothing. Everything not listed must meet the system's `max_ratio`: that keeps the suite able
+# to see a small real change (a page shifted by two pixels differs by about 1.5% at delta 128).
+
+[windows]
+pixel_delta = 32
+max_ratio = 0.002
+
+[linux]
+pixel_delta = 64
+max_ratio = 0.005
+
+[macos]
+pixel_delta = 64
+max_ratio = 0.003
+
+[macos.allow]
+"pdfjs-tracemonkey" = 0.07
+"pdfjs-TAMReview" = 0.04
+"pdfium-zero_length_stream" = 0.015
+"vera-pdf_ua-1-5-t01-fail-a" = 0.012
+"vera-pdf_ua-2-5-t03-fail-a" = 0.012
+"vera-pdf_ua-1-5-t03-pass-a" = 0.01
