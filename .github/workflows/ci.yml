@@ -160,10 +160,13 @@ jobs:
       - name: Configure
         run: >
           cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DVELLORA_REQUIRE_TRANSLATIONS=ON
         shell: bash
       - run: cmake --build build
       - name: Test
+        # tst_i18n writes screenshots of the windows in the pseudo-locales into this folder.
+        env:
+          VELLORA_SCREENSHOT_DIR: ${{ github.workspace }}/i18n-screenshots
         run: ctest --test-dir build --output-on-failure
       # The shortcuts page of the user manual is written by the application from its command
       # registry. One platform: the standard keys (Open, Quit, ...) differ per system, and the page
@@ -177,6 +180,13 @@ jobs:
             echo "::error::docs/user/shortcuts.md differs from the command registry. Regenerate it with: vellora --export-shortcuts docs/user/shortcuts.md (the Linux text)"
             exit 1
           }
+      - name: Upload the pseudo-locale screenshots
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: i18n-screenshots
+          path: i18n-screenshots
+          if-no-files-found: warn
       - name: Qt Test reports of what failed
         # Qt Test's console output does not reach CTest on Windows; each test also writes
         # `build/test-logs/<name>.log` (app/tests/CMakeLists.txt).

@@ -35,38 +35,63 @@ struct FeatureText {
 // The risky or notable features, in the order the report lists them, each with what it means for
 // someone who is not a PDF expert. Vellora runs none of them.
 const FeatureText kFeatures[] = {
-    {"open_action_javascript", QT_TR_NOOP("Runs a script when the file is opened"),
-     QT_TR_NOOP("JavaScript that other PDF viewers may run as soon as the document opens. Vellora "
-                "never runs PDF JavaScript.")},
-    {"javascript_actions", QT_TR_NOOP("Contains JavaScript actions"),
-     QT_TR_NOOP("Scripts attached to links, buttons, form fields or bookmarks. Vellora never runs "
-                "PDF JavaScript.")},
-    {"names_javascript", QT_TR_NOOP("Has document-level scripts"),
-     QT_TR_NOOP("Scripts stored with the document itself, which some viewers run when it opens.")},
-    {"additional_actions", QT_TR_NOOP("Reacts to events (open, close, print, focus)"),
-     QT_TR_NOOP("Actions that fire when the document is opened, closed or printed, or when a form "
-                "field is entered. Vellora does not carry them out.")},
-    {"launch_actions", QT_TR_NOOP("Can start a program or open a file"),
-     QT_TR_NOOP("A Launch action asks a viewer to start another program or open a file on your "
-                "computer. Vellora never follows it.")},
-    {"uri_actions", QT_TR_NOOP("Links to addresses"),
-     QT_TR_NOOP("Links that open a web or mail address. Vellora asks before opening one; other "
-                "viewers may not. The addresses are listed below.")},
-    {"submit_form_actions", QT_TR_NOOP("Sends form data to an address"),
-     QT_TR_NOOP("A form that can send what you typed to a server.")},
-    {"goto_remote_actions", QT_TR_NOOP("Opens other PDF files"),
-     QT_TR_NOOP("A link that opens another PDF document. Vellora does not follow it.")},
-    {"embedded_files", QT_TR_NOOP("Has embedded files"),
-     QT_TR_NOOP("Files attached inside the PDF. Vellora never opens them; their names are listed "
-                "below.")},
-    {"acroform", QT_TR_NOOP("Has an interactive form"),
-     QT_TR_NOOP("The document has form fields that can be filled in.")},
-    {"xfa", QT_TR_NOOP("Has an XFA form"),
-     QT_TR_NOOP("A form in an older XML-based format, which Vellora does not support.")},
-    {"optional_content", QT_TR_NOOP("Has layers"),
-     QT_TR_NOOP("Content that can be shown or hidden (optional content groups).")},
-    {"signature_fields", QT_TR_NOOP("Has signature fields"),
-     QT_TR_NOOP(
+    {"open_action_javascript",
+     QT_TRANSLATE_NOOP("vellora::InspectorView", "Runs a script when the file is opened"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "JavaScript that other PDF viewers may run as soon as the document opens. Vellora "
+         "never runs PDF JavaScript.")},
+    {"javascript_actions",
+     QT_TRANSLATE_NOOP("vellora::InspectorView", "Contains JavaScript actions"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "Scripts attached to links, buttons, form fields or bookmarks. Vellora never runs "
+         "PDF JavaScript.")},
+    {"names_javascript", QT_TRANSLATE_NOOP("vellora::InspectorView", "Has document-level scripts"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "Scripts stored with the document itself, which some viewers run when it opens.")},
+    {"additional_actions",
+     QT_TRANSLATE_NOOP("vellora::InspectorView", "Reacts to events (open, close, print, focus)"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "Actions that fire when the document is opened, closed or printed, or when a form "
+         "field is entered. Vellora does not carry them out.")},
+    {"launch_actions",
+     QT_TRANSLATE_NOOP("vellora::InspectorView", "Can start a program or open a file"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "A Launch action asks a viewer to start another program or open a file on your "
+         "computer. Vellora never follows it.")},
+    {"uri_actions", QT_TRANSLATE_NOOP("vellora::InspectorView", "Links to addresses"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "Links that open a web or mail address. Vellora asks before opening one; other "
+         "viewers may not. The addresses are listed below.")},
+    {"submit_form_actions",
+     QT_TRANSLATE_NOOP("vellora::InspectorView", "Sends form data to an address"),
+     QT_TRANSLATE_NOOP("vellora::InspectorView",
+                       "A form that can send what you typed to a server.")},
+    {"goto_remote_actions", QT_TRANSLATE_NOOP("vellora::InspectorView", "Opens other PDF files"),
+     QT_TRANSLATE_NOOP("vellora::InspectorView",
+                       "A link that opens another PDF document. Vellora does not follow it.")},
+    {"embedded_files", QT_TRANSLATE_NOOP("vellora::InspectorView", "Has embedded files"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
+         "Files attached inside the PDF. Vellora never opens them; their names are listed "
+         "below.")},
+    {"acroform", QT_TRANSLATE_NOOP("vellora::InspectorView", "Has an interactive form"),
+     QT_TRANSLATE_NOOP("vellora::InspectorView",
+                       "The document has form fields that can be filled in.")},
+    {"xfa", QT_TRANSLATE_NOOP("vellora::InspectorView", "Has an XFA form"),
+     QT_TRANSLATE_NOOP("vellora::InspectorView",
+                       "A form in an older XML-based format, which Vellora does not support.")},
+    {"optional_content", QT_TRANSLATE_NOOP("vellora::InspectorView", "Has layers"),
+     QT_TRANSLATE_NOOP("vellora::InspectorView",
+                       "Content that can be shown or hidden (optional content groups).")},
+    {"signature_fields", QT_TRANSLATE_NOOP("vellora::InspectorView", "Has signature fields"),
+     QT_TRANSLATE_NOOP(
+         "vellora::InspectorView",
          "Digital signatures are present. Vellora lists them; it does not verify them yet.")},
 };
 
@@ -76,14 +101,14 @@ struct PermissionText {
 };
 
 const PermissionText kPermissions[] = {
-    {"print", QT_TR_NOOP("Print")},
-    {"print_high_quality", QT_TR_NOOP("Print at full quality")},
-    {"copy", QT_TR_NOOP("Copy text and images")},
-    {"modify", QT_TR_NOOP("Change the document")},
-    {"annotate", QT_TR_NOOP("Add notes and comments")},
-    {"fill_forms", QT_TR_NOOP("Fill in forms")},
-    {"accessibility", QT_TR_NOOP("Read aloud for accessibility")},
-    {"assemble", QT_TR_NOOP("Insert, rotate and delete pages")},
+    {"print", QT_TRANSLATE_NOOP("vellora::InspectorView", "Print")},
+    {"print_high_quality", QT_TRANSLATE_NOOP("vellora::InspectorView", "Print at full quality")},
+    {"copy", QT_TRANSLATE_NOOP("vellora::InspectorView", "Copy text and images")},
+    {"modify", QT_TRANSLATE_NOOP("vellora::InspectorView", "Change the document")},
+    {"annotate", QT_TRANSLATE_NOOP("vellora::InspectorView", "Add notes and comments")},
+    {"fill_forms", QT_TRANSLATE_NOOP("vellora::InspectorView", "Fill in forms")},
+    {"accessibility", QT_TRANSLATE_NOOP("vellora::InspectorView", "Read aloud for accessibility")},
+    {"assemble", QT_TRANSLATE_NOOP("vellora::InspectorView", "Insert, rotate and delete pages")},
 };
 
 QString yesNo(bool value) {
@@ -323,10 +348,14 @@ void InspectorView::show(const QJsonObject& r) {
     }
     const QJsonObject info = r.value(QLatin1String("info")).toObject();
     const std::pair<const char*, const char*> infoFields[] = {
-        {"title", QT_TR_NOOP("Title")},           {"author", QT_TR_NOOP("Author")},
-        {"subject", QT_TR_NOOP("Subject")},       {"keywords", QT_TR_NOOP("Keywords")},
-        {"creator", QT_TR_NOOP("Created with")},  {"producer", QT_TR_NOOP("PDF produced by")},
-        {"creation_date", QT_TR_NOOP("Created")}, {"modification_date", QT_TR_NOOP("Modified")},
+        {"title", QT_TRANSLATE_NOOP("vellora::InspectorView", "Title")},
+        {"author", QT_TR_NOOP("Author")},
+        {"subject", QT_TRANSLATE_NOOP("vellora::InspectorView", "Subject")},
+        {"keywords", QT_TR_NOOP("Keywords")},
+        {"creator", QT_TRANSLATE_NOOP("vellora::InspectorView", "Created with")},
+        {"producer", QT_TR_NOOP("PDF produced by")},
+        {"creation_date", QT_TRANSLATE_NOOP("vellora::InspectorView", "Created")},
+        {"modification_date", QT_TR_NOOP("Modified")},
     };
     for (const auto& [key, title] : infoFields) {
         const QJsonValue value = info.value(QLatin1String(key));

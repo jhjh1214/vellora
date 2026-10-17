@@ -9,10 +9,6 @@ namespace vellora {
 
 namespace {
 
-QString tr(const char* text) {
-    return QCoreApplication::translate("PageRange", text);
-}
-
 constexpr QChar kEnDash(0x2013);
 
 bool isHyphen(QChar c) {
@@ -65,15 +61,20 @@ PageRangeResult parsePageRanges(const QString& text, const PageResolver& resolve
         }
         if (!found) {
             result.pages.clear();
-            result.error =
-                backwards
-                    ? tr("“%1” runs backwards: the first page comes after the last.").arg(piece)
-                    : tr("“%1” is not a page of this document.").arg(piece);
+            result.error = backwards
+                               ? QCoreApplication::translate(
+                                     "vellora::PageRange",
+                                     "“%1” runs backwards: the first page comes after the last.")
+                                     .arg(piece)
+                               : QCoreApplication::translate("vellora::PageRange",
+                                                             "“%1” is not a page of this document.")
+                                     .arg(piece);
             return result;
         }
     }
     if (!any) {
-        result.error = tr("Type the pages to print, for example 1-3, 7.");
+        result.error = QCoreApplication::translate("vellora::PageRange",
+                                                   "Type the pages to print, for example 1-3, 7.");
     }
     return result;
 }

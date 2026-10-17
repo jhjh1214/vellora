@@ -1,4 +1,5 @@
 #include "BuildInfo.h"
+#include "I18n.h"
 #include "MainWindow.h"
 #include "SingleInstance.h"
 #include "commands/ShortcutsPage.h"
@@ -28,19 +29,24 @@ int main(int argc, char** argv) {
     QApplication::setApplicationName(QStringLiteral("Vellora"));
     QApplication::setOrganizationName(QStringLiteral("Vellora"));
     QApplication::setApplicationVersion(QLatin1String(vellora::buildinfo::kVersion));
+    // Before any window or message: VELLORA_LOCALE=pseudo|pseudo-rtl|<language> (src/I18n.h).
+    const QString translationNote = vellora::i18n::installFromEnvironment(app);
 
     QCommandLineParser parser;
     parser.addHelpOption();
-    parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("PDF file to open."),
+    parser.addPositionalArgument(QStringLiteral("file"),
+                                 QCoreApplication::translate("main", "PDF file to open."),
                                  QStringLiteral("[file]"));
     // Hidden: runs a scripted scroll and zoom through the document, prints the frame-time report
     // and exits (the performance check and the packaging smoke test use it).
+    // i18n-ok: hidden options are never shown, so there is nothing to translate
     QCommandLineOption scriptOption(QStringLiteral("diagnostics-script"),
                                     QStringLiteral("Run a scripted session, then exit."),
                                     QStringLiteral("name"));
     scriptOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(scriptOption);
     // Hidden: installs crash reporting and then crashes on purpose (the crash-report tests).
+    // i18n-ok: hidden option
     QCommandLineOption crashOption(QStringLiteral("crash-test"),
                                    QStringLiteral("Crash on purpose, to test crash reports."));
     crashOption.setFlags(QCommandLineOption::HiddenFromHelp);
@@ -74,11 +80,13 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (scripted && !vellora::DiagnosticsScript::isScenario(scriptName)) {
+        // i18n-ok: console diagnostics, not the UI
         err << "vellora: unknown --diagnostics-script '" << scriptName
             << "' (known: scroll-zoom)\n";
         return 2;
     }
     if (scripted && files.isEmpty()) {
+        // i18n-ok: console diagnostics, not the UI
         err << "vellora: --diagnostics-script needs a file to open\n";
         return 2;
     }
@@ -93,10 +101,12 @@ int main(int argc, char** argv) {
     if (!scripted) {
         const QString problem = vellora::Logging::start();
         if (!problem.isEmpty()) {
+            // i18n-ok: console diagnostics, not the UI
             err << "vellora: no log file: " << problem << '\n';
         } else {
             qInfo("Vellora %s (%s) started", vellora::buildinfo::kVersion,
                   vellora::buildinfo::kCommit);
+            qInfo("language: %s", qPrintable(translationNote));
         }
     }
 
@@ -146,6 +156,7 @@ int main(int argc, char** argv) {
 
     // `vellora a.pdf b.pdf` opens each file in a tab.
     for (const QString& failed : window.openDocuments(paths)) {
+        // i18n-ok: console diagnostics, not the UI
         err << "vellora: cannot open " << failed << '\n';
     }
 
@@ -167,11 +178,13 @@ int main(int argc, char** argv) {
         });
         QObject::connect(&window.session(), &vellora::EngineSession::failed, &app,
                          [&err](const QString& reason) {
+                             // i18n-ok: console diagnostics, not the UI
                              err << "vellora: engine failed: " << reason << '\n';
                              QApplication::exit(1);
                          });
         QObject::connect(&script, &vellora::DiagnosticsScript::finished, &app, [&] {
             watchdog.stop();
+            // i18n-ok: the report that tests and CI read
             QTextStream(stdout) << "diagnostics-script scroll-zoom: " << script.stepsDone()
                                 << " pages, " << script.zoomsDone() << " zooms; "
                                 << watchdog.summary() << '\n';

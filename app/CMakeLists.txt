@@ -93,6 +93,8 @@ add_library(vellora_shell STATIC
   src/DocumentTab.cpp
   src/DocumentTab.h
   src/DocumentTabPrint.cpp
+  src/I18n.cpp
+  src/I18n.h
   src/LicensesDialog.cpp
   src/LicensesDialog.h
   src/MainWindow.cpp
@@ -187,6 +189,28 @@ qt_add_resources(vellora_shell "vellora_licenses"
   BASE "${VELLORA_ROOT}"
   FILES "${VELLORA_ROOT}/LICENSE" "${VELLORA_ROOT}/THIRD_PARTY_LICENSES")
 target_link_libraries(vellora_shell PUBLIC Qt6::Widgets Qt6::Network Qt6::PrintSupport Qt6::GuiPrivate vellora_engine_client)
+# Translations (M1 task 22, src/I18n.h). English is the source language: `translations/vellora_en.ts`
+# holds the source strings and no translations. A language is a new `vellora_<language>.ts` in the
+# list; `lrelease` compiles each into the executable (resource prefix /i18n), which
+# `i18n::install` loads. `cmake --build <dir> --target update_translations` re-reads the sources
+# into the .ts files (run it after adding or changing a `tr()` string and commit the result).
+# The hosted translation platform (Weblate) is not connected: that is M11's decision.
+# Qt's Linguist tools (lupdate, lrelease) are in Qt's `qttools` package, which a minimal install may
+# lack. Without them the app still builds and runs in English and in the pseudo-locales; CI sets
+# VELLORA_REQUIRE_TRANSLATIONS=ON, so there it is an error.
+option(VELLORA_REQUIRE_TRANSLATIONS "Fail the configure step if Qt's Linguist tools are missing" OFF)
+find_package(Qt6 6.8 QUIET OPTIONAL_COMPONENTS LinguistTools)
+if(Qt6LinguistTools_FOUND)
+  qt_add_translations(vellora_shell
+    SOURCE_TARGETS vellora_shell
+    TS_FILES translations/vellora_en.ts
+    RESOURCE_PREFIX /i18n
+    LUPDATE_OPTIONS -locations none -no-ui-lines -no-obsolete)
+elseif(VELLORA_REQUIRE_TRANSLATIONS)
+  message(FATAL_ERROR "Qt6 LinguistTools (lupdate, lrelease) not found: install Qt's qttools package")
+else()
+  message(WARNING "Qt6 LinguistTools not found: translations are not built (English only)")
+endif()
 qt_add_shaders(vellora_shell "vellora_shaders"
   PREFIX "/shaders"
   BASE src/canvas/shaders

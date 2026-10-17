@@ -55,6 +55,7 @@ CanvasView::CanvasView(EngineSession* session, QWidget* parent)
     m_banner = new QLabel(viewport());
     m_banner->setTextFormat(Qt::PlainText); // engine-derived text must never be read as markup
     m_banner->setAttribute(Qt::WA_TransparentForMouseEvents);
+    // i18n-ok: CSS
     m_banner->setStyleSheet(QStringLiteral("background: rgba(32, 32, 32, 220); color: white;"
                                            "padding: 6px 14px; border-radius: 4px;"));
     m_banner->setWordWrap(true);
