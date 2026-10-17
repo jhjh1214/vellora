@@ -1,12 +1,19 @@
 name: Nightly
 
 # Long-running checks that are too slow for every pull request: the invariant harness over the
-# whole corpus, the performance gate, and 30 minutes of fuzzing per target.
+# whole corpus, the performance gate, and 30 minutes of fuzzing per target. It also builds the
+# installable packages (packaging.yml) and publishes them to the rolling `nightly` pre-release.
 
 on:
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+    inputs:
+      only:
+        description: "all, or packaging to run just the packaging jobs and publish the nightly pre-release"
+        type: choice
+        options: [all, packaging]
+        default: all
 
 permissions:
   contents: read
@@ -17,6 +24,7 @@ env:
 
 jobs:
   corpus:
+    if: ${{ inputs.only != 'packaging' }}
     name: invariants on the full corpus
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -33,10 +41,12 @@ jobs:
 
   # The performance gate: the engine on each OS against the last good revision (bench.yml).
   bench:
+    if: ${{ inputs.only != 'packaging' }}
     name: benchmarks
     uses: ./.github/workflows/bench.yml
 
   corpus-gates:
+    if: ${{ inputs.only != 'packaging' }}
     name: corpus gates (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -72,6 +82,7 @@ jobs:
         run: cargo test --locked -p vellora-inspect --test corpus --release -- --ignored --nocapture
 
   fuzz:
+    if: ${{ inputs.only != 'packaging' }}
     name: fuzz 30 min (${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -110,3 +121,32 @@ jobs:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
+
+  # The packages, each smoke-tested, with the SHA-256 sums and the SBOM (packaging.yml).
+  packaging:
+    name: packages
+    uses: ./.github/workflows/packaging.yml
+
+  # The rolling `nightly` pre-release, recreated each night so it never holds stale files. Only the
+  # scheduled run and a manual run on main publish. The packages are unsigned (README decision 1).
+  publish:
+    name: publish the nightly pre-release
+    needs: [packaging]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: dist
+      - name: Recreate the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly $(date -u +%Y-%m-%d)" \
+            --notes "Unsigned builds of ${GITHUB_SHA::12} for testers (Windows MSI, Linux Flatpak, macOS dmg), with SHA256SUMS and the CycloneDX SBOM. Rebuilt every night; not for production use."

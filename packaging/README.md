@@ -5,6 +5,7 @@ and from `nightly.yml`). Nightly artifacts are unsigned.
 
 - `windows/`: the per-user WiX MSI (`vellora.wxs`), `stage.ps1` (copies the app, runs `windeployqt`),
   `smoke.ps1` (install, run `--diagnostics-script`, association, uninstall, nothing left behind).
+- `macos/` (bundle and dmg, `stage.sh`, `smoke.sh`), `flatpak/` (manifest, `smoke.sh`), `sbom/merge.py` (CycloneDX).
 - `stage-licenses.ps1`: the licence files every package ships (the LGPL-3.0 and GPL-3.0 texts are downloaded and hash-checked).
 
 Planned channels:
