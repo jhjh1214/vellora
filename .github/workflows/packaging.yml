@@ -91,3 +91,38 @@ jobs:
           name: vellora-windows-x64-msi
           path: dist/Vellora-*-x64.msi
           if-no-files-found: error
+
+  flatpak:
+    name: Flatpak
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install flatpak-builder and the X server for the smoke test
+        run: >
+          sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder xvfb dbus-x11
+      # Ubuntu 24.04 blocks unprivileged user namespaces, which Flatpak's sandbox needs.
+      - name: Allow user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Add Flathub
+        run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Build the Flatpak
+        run: >
+          flatpak-builder --user --install-deps-from=flathub --force-clean --disable-rofiles-fuse
+          --repo=dist/repo dist/build packaging/flatpak/io.github.jhjh1214.Vellora.yml
+      - name: Bundle
+        run: flatpak build-bundle dist/repo dist/Vellora-x86_64.flatpak io.github.jhjh1214.Vellora
+      # The probe is built on the host and run inside the sandbox by the smoke test.
+      - name: Build the engine sandbox probe
+        run: cargo build --locked --release -p vellora-engine --example engine_sandbox_probe
+      - name: Smoke test (run and probe the engine sandbox inside the Flatpak)
+        run: >
+          sh packaging/flatpak/smoke.sh dist/Vellora-x86_64.flatpak
+          crates/engine/tests/fixtures/golden.pdf target/release/examples/engine_sandbox_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vellora-linux-x86_64-flatpak
+          path: dist/Vellora-x86_64.flatpak
+          if-no-files-found: error
