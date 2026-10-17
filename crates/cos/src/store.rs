@@ -866,20 +866,18 @@ impl<'a> ObjectStore<'a> {
         // A trailer entry can name an object the cross-reference does not have (`/Encrypt 8 0 R`
         // with `/Size 8`). A new object must not be given that number: the reference would
         // silently start to mean the new object (for `/Encrypt`, the document's encryption).
-        let referenced = newest
-            .map(|r| {
-                r.section
-                    .trailer
-                    .entries
-                    .iter()
-                    .filter_map(|entry| match entry.value.kind {
-                        ObjectKind::Ref(reference) => Some(reference.num),
-                        _ => None,
-                    })
-                    .max()
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
+        let referenced = newest.map_or(0, |r| {
+            r.section
+                .trailer
+                .entries
+                .iter()
+                .filter_map(|entry| match entry.value.kind {
+                    ObjectKind::Ref(reference) => Some(reference.num),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0)
+        });
         WriteBase {
             base: state.xref.base,
             kind: newest.map(|r| r.section.kind),
