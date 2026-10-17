@@ -89,6 +89,12 @@ add_test(NAME vellora_diagnostics_script_unknown
 set_tests_properties(vellora_diagnostics_script_unknown PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60
   PASS_REGULAR_EXPRESSION "unknown --diagnostics-script 'no-such-scenario'")
+# The hidden `--export-shortcuts` flag writes the shortcuts page of the user manual; CI compares it
+# with docs/user/shortcuts.md.
+add_test(NAME vellora_export_shortcuts
+         COMMAND vellora --export-shortcuts "${CMAKE_BINARY_DIR}/shortcuts.md")
+set_tests_properties(vellora_export_shortcuts PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 # Drawing needs a platform that can run QRhi: the real one on Windows and macOS (their runners
 # have a software or virtual GPU), and an X server with Mesa's software OpenGL on Linux.
 qt_add_executable(tst_canvas_render tst_canvas_render.cpp)
