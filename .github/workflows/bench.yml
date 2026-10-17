@@ -48,7 +48,7 @@ jobs:
       # the baseline of the next one (the newest cache with the prefix is restored). The cache is
       # only saved when the job succeeds, so a regression does not become the new baseline.
       - name: Restore the baseline revision
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: bench-baseline
           key: bench-${{ runner.os }}-${{ github.run_id }}
