@@ -12,7 +12,10 @@
 //! - **re-open after commit:** a new `Client::open` of the appended file, to the first tile.
 //!
 //! Each measurement starts a fresh engine process. The file is in the OS cache after the
-//! generator or the first run wrote or read it, so these are warm-cache numbers.
+//! generator or the first run wrote or read it, so these are warm-cache numbers, except the
+//! **cold open**, which first drops the OS file cache where that is allowed (Linux with root or
+//! `sudo`, macOS with `purge`) and otherwise opens a freshly written copy. The reading scenarios
+//! are in `scenarios.rs`. The gate records the best of the runs; the printed table shows medians.
 
 use std::env;
 use std::fs::{File, OpenOptions};
