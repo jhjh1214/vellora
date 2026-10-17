@@ -11,7 +11,7 @@
 # number.
 #
 # Measured on the first run (43 pages), share of pixels differing by more than the threshold:
-#   Windows (the goldens were made on this system, locally): 0 at every threshold.
+#   Windows (CI runner, like the machine the goldens were made on): 0 pixels differ at every threshold.
 #   Linux:  0.0049 at 32, 0.0013 at 64, 0.0001 at 96 (worst page pdfium-zero_length_stream p1).
 #   macOS:  0.094 at 32, 0.045 at 64, 0.026 at 96, 0.015 at 128, 0.005 at 192 (worst page
 #           pdfjs-tracemonkey p2: its text is drawn with other font hinting and smoothing).
