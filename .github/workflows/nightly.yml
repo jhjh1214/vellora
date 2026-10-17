@@ -1,7 +1,7 @@
 name: Nightly
 
 # Long-running checks that are too slow for every pull request: the invariant harness over the
-# whole corpus, and 30 minutes of fuzzing per target.
+# whole corpus, the performance gate, and 30 minutes of fuzzing per target.
 
 on:
   schedule:
@@ -30,6 +30,11 @@ jobs:
         run: cargo xtask corpus fetch
       - name: Writer invariants on the full corpus
         run: cargo test --locked -p vellora-invariants -- --ignored --nocapture
+
+  # The performance gate: the engine on each OS against the last good revision (bench.yml).
+  bench:
+    name: benchmarks
+    uses: ./.github/workflows/bench.yml
 
   fuzz:
     name: fuzz 30 min (${{ matrix.target }})
