@@ -31,6 +31,41 @@ jobs:
       - name: Writer invariants on the full corpus
         run: cargo test --locked -p vellora-invariants -- --ignored --nocapture
 
+  corpus-gates:
+    name: corpus gates (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install qpdf
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get update && sudo apt-get install -y qpdf ;;
+            macOS) brew install qpdf ;;
+            Windows) choco install qpdf --no-progress -y ;;
+          esac
+      - name: Fetch PDFium and the full corpus
+        run: |
+          cargo xtask pdfium fetch
+          cargo xtask corpus fetch
+      # Every corpus document through the real engine (open, password path, first tile).
+      - name: Engine corpus gate
+        run: cargo test --locked -p vellora-engine --test corpus --release -- --ignored --nocapture
+      # The engine's report against the CLI on 20 corpus documents.
+      - name: Engine report against the CLI
+        run: cargo test --locked -p vellora-engine --test summary --release -- --ignored --nocapture
+      - name: cos corpus tests
+        run: cargo test --locked -p vellora-cos --release -- --ignored --nocapture
+      - name: inspect corpus test
+        run: cargo test --locked -p vellora-inspect --test corpus --release -- --ignored --nocapture
+
   fuzz:
     name: fuzz 30 min (${{ matrix.target }})
     strategy:
