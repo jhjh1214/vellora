@@ -516,7 +516,8 @@ pub(crate) struct WriteBase {
     pub kind: Option<SectionKind>,
     /// File offset of the newest section.
     pub section_offset: usize,
-    /// One more than the highest object number known, from the cross-reference and `/Size`.
+    /// One more than the highest object number known, from the cross-reference, `/Size` and the
+    /// references in the trailer (which may name an object that is not defined).
     pub size: u32,
     /// The header version `(major, minor)`, `(1, 7)` if the header cannot be read.
     pub version: (u8, u8),
@@ -862,11 +863,28 @@ impl<'a> ObjectStore<'a> {
             .and_then(Object::as_integer)
             .and_then(|n| u32::try_from(n).ok())
             .unwrap_or(0);
+        // A trailer entry can name an object the cross-reference does not have (`/Encrypt 8 0 R`
+        // with `/Size 8`). A new object must not be given that number: the reference would
+        // silently start to mean the new object (for `/Encrypt`, the document's encryption).
+        let referenced = newest.map_or(0, |r| {
+            r.section
+                .trailer
+                .entries
+                .iter()
+                .filter_map(|entry| match entry.value.kind {
+                    ObjectKind::Ref(reference) => Some(reference.num),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0)
+        });
         WriteBase {
             base: state.xref.base,
             kind: newest.map(|r| r.section.kind),
             section_offset: newest.map_or(0, |r| r.section.offset),
-            size: declared.max(highest.saturating_add(1)),
+            size: declared
+                .max(highest.saturating_add(1))
+                .max(referenced.saturating_add(1)),
             version: header_version(self.data, state.xref.base),
         }
     }
