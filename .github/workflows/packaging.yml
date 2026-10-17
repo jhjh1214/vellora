@@ -81,12 +81,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'smoke test failed' }
       - name: Windows Installer logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-msi-logs
           path: dist/msi-logs
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vellora-windows-x64-msi
           path: dist/Vellora-*-x64.msi
@@ -121,7 +121,7 @@ jobs:
         run: >
           sh packaging/flatpak/smoke.sh dist/Vellora-x86_64.flatpak
           crates/engine/tests/fixtures/golden.pdf target/release/examples/engine_sandbox_probe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vellora-linux-x86_64-flatpak
           path: dist/Vellora-x86_64.flatpak
@@ -155,7 +155,7 @@ jobs:
           sh packaging/macos/stage.sh build "$version" dist
       - name: Smoke test (mount, copy out, run)
         run: sh packaging/macos/smoke.sh dist/Vellora-*-macos-arm64.dmg crates/engine/tests/fixtures/golden.pdf
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vellora-macos-arm64-dmg
           path: dist/Vellora-*-macos-arm64.dmg
@@ -178,7 +178,7 @@ jobs:
           --pdfium-lock third_party/pdfium.lock --qt-version 6.8.3
           --version "$(sed -nE '/^\[workspace\.package\]/,/^\[/ s/^version = "([0-9.]+)"/\1/p' Cargo.toml | head -1)"
           --out vellora.cdx.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vellora-sbom
           path: vellora.cdx.json
@@ -200,7 +200,7 @@ jobs:
         run: |
           ls -l
           sha256sum -- * | tee SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-files
           path: dist/*
