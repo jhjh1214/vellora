@@ -160,11 +160,21 @@ jobs:
       - name: Configure
         run: >
           cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" -DVELLORA_REQUIRE_TRANSLATIONS=ON
         shell: bash
       - run: cmake --build build
       - name: Test
+        # tst_i18n writes screenshots of the windows in the pseudo-locales into this folder.
+        env:
+          VELLORA_SCREENSHOT_DIR: ${{ github.workspace }}/i18n-screenshots
         run: ctest --test-dir build --output-on-failure
+      - name: Upload the pseudo-locale screenshots
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: i18n-screenshots
+          path: i18n-screenshots
+          if-no-files-found: warn
       - name: Qt Test reports of what failed
         # Qt Test's console output does not reach CTest on Windows; each test also writes
         # `build/test-logs/<name>.log` (app/tests/CMakeLists.txt).

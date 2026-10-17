@@ -20,7 +20,7 @@ class CanvasAccessible;
 class PageAccessible;
 
 QString tr(const char* text) {
-    return QCoreApplication::translate("CanvasAccessible", text);
+    return QCoreApplication::translate("vellora::CanvasAccessible", text);
 }
 
 // The text of a page as one string, and where each character starts in it. The characters are

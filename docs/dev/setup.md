@@ -29,7 +29,7 @@
 |---|---|---|
 | CMake | ≥ 3.28 | Corrosion (pinned tag) is fetched by CMake at configure time, so the first configure needs network access |
 | Ninja | any | Used as the generator in CI; any generator works except that Windows needs the MSVC environment |
-| Qt | 6.8 LTS | qtbase (Widgets, Test) plus the **Qt Shader Tools** module (`qsb` compiles the canvas shaders). Qt Online Installer, or project-local with `uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qtshadertools --archives qtbase -O .qt` (`.qt/` is git-ignored) |
+| Qt | 6.8 LTS | qtbase (Widgets, Test) plus the **Qt Shader Tools** module (`qsb` compiles the canvas shaders). Qt Online Installer, or project-local with `uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qtshadertools --archives qtbase -O .qt` (`.qt/` is git-ignored). Optional: add `qttools qtdeclarative` to `--archives` for `lupdate`/`lrelease` (translations, `app/README.md`); without them the app builds in English only |
 | C++ compiler | MSVC 2022 or newer / GCC ≥ 12 / Clang ≥ 15 | C++20 |
 | clang-format | 23.1.3 (CI pins it) | `uvx clang-format@23.1.3`, or `pip install clang-format==23.1.3`; style in `.clang-format` |
 
