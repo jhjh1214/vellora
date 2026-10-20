@@ -44,7 +44,7 @@ proptest = "1"
 serde = { version = "1", features = ["derive"] }
 # Wire format of the UI/engine protocol (ADR-0005). `use-std` only (no heapless, no alloc-only extras); it still pulls in `cobs` and `embedded-io`.
 postcard = { version = "1", default-features = false, features = ["use-std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 # Wipes document passwords from memory when they are dropped (`vellora-ipc`, `vellora-render`,
 # `vellora-engine`, `vellora-engine-client`).
 zeroize = "1"
